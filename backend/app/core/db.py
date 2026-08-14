@@ -178,9 +178,12 @@ def _migrate_logs(conn: sqlite3.Connection) -> None:
 
 
 def _seed_gifts(conn: sqlite3.Connection) -> None:
-    """首次运行时给每家演示店铺写入几笔礼品单。"""
+    """首次运行时给每家演示店铺写入几笔礼品单（仅当仍是演示店铺时，避免真实店铺下重建示例数据）。"""
     count = conn.execute("SELECT COUNT(*) AS c FROM gifts").fetchone()["c"]
     if count > 0:
+        return
+    demo = conn.execute("SELECT COUNT(*) AS c FROM stores WHERE id IN (1, 2, 3, 4)").fetchone()["c"]
+    if demo < 4:
         return
     now = datetime.now(timezone.utc)
     sample = [
