@@ -1,4 +1,4 @@
-﻿import {
+import {
   ApiOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -6,7 +6,7 @@
   StarFilled,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Form, Input, Modal, Popconfirm, Select, Slider, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Slider, Space, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -21,7 +21,7 @@ const PROVIDERS = [
   { value: "deepseek", label: "DeepSeek（深度求索）" },
   { value: "dashscope", label: "阿里云百炼（通义千问）" },
   { value: "moonshot", label: "Moonshot（月之暗面）" },
-  { value: "custom", label: "自定义（OpenAI 兼容）" },
+  { value: "custom", label: "中转站 / 自定义（OpenAI 兼容）" },
 ];
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -57,6 +57,7 @@ export function ModelConfigsPage() {
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [form] = Form.useForm<FormValues>();
+  const providerValue = Form.useWatch("provider", form);
   const [lastProvider, setLastProvider] = useState("openai");
 
   const load = useCallback(async () => {
@@ -266,7 +267,16 @@ export function ModelConfigsPage() {
           <Form.Item name="provider" label="服务商" rules={[{ required: true, message: "请选择服务商" }]}>
             <Select options={PROVIDERS} onChange={handleProviderChange} placeholder="选择 AI 服务商" />
           </Form.Item>
-          <Form.Item name="base_url" label="接口地址（base_url）" extra="选择服务商后自动填入，一般不用改">
+          {providerValue === "custom" && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="中转站 / 自定义接口"
+              description="接口地址填中转站提供的完整地址（通常以 /v1 结尾），API Key 填中转站的 Key，模型名称填它支持的模型 ID（如 gpt-4o）。"
+            />
+          )}
+          <Form.Item name="base_url" label="接口地址（base_url）" extra={providerValue === "custom" ? "填中转站给的完整地址，通常以 /v1 结尾" : "选择服务商后自动填入，一般不用改"}>
             <Input placeholder="例如 https://api.deepseek.com/v1" />
           </Form.Item>
           <Form.Item
