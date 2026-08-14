@@ -37,6 +37,12 @@ class GiftStatusIn(BaseModel):
     status: str
 
 
+class GiftBatchIn(BaseModel):
+    ids: list[int]
+    review_status: str | None = None
+    settle_status: str | None = None
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -108,7 +114,7 @@ def _resolve_order_no(db, body: GiftIn, exclude_id: int | None = None) -> str:
         if exists:
             raise HTTPException(status_code=400, detail=f"订单号「{order_no}」已存在，请检查后重试")
         return order_no
-    return f"G{datetime.now().strftime('%y%m%d')}{secrets.token_hex(3).upper()}"
+    return ""
 
 
 @router.get("")
@@ -138,6 +144,35 @@ def list_gifts(
     query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
     rows = db.execute(query, params).fetchall()
     return {"items": [_payload(row) for row in rows]}
+
+
+@router.post("/batch")
+def batch_update_gifts(
+    body: GiftBatchIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="请先选择要修改的礼品单")
+    if body.review_status is None and body.settle_status is None:
+        raise HTTPException(status_code=400, detail="请选择要修改的评论状态或结款状态")
+    if body.review_status is not None and body.review_status not in REVIEW_STATUSES:
+        raise HTTPException(status_code=400, detail="评论状态不正确")
+    if body.settle_status is not None and body.settle_status not in SETTLE_STATUSES:
+        raise HTTPException(status_code=400, detail="结款状态不正确")
+    placeholders = ",".join("?" for _ in body.ids)
+    if body.review_status is not None:
+        db.execute(
+            f"UPDATE gifts SET review_status = ? WHERE id IN ({placeholders})",
+            (body.review_status, *body.ids),
+        )
+    if body.settle_status is not None:
+        db.execute(
+            f"UPDATE gifts SET settle_status = ? WHERE id IN ({placeholders})",
+            (body.settle_status, *body.ids),
+        )
+    log_op(db, user, "gifts", "batch", "", f"批量更新 {len(body.ids)} 单")
+    return {"ok": True, "count": len(body.ids)}
 
 
 @router.post("")

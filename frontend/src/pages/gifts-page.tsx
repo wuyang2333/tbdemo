@@ -20,6 +20,7 @@ import {
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Key } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
@@ -71,6 +72,7 @@ export function GiftsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Gift | null>(null);
   const [saving, setSaving] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,6 +142,24 @@ export function GiftsPage() {
     try {
       await http.post(`/gifts/${row.id}/settle`, { status: next });
       message.success(`「${row.order_no}」已标记为「${SETTLE_META[next].label}」`);
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const batchSet = async (
+    field: "review_status" | "settle_status",
+    value: GiftReviewStatus | GiftSettleStatus
+  ) => {
+    if (selectedKeys.length === 0) return;
+    try {
+      await http.post("/gifts/batch", {
+        ids: selectedKeys,
+        [field]: value,
+      });
+      message.success(`已批量更新 ${selectedKeys.length} 单`);
+      setSelectedKeys([]);
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -362,12 +382,42 @@ export function GiftsPage() {
         </Col>
       </Row>
 
+      {selectedKeys.length > 0 && (
+        <Card
+          variant="borderless"
+          style={{ marginBottom: 16, background: "#fff7e6", border: "1px solid #ffd591" }}
+        >
+          <Space wrap>
+            <Text strong>已选 {selectedKeys.length} 单</Text>
+            <Button size="small" type="primary" ghost onClick={() => batchSet("review_status", "reviewed")}>
+              标记已评论
+            </Button>
+            <Button size="small" onClick={() => batchSet("review_status", "none")}>
+              标记未评论
+            </Button>
+            <Button size="small" type="primary" ghost onClick={() => batchSet("settle_status", "settled")}>
+              标记已结款
+            </Button>
+            <Button size="small" onClick={() => batchSet("settle_status", "unsettled")}>
+              标记未结款
+            </Button>
+            <Button size="small" onClick={() => setSelectedKeys([])}>
+              取消选择
+            </Button>
+          </Space>
+        </Card>
+      )}
+
       <Card variant="borderless">
         <Table<Gift>
           rowKey="id"
           loading={loading}
           columns={columns}
           dataSource={filtered}
+          rowSelection={{
+            selectedRowKeys: selectedKeys,
+            onChange: (keys) => setSelectedKeys(keys),
+          }}
           pagination={{ pageSize: 10, showTotal: (count) => `共 ${count} 单` }}
           scroll={{ x: 1400 }}
         />
@@ -425,8 +475,8 @@ export function GiftsPage() {
           <Form.Item name="wangwang" label="旺旺号">
             <Input placeholder="买家旺旺号" />
           </Form.Item>
-          <Form.Item name="order_no" label="订单编号" extra="留空自动生成">
-            <Input placeholder="如：淘宝订单号，留空自动生成" maxLength={40} />
+          <Form.Item name="order_no" label="订单编号" extra="请手动填写订单号">
+            <Input placeholder="请输入淘宝订单号" maxLength={40} />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
