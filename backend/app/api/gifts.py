@@ -181,6 +181,7 @@ def export_gifts(
     settle_status: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    ids: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> StreamingResponse:
@@ -210,6 +211,12 @@ def export_gifts(
     if date_to:
         query += " AND COALESCE(g.order_time, g.created_at) <= ?"
         params.append(date_to)
+    if ids.strip():
+        id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+        if id_list:
+            placeholders = ",".join("?" for _ in id_list)
+            query += f" AND g.id IN ({placeholders})"
+            params.extend(id_list)
     query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
     rows = db.execute(query, params).fetchall()
 

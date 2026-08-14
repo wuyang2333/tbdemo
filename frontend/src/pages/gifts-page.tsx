@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloseOutlined, DeleteOutlined, DownloadOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, CloseOutlined, DeleteOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -493,20 +493,19 @@ export function GiftsPage() {
     { key: "unsettled", label: "标记未结款", onClick: () => batchSet("settle_status", "unsettled") },
     { type: "divider" },
     { key: "copy", label: "复制勾选订单", onClick: () => copyTable() },
+    { key: "export", label: "导出勾选订单（Excel）", onClick: () => exportExcel() },
+    { type: "divider" },
     { key: "clear", label: "取消选择", onClick: () => setSelectedKeys([]) },
   ];
 
   const exportExcel = async () => {
+    if (selectedKeys.length === 0) {
+      message.warning("请先在表格里勾选要导出的订单");
+      return;
+    }
     try {
       const params = new URLSearchParams();
-      if (keyword.trim()) params.set("keyword", keyword.trim());
-      if (storeFilter !== undefined) params.set("store_id", String(storeFilter));
-      if (reviewFilter) params.set("review_status", reviewFilter);
-      if (settleFilter) params.set("settle_status", settleFilter);
-      if (dateRange && dateRange[0] && dateRange[1]) {
-        params.set("date_from", dateRange[0].format("YYYY-MM-DD"));
-        params.set("date_to", dateRange[1].format("YYYY-MM-DD"));
-      }
+      params.set("ids", selectedKeys.join(","));
       const token = localStorage.getItem("tb-workbench-token") ?? "";
       const response = await fetch(`/api/gifts/export?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -753,9 +752,6 @@ export function GiftsPage() {
             onChange={setDateRange}
             style={{ width: 260 }}
           />
-          <Button type="primary" ghost icon={<DownloadOutlined />} onClick={exportExcel}>
-            导出 Excel
-          </Button>
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
           </Button>
