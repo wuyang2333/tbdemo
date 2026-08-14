@@ -30,16 +30,13 @@ import type { Gift, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
 const { Text } = Typography;
 
 type GiftFormValues = {
-  order_no: string;
+  date: dayjs.Dayjs;
   store_id: number;
   keyword: string;
   spec: string;
   price: number;
   commission: number;
-  wangwang: string;
-  order_time: dayjs.Dayjs;
-  review_status: GiftReviewStatus;
-  settle_status: GiftSettleStatus;
+  quantity: number;
 };
 
 type EditableField =
@@ -88,7 +85,9 @@ export function GiftsPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [imageTarget, setImageTarget] = useState<Gift | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [formImage, setFormImage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const formFileInputRef = useRef<HTMLInputElement>(null);
   const enterRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -356,27 +355,52 @@ export function GiftsPage() {
   const submitGift = async (values: GiftFormValues) => {
     setSaving(true);
     try {
-      const payload = {
-        order_no: values.order_no?.trim() ?? "",
+      const { data } = await http.post<{ items: Gift[] }>("/gifts/batch-create", {
+        date: values.date ? values.date.format("YYYY-MM-DD") : "",
         store_id: values.store_id ?? 0,
         keyword: values.keyword?.trim() ?? "",
         spec: values.spec?.trim() ?? "",
         price: values.price ?? 0,
         commission: values.commission ?? 0,
-        wangwang: values.wangwang?.trim() ?? "",
-        order_time: values.order_time ? values.order_time.format("YYYY-MM-DD HH:mm:ss") : "",
-        review_status: values.review_status ?? "none",
-        settle_status: values.settle_status ?? "unsettled",
-      };
-      await http.post("/gifts", payload);
-      message.success("礼品单已创建");
+        quantity: values.quantity ?? 1,
+        image: formImage,
+      });
+      message.success(`已生成 ${data.items.length} 条礼品单`);
       setCreateOpen(false);
       form.resetFields();
+      setFormImage("");
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const uploadFormImage = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const { data } = await http.post<{ url: string }>("/gifts/image-upload", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setFormImage(data.url);
+      message.success("图片已添加，将应用到生成的礼品单");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const handleKeywordPaste = (event: React.ClipboardEvent) => {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        event.preventDefault();
+        const file = item.getAsFile();
+        if (file) uploadFormImage(file);
+        return;
+      }
     }
   };
 
@@ -639,6 +663,7 @@ export function GiftsPage() {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              setFormImage("");
               setCreateOpen(true);
             }}
           >
@@ -767,7 +792,10 @@ export function GiftsPage() {
         title="新增礼品单"
         open={createOpen}
         onOk={() => form.submit()}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => {
+          setCreateOpen(false);
+          setFormImage("");
+        }}
         confirmLoading={saving}
         okText="创建"
         destroyOnClose
@@ -775,29 +803,70 @@ export function GiftsPage() {
         <Form form={form} layout="vertical" onFinish={submitGift} style={{ marginTop: 8 }}>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="order_time" label="下单时间">
-                <DatePicker showTime style={{ width: "100%" }} />
+              <Form.Item name="date" label="下单日期" rules={[{ required: true, message: "请选择下单日期" }]}>
+                <DatePicker style={{ width: "100%" }} />
               </Form.Item>
             </Col>
+            <Col span={12}>
+              <Form.Item
+                name="quantity"
+                label="下单数量"
+                initialValue={1}
+                rules={[{ required: true, message: "请输入下单数量" }]}
+              >
+                <InputNumber min={1} max={100} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="store_id" label="店铺" rules={[{ required: true, message: "请选择店铺" }]}>
                 <Select options={storeSelectOptions} placeholder="请选择店铺" />
               </Form.Item>
             </Col>
-          </Row>
-          <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="keyword" label="关键词" rules={[{ required: true, message: "请输入关键词" }]}>
-                <Input placeholder="如：礼品 女装" />
+              <Form.Item
+                name="keyword"
+                label="关键词"
+                rules={[
+                  {
+                    validator: (_, value) =>
+                      String(value ?? "").trim() || formImage
+                        ? Promise.resolve()
+                        : Promise.reject(new Error("请填写关键词或粘贴图片")),
+                  },
+                ]}
+              >
+                <Input
+                  placeholder="如：礼品 女装（也可 Ctrl+V 粘贴图片）"
+                  onPaste={handleKeywordPaste}
+                />
               </Form.Item>
             </Col>
+          </Row>
+          {formImage ? (
+            <Space style={{ marginBottom: 16 }}>
+              <img src={formImage} alt="关键词图片" height={40} style={{ borderRadius: 4 }} />
+              <Button size="small" icon={<CloseOutlined />} onClick={() => setFormImage("")}>
+                移除图片
+              </Button>
+            </Space>
+          ) : (
+            <Button
+              size="small"
+              icon={<PictureOutlined />}
+              onClick={() => formFileInputRef.current?.click()}
+              style={{ marginBottom: 16 }}
+            >
+              粘贴 / 上传图片
+            </Button>
+          )}
+          <Row gutter={12}>
             <Col span={12}>
               <Form.Item name="spec" label="规格">
                 <Input placeholder="如：S 码 / 红色" />
               </Form.Item>
             </Col>
-          </Row>
-          <Row gutter={12}>
             <Col span={12}>
               <Form.Item
                 name="price"
@@ -815,37 +884,13 @@ export function GiftsPage() {
                 <InputNumber min={1} step={1} style={{ width: "100%" }} />
               </Form.Item>
             </Col>
-            <Col span={12}>
-              <Form.Item name="commission" label="佣金（元）" initialValue={0}>
-                <InputNumber min={0} step={1} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
           </Row>
-          <Form.Item name="wangwang" label="旺旺号">
-            <Input placeholder="买家旺旺号" />
+          <Form.Item name="commission" label="佣金（元）" initialValue={0}>
+            <InputNumber min={0} step={1} style={{ width: "100%" }} />
           </Form.Item>
-          <Form.Item name="order_no" label="订单编号" extra="仅支持数字，请手动填写">
-            <Input
-              placeholder="请输入淘宝订单号（仅数字）"
-              maxLength={40}
-              onChange={(event) => {
-                const digits = event.target.value.replace(/\D/g, "");
-                if (digits !== event.target.value) form.setFieldValue("order_no", digits);
-              }}
-            />
-          </Form.Item>
-          <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item name="review_status" label="评论状态" initialValue="none">
-                <Select options={REVIEW_OPTIONS} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="settle_status" label="结款状态" initialValue="unsettled">
-                <Select options={SETTLE_OPTIONS} />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            将按下单数量生成对应行数，下单时间每行相隔 15 分钟（每小时最多 4 行）；订单编号、旺旺号可在表格里逐行填写。
+          </Text>
         </Form>
       </Modal>
 
@@ -857,6 +902,17 @@ export function GiftsPage() {
         onChange={(event) => {
           const file = event.target.files?.[0];
           if (file && imageTarget) uploadImage(imageTarget, file);
+          event.target.value = "";
+        }}
+      />
+      <input
+        ref={formFileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) uploadFormImage(file);
           event.target.value = "";
         }}
       />

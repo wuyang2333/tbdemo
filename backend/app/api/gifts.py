@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
@@ -37,6 +37,7 @@ class GiftIn(BaseModel):
     order_time: str = ""
     review_status: str = "none"
     settle_status: str = "unsettled"
+    image: str = ""
 
 
 class GiftStatusIn(BaseModel):
@@ -47,6 +48,17 @@ class GiftBatchIn(BaseModel):
     ids: list[int]
     review_status: str | None = None
     settle_status: str | None = None
+
+
+class GiftBatchCreateIn(BaseModel):
+    date: str = ""
+    store_id: int = 0
+    keyword: str = ""
+    spec: str = ""
+    price: float = 0
+    commission: float = 0
+    quantity: int = 1
+    image: str = ""
 
 
 def _now() -> str:
@@ -91,14 +103,14 @@ def _payload(row) -> dict:
     }
 
 
-def _validate(body: GiftIn) -> dict:
+def _validate(body: GiftIn, has_image: bool = False) -> dict:
     keyword = body.keyword.strip()
     spec = body.spec.strip()
     wangwang = body.wangwang.strip()
     if body.store_id == 0:
         raise HTTPException(status_code=400, detail="请选择店铺")
-    if not keyword:
-        raise HTTPException(status_code=400, detail="关键词不能为空")
+    if not keyword and not has_image:
+        raise HTTPException(status_code=400, detail="关键词不能为空（可填文字或粘贴图片）")
     if body.price <= 0:
         raise HTTPException(status_code=400, detail="金额必须大于 0")
     if not (0 <= body.price <= 999999):
@@ -236,6 +248,85 @@ def export_gifts(
     )
 
 
+@router.post("/image-upload")
+async def upload_gift_image_standalone(
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="请选择图片")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        raise HTTPException(status_code=400, detail="仅支持 PNG/JPG/GIF/WebP 图片")
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片不能超过 2MB")
+    images_dir = DB_PATH.parent / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    name = f"u{uuid.uuid4().hex[:12]}{ext}"
+    (images_dir / name).write_bytes(content)
+    return {"url": f"/api/images/{name}"}
+
+
+@router.post("/batch-create")
+def batch_create_gifts(
+    body: GiftBatchCreateIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    quantity = body.quantity
+    if not (1 <= quantity <= 100):
+        raise HTTPException(status_code=400, detail="下单数量需在 1-100 之间")
+    if body.store_id == 0:
+        raise HTTPException(status_code=400, detail="请选择店铺")
+    keyword = body.keyword.strip()
+    image = body.image.strip()
+    if not keyword and not image:
+        raise HTTPException(status_code=400, detail="关键词不能为空（可填文字或粘贴图片）")
+    if body.price <= 0:
+        raise HTTPException(status_code=400, detail="金额必须大于 0")
+    if not (0 <= body.commission <= 999999):
+        raise HTTPException(status_code=400, detail="佣金超出范围")
+    store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+    if not store:
+        raise HTTPException(status_code=400, detail="所选店铺不存在")
+
+    now = datetime.now()
+    base_date = now.date()
+    if body.date:
+        try:
+            base_date = datetime.strptime(body.date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="下单日期格式不正确")
+    base = datetime.combine(base_date, now.time())
+    created_at = _now()
+    items = []
+    for i in range(quantity):
+        ts = base + timedelta(minutes=15 * i)
+        order_time = ts.strftime("%Y-%m-%d %H:%M:%S")
+        cur = db.execute(
+            """
+            INSERT INTO gifts (store_id, order_no, keyword, spec, price, commission, wangwang, order_time,
+                               review_status, settle_status, status, created_at, image)
+            VALUES (?, ?, ?, ?, ?, ?, '', ?, 'none', 'unsettled', 'pending', ?, ?)
+            """,
+            (
+                body.store_id,
+                "",
+                keyword,
+                body.spec.strip(),
+                body.price,
+                body.commission,
+                order_time,
+                created_at,
+                image,
+            ),
+        )
+        items.append(_payload(_get_gift_or_404(db, cur.lastrowid)))
+    log_op(db, user, "gifts", "create", keyword or image, f"批量生成 {quantity} 条礼品单")
+    return {"items": items}
+
+
 @router.post("/batch")
 def batch_update_gifts(
     body: GiftBatchIn,
@@ -271,7 +362,7 @@ def create_gift(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    fields = _validate(body)
+    fields = _validate(body, has_image=bool(body.image.strip()))
     if body.store_id != 0:
         store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
         if not store:
@@ -281,8 +372,8 @@ def create_gift(
     cur = db.execute(
         """
         INSERT INTO gifts (store_id, order_no, keyword, spec, price, commission, wangwang, order_time,
-                           review_status, settle_status, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                           review_status, settle_status, status, created_at, image)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
         """,
         (
             body.store_id,
@@ -296,6 +387,7 @@ def create_gift(
             body.review_status,
             body.settle_status,
             _now(),
+            body.image.strip(),
         ),
     )
     item = _payload(_get_gift_or_404(db, cur.lastrowid))
@@ -311,7 +403,7 @@ def update_gift(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
-    fields = _validate(body)
+    fields = _validate(body, has_image=bool(body.image.strip() or row["image"]))
     if body.store_id != 0:
         store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
         if not store:
