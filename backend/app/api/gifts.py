@@ -115,6 +115,8 @@ def _validate(body: GiftIn) -> dict:
 def _resolve_order_no(db, body: GiftIn, exclude_id: int | None = None) -> str:
     order_no = body.order_no.strip()
     if order_no:
+        if not order_no.isdigit():
+            raise HTTPException(status_code=400, detail="订单编号只能是数字")
         if len(order_no) > 40:
             raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
         if exclude_id is not None:
@@ -316,6 +318,8 @@ def update_gift(
             raise HTTPException(status_code=400, detail="所选店铺不存在")
     order_no = body.order_no.strip()
     if order_no:
+        if order_no != row["order_no"] and not order_no.isdigit():
+            raise HTTPException(status_code=400, detail="订单编号只能是数字")
         if len(order_no) > 40:
             raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
         exists = db.execute(

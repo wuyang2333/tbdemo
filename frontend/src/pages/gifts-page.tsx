@@ -274,9 +274,11 @@ export function GiftsPage() {
         size="small"
         autoFocus
         value={String(cellEdit.value ?? "")}
-        onChange={(event) =>
-          setCellEdit((prev) => (prev ? { ...prev, value: event.target.value } : prev))
-        }
+        onChange={(event) => {
+          const raw = event.target.value;
+          const next = field === "order_no" ? raw.replace(/\D/g, "") : raw;
+          setCellEdit((prev) => (prev ? { ...prev, value: next } : prev));
+        }}
         onBlur={() => {
           if (enterRef.current) return;
           saveCell(row, field, String(cellEdit.value ?? ""));
@@ -488,13 +490,13 @@ export function GiftsPage() {
     {
       title: "日期",
       key: "date",
-      width: 105,
+      width: 100,
       render: (_, row) => (row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD") : "-"),
     },
     {
       title: "下单时间",
       key: "order_time",
-      width: 165,
+      width: 72,
       render: (_, row) =>
         renderEditableCell(
           row,
@@ -505,6 +507,7 @@ export function GiftsPage() {
     {
       title: "店铺",
       dataIndex: "store_name",
+      width: 140,
       filters: storeOptions.map((option) => ({ text: option.label, value: option.value })),
       onFilter: (value, row) => row.store_id === value,
       render: (_, row) => {
@@ -515,7 +518,7 @@ export function GiftsPage() {
     {
       title: "关键词",
       dataIndex: "keyword",
-      width: 150,
+      width: 130,
       render: (_, row) => (
         <Space size={4}>
           {row.image ? (
@@ -554,35 +557,37 @@ export function GiftsPage() {
     {
       title: "规格",
       dataIndex: "spec",
+      width: 110,
       render: (_, row) => renderEditableCell(row, "spec", row.spec || "-"),
     },
     {
       title: "金额",
       dataIndex: "price",
-      width: 100,
+      width: 90,
       render: (_, row) => renderEditableCell(row, "price", `¥${Number(row.price).toFixed(2)}`),
     },
     {
       title: "佣金",
       dataIndex: "commission",
-      width: 100,
+      width: 90,
       render: (_, row) => renderEditableCell(row, "commission", `¥${Number(row.commission).toFixed(2)}`),
     },
     {
       title: "旺旺号",
       dataIndex: "wangwang",
+      width: 120,
       render: (_, row) => renderEditableCell(row, "wangwang", row.wangwang || "-"),
     },
     {
       title: "订单编号",
       dataIndex: "order_no",
-      width: 150,
+      width: 160,
       render: (_, row) => renderEditableCell(row, "order_no", row.order_no ? <Text code>{row.order_no}</Text> : <Text type="secondary">未填写</Text>),
     },
     {
       title: "评论状态",
       dataIndex: "review_status",
-      width: 100,
+      width: 90,
       render: (_, row) => (
         <Tag color={REVIEW_META[row.review_status].color} style={{ cursor: "pointer" }} onClick={() => toggleReview(row)}>
           {REVIEW_META[row.review_status].label}
@@ -592,7 +597,7 @@ export function GiftsPage() {
     {
       title: "结款状态",
       dataIndex: "settle_status",
-      width: 100,
+      width: 90,
       render: (_, row) => (
         <Tag color={SETTLE_META[row.settle_status].color} style={{ cursor: "pointer" }} onClick={() => toggleSettle(row)}>
           {SETTLE_META[row.settle_status].label}
@@ -750,7 +755,7 @@ export function GiftsPage() {
             onChange: (keys) => setSelectedKeys(keys),
           }}
           pagination={{ pageSize: 10, showTotal: (count) => `共 ${count} 单` }}
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1360 }}
         />
       </Card>
 
@@ -815,8 +820,15 @@ export function GiftsPage() {
           <Form.Item name="wangwang" label="旺旺号">
             <Input placeholder="买家旺旺号" />
           </Form.Item>
-          <Form.Item name="order_no" label="订单编号" extra="请手动填写订单号">
-            <Input placeholder="请输入淘宝订单号" maxLength={40} />
+          <Form.Item name="order_no" label="订单编号" extra="仅支持数字，请手动填写">
+            <Input
+              placeholder="请输入淘宝订单号（仅数字）"
+              maxLength={40}
+              onChange={(event) => {
+                const digits = event.target.value.replace(/\D/g, "");
+                if (digits !== event.target.value) form.setFieldValue("order_no", digits);
+              }}
+            />
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
