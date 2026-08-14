@@ -29,6 +29,7 @@ SETTLE_LABELS = {"unsettled": "未结款", "settled": "已结款"}
 class GiftIn(BaseModel):
     order_no: str = ""
     store_id: int = 0
+    store_name: str = ""
     keyword: str = ""
     spec: str = ""
     price: float = 0
@@ -167,9 +168,6 @@ def list_gifts(
     if store_id is not None:
         query += " AND g.store_id = ?"
         params.append(store_id)
-    if store_name.strip():
-        query += " AND COALESCE(CASE WHEN g.store_id != 0 THEN s.name ELSE g.store_name END, '') = ?"
-        params.append(store_name.strip())
     if review_status:
         query += " AND g.review_status = ?"
         params.append(review_status)
@@ -210,6 +208,9 @@ def export_gifts(
     if settle_status:
         query += " AND g.settle_status = ?"
         params.append(settle_status)
+    if store_name.strip():
+        query += " AND COALESCE(CASE WHEN g.store_id != 0 THEN s.name ELSE g.store_name END, '') = ?"
+        params.append(store_name.strip())
     if keyword.strip():
         kw = f"%{keyword.strip()}%"
         query += " AND (g.order_no LIKE ? OR g.wangwang LIKE ? OR g.keyword LIKE ? OR g.spec LIKE ?)"
