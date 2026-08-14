@@ -839,16 +839,17 @@ export function GiftsPage() {
           }}
           summary={() => (
             <Table.Summary.Row>
-              <Table.Summary.Cell index={0} colSpan={5}>
+              <Table.Summary.Cell index={0} colSpan={1} />
+              <Table.Summary.Cell index={1} colSpan={5}>
                 <Text strong>本页小计</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={5}>
+              <Table.Summary.Cell index={6}>
                 <Text strong>¥{amountSubtotal.toFixed(2)}</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={6}>
+              <Table.Summary.Cell index={7}>
                 <Text strong>¥{commissionSubtotal.toFixed(2)}</Text>
               </Table.Summary.Cell>
-              <Table.Summary.Cell index={7} colSpan={5} />
+              <Table.Summary.Cell index={8} colSpan={5} />
             </Table.Summary.Row>
           )}
           scroll={{ x: 1360 }}
