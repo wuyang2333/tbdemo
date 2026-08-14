@@ -8,6 +8,7 @@ import {
   SafetyOutlined,
   ShopOutlined,
   StopOutlined,
+  SyncOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
@@ -85,6 +86,14 @@ export function StoresPage() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [logs, setLogs] = useState<StoreLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [sycmStore, setSycmStore] = useState<Store | null>(null);
+  const [sycmOpen, setSycmOpen] = useState(false);
+  const [sycmUsername, setSycmUsername] = useState("");
+  const [sycmPassword, setSycmPassword] = useState("");
+  const [sycmCookie, setSycmCookie] = useState("");
+  const [sycmSaving, setSycmSaving] = useState(false);
+  const [sycmTesting, setSycmTesting] = useState(false);
+  const [sycmSyncing, setSycmSyncing] = useState(false);
 
   const ACTION_LABELS: Record<string, string> = {
     bind: "绑定店铺",
@@ -297,6 +306,14 @@ export function StoresPage() {
             <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshAuth(row)}>
               刷新授权
             </Button>
+            <Button
+              size="small"
+              icon={<BarChartOutlined />}
+              type={row.sycm_configured ? "default" : "dashed"}
+              onClick={() => openSycm(row)}
+            >
+              生意参谋{row.sycm_configured ? "" : "·未配置"}
+            </Button>
             <Popconfirm
               title={row.status === "stopped" ? `启用店铺 ${row.name}？` : `停用店铺 ${row.name}？`}
               onConfirm={() => toggleStatus(row)}
@@ -321,6 +338,69 @@ export function StoresPage() {
     },
   ];
 
+  const openSycm = (row: Store) => {
+    setSycmStore(row);
+    setSycmUsername(row.sycm_username || "");
+    setSycmPassword("");
+    setSycmCookie("");
+    setSycmOpen(true);
+  };
+
+  const saveSycm = async () => {
+    if (!sycmStore) return;
+    setSycmSaving(true);
+    try {
+      await http.put(`/stores/${sycmStore.id}/sycm`, {
+        username: sycmUsername,
+        password: sycmPassword,
+        cookie: sycmCookie,
+      });
+      message.success("生意参谋配置已保存");
+      refresh();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setSycmSaving(false);
+    }
+  };
+
+  const testSycm = async () => {
+    if (!sycmStore) return;
+    setSycmTesting(true);
+    try {
+      await http.post(`/stores/${sycmStore.id}/sycm/test`);
+      message.success("生意参谋登录正常");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setSycmTesting(false);
+    }
+  };
+
+  const syncSycm = async () => {
+    if (!sycmStore) return;
+    setSycmSyncing(true);
+    try {
+      await http.post(`/stores/${sycmStore.id}/sync`);
+      message.success("已同步该店铺数据");
+      refresh();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setSycmSyncing(false);
+    }
+  };
+
+  const syncAllSycm = async () => {
+    try {
+      const { data } = await http.post<{ ok: number; total: number }>("/stores/sync-all");
+      message.success(`同步完成：成功 ${data.ok} / 共 ${data.total} 家`);
+      refresh();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -334,6 +414,9 @@ export function StoresPage() {
             </Button>
             <Button icon={<BarChartOutlined />} onClick={() => setCompareOpen(true)}>
               多店对比
+            </Button>
+            <Button icon={<SyncOutlined />} onClick={syncAllSycm}>
+              同步数据
             </Button>
             <Button type="primary" icon={<SafetyOutlined />} onClick={openCreate}>
               绑定店铺
@@ -532,6 +615,65 @@ export function StoresPage() {
             { title: "详情", dataIndex: "detail", render: (value: string) => value || "—" },
           ]}
         />
+      </Modal>
+
+      <Modal
+        title={`生意参谋数据源 · ${sycmStore?.name ?? ""}`}
+        open={sycmOpen}
+        onCancel={() => setSycmOpen(false)}
+        footer={
+          <Space>
+            <Button icon={<ThunderboltOutlined />} loading={sycmTesting} onClick={testSycm}>
+              测试连接
+            </Button>
+            <Button icon={<SyncOutlined />} loading={sycmSyncing} onClick={syncSycm}>
+              同步数据
+            </Button>
+            <Button type="primary" loading={sycmSaving} onClick={saveSycm}>
+              保存
+            </Button>
+          </Space>
+        }
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            当前状态：
+            {sycmStore?.sycm_configured ? (
+              <Tag color="green">已配置</Tag>
+            ) : (
+              <Tag color="orange">未配置</Tag>
+            )}
+            {sycmStore?.sycm_cookie_masked ? ` Cookie：${sycmStore.sycm_cookie_masked}` : ""}
+          </Text>
+        </div>
+        <Form layout="vertical">
+          <Form.Item label="账号">
+            <Input
+              value={sycmUsername}
+              onChange={(event) => setSycmUsername(event.target.value)}
+              placeholder="生意参谋登录账号"
+            />
+          </Form.Item>
+          <Form.Item label="密码">
+            <Input.Password
+              value={sycmPassword}
+              onChange={(event) => setSycmPassword(event.target.value)}
+              placeholder="留空不修改"
+            />
+          </Form.Item>
+          <Form.Item
+            label="登录凭证 Cookie"
+            extra="在浏览器登录生意参谋后，从开发者工具复制 Cookie 粘贴到这里；留空不修改"
+          >
+            <Input.TextArea
+              rows={4}
+              value={sycmCookie}
+              onChange={(event) => setSycmCookie(event.target.value)}
+              placeholder="粘贴生意参谋 Cookie"
+            />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

@@ -1,4 +1,4 @@
-﻿"""数据洞察：从礼品单数据聚合统计（今日/本周/本月、趋势、按店铺、状态分布）。"""
+﻿"""数据洞察：从生意参谋抓取的店铺每日数据（store_daily_data）聚合统计。"""
 
 from __future__ import annotations
 
@@ -13,39 +13,31 @@ from backend.app.core.db import get_db
 router = APIRouter()
 
 
-def _day(raw: str) -> str:
-    return raw[:10] if raw and len(raw) >= 10 else ""
-
-
-def _day_date(raw: str) -> date_cls | None:
-    d = _day(raw)
-    if not d:
-        return None
-    try:
-        return date_cls.fromisoformat(d)
-    except ValueError:
-        return None
-
-
-def _store_name(row) -> str:
-    if row["store_id"] != 0:
-        return (row["linked_store_name"] or "") or "未关联店铺"
-    return (row["store_name"] or "") or "未关联店铺"
-
-
-def _sum(rows) -> dict:
+def _sum_rows(rows) -> dict:
+    visitors = 0
+    pv = 0
+    sales = 0.0
     orders = 0
-    amount = 0.0
-    commission = 0.0
-    for row in rows:
-        orders += 1
-        amount += row["price"] or 0
-        commission += row["commission"] or 0
+    for r in rows:
+        visitors += r["visitors"] or 0
+        pv += r["pv"] or 0
+        sales += r["sales"] or 0
+        orders += r["orders"] or 0
+    conversion = (orders / visitors * 100) if visitors else 0.0
     return {
+        "visitors": visitors,
+        "pv": pv,
+        "sales": round(sales, 2),
         "orders": orders,
-        "amount": round(amount, 2),
-        "commission": round(commission, 2),
+        "conversion_rate": round(conversion, 2),
     }
+
+
+def _to_date(raw: str) -> date_cls | None:
+    try:
+        return date_cls.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 @router.get("/summary")
@@ -57,12 +49,7 @@ def analytics_summary(
     if not (1 <= days <= 90):
         days = 14
     rows = db.execute(
-        """
-        SELECT g.*, COALESCE(s.name, '') AS linked_store_name
-        FROM gifts g
-        LEFT JOIN stores s ON s.id = g.store_id
-        ORDER BY COALESCE(g.order_time, g.created_at) ASC, g.id ASC
-        """
+        "SELECT * FROM store_daily_data ORDER BY data_date ASC, store_id ASC"
     ).fetchall()
 
     today = date_cls.today()
@@ -70,54 +57,74 @@ def analytics_summary(
     week_start = today - timedelta(days=6)
     month_prefix = today.strftime("%Y-%m")
 
-    today_rows = [r for r in rows if _day(r["order_time"] or r["created_at"]) == today_str]
+    today_rows = [r for r in rows if r["data_date"] == today_str]
     week_rows = []
     month_rows = []
     for r in rows:
-        d = _day_date(r["order_time"] or r["created_at"])
+        d = _to_date(r["data_date"])
         if d is None:
             continue
         if week_start <= d <= today:
             week_rows.append(r)
-        if d.strftime("%Y-%m") == month_prefix:
+        if r["data_date"].startswith(month_prefix):
             month_rows.append(r)
 
     trend = []
     for i in range(days - 1, -1, -1):
         d = today - timedelta(days=i)
         ds = d.isoformat()
-        day_rows = [r for r in rows if _day(r["order_time"] or r["created_at"]) == ds]
-        agg = _sum(day_rows)
-        trend.append({"date": d.strftime("%m-%d"), **agg})
-
-    stores_map: dict[str, dict] = {}
-    for r in rows:
-        name = _store_name(r)
-        item = stores_map.setdefault(
-            name, {"store": name, "orders": 0, "amount": 0.0, "commission": 0.0}
+        trend.append(
+            {"date": d.strftime("%m-%d"), **(_sum_rows([r for r in rows if r["data_date"] == ds]))}
         )
-        item["orders"] += 1
-        item["amount"] += r["price"] or 0
-        item["commission"] += r["commission"] or 0
-    by_store = sorted(stores_map.values(), key=lambda x: x["amount"], reverse=True)
-    for item in by_store:
-        item["amount"] = round(item["amount"], 2)
-        item["commission"] = round(item["commission"], 2)
 
-    reviewed = sum(1 for r in rows if r["review_status"] == "reviewed")
-    settled = sum(1 for r in rows if r["settle_status"] == "settled")
+    stores_map: dict[int, dict] = {}
+    for r in rows:
+        sid = r["store_id"]
+        item = stores_map.setdefault(
+            sid,
+            {
+                "store_id": sid,
+                "store_name": "",
+                "visitors": 0,
+                "pv": 0,
+                "sales": 0.0,
+                "orders": 0,
+                "days": 0,
+                "latest_date": "",
+            },
+        )
+        item["visitors"] += r["visitors"] or 0
+        item["pv"] += r["pv"] or 0
+        item["sales"] += r["sales"] or 0
+        item["orders"] += r["orders"] or 0
+        item["days"] += 1
+        if r["data_date"] > item["latest_date"]:
+            item["latest_date"] = r["data_date"]
+
+    name_map = {s["id"]: s["name"] for s in db.execute("SELECT id, name FROM stores").fetchall()}
+    by_store = []
+    for sid, item in stores_map.items():
+        item["store_name"] = name_map.get(sid, f"店铺 {sid}")
+        conv = (item["orders"] / item["visitors"] * 100) if item["visitors"] else 0.0
+        item["conversion_rate"] = round(conv, 2)
+        item["sales"] = round(item["sales"], 2)
+        by_store.append(item)
+    by_store.sort(key=lambda x: x["sales"], reverse=True)
+
+    configured = db.execute(
+        "SELECT COUNT(*) AS c FROM stores WHERE sycm_cookie != '' OR sycm_username != ''"
+    ).fetchone()["c"]
+    last = db.execute(
+        "SELECT MAX(created_at) AS m FROM store_daily_data"
+    ).fetchone()["m"]
 
     return {
-        "today": _sum(today_rows),
-        "week": _sum(week_rows),
-        "month": _sum(month_rows),
-        "total": _sum(rows),
+        "today": _sum_rows(today_rows),
+        "week": _sum_rows(week_rows),
+        "month": _sum_rows(month_rows),
+        "total": _sum_rows(rows),
         "trend": trend,
         "by_store": by_store,
-        "status": {
-            "reviewed": reviewed,
-            "unreviewed": len(rows) - reviewed,
-            "settled": settled,
-            "unsettled": len(rows) - settled,
-        },
+        "store_count": configured,
+        "last_sync": last,
     }

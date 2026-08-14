@@ -41,6 +41,9 @@ export type Store = {
   display_status: "active" | "auth_error" | "stopped" | "auth_expired";
   auth_expires_at: string | null;
   created_at: string;
+  sycm_username: string;
+  sycm_configured: boolean;
+  sycm_cookie_masked: string;
 };
 
 export type StoreMetrics = {
@@ -152,9 +155,11 @@ export type ModelConfig = {
 };
 
 export type AnalyticsBucket = {
+  visitors: number;
+  pv: number;
+  sales: number;
   orders: number;
-  amount: number;
-  commission: number;
+  conversion_rate: number;
 };
 
 export type AnalyticsTrendPoint = AnalyticsBucket & {
@@ -162,10 +167,15 @@ export type AnalyticsTrendPoint = AnalyticsBucket & {
 };
 
 export type AnalyticsStoreAgg = {
-  store: string;
+  store_id: number;
+  store_name: string;
+  visitors: number;
+  pv: number;
+  sales: number;
   orders: number;
-  amount: number;
-  commission: number;
+  conversion_rate: number;
+  days: number;
+  latest_date: string;
 };
 
 export type AnalyticsSummary = {
@@ -175,10 +185,6 @@ export type AnalyticsSummary = {
   total: AnalyticsBucket;
   trend: AnalyticsTrendPoint[];
   by_store: AnalyticsStoreAgg[];
-  status: {
-    reviewed: number;
-    unreviewed: number;
-    settled: number;
-    unsettled: number;
-  };
+  store_count: number;
+  last_sync: string | null;
 };

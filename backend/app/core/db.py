@@ -118,6 +118,18 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_sycm(conn: sqlite3.Connection) -> None:
+    """店铺生意参谋凭证字段：账号、密码、登录凭证 Cookie。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(stores)")}
+    if "sycm_username" not in cols:
+        conn.execute("ALTER TABLE stores ADD COLUMN sycm_username TEXT NOT NULL DEFAULT ''")
+    if "sycm_password" not in cols:
+        conn.execute("ALTER TABLE stores ADD COLUMN sycm_password TEXT NOT NULL DEFAULT ''")
+    if "sycm_cookie" not in cols:
+        conn.execute("ALTER TABLE stores ADD COLUMN sycm_cookie TEXT NOT NULL DEFAULT ''")
+    conn.commit()
+
+
 def _seed_stores(conn: sqlite3.Connection) -> None:
     """首次运行时写入几家演示店铺，方便查看健康状态效果。"""
     count = conn.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
@@ -294,6 +306,22 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS store_daily_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                data_date TEXT NOT NULL,
+                visitors INTEGER NOT NULL DEFAULT 0,
+                pv INTEGER NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                orders INTEGER NOT NULL DEFAULT 0,
+                conversion_rate REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(store_id, data_date)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS gifts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,
@@ -327,6 +355,7 @@ def init_db() -> None:
         conn.commit()
         _migrate(conn)
         _migrate_model_configs(conn)
+        _migrate_sycm(conn)
         _seed_stores(conn)
         _migrate_logs(conn)
         _seed_gifts(conn)

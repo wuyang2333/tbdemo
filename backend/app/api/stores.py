@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from backend.app.api.auth import get_current_user
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
+from backend.app.core.sycm import SycmError, check_sycm_login, fetch_store_daily
 
 router = APIRouter()
 
@@ -61,6 +62,9 @@ def _payload(row) -> dict:
         "display_status": _display_status(row),
         "auth_expires_at": row["auth_expires_at"],
         "created_at": row["created_at"],
+        "sycm_username": row["sycm_username"],
+        "sycm_configured": bool(row["sycm_cookie"] or row["sycm_username"]),
+        "sycm_cookie_masked": _mask_cookie(row["sycm_cookie"]),
     }
 
 
@@ -251,6 +255,12 @@ class CurrentIn(BaseModel):
     store_id: int | None = None
 
 
+class SycmConfigIn(BaseModel):
+    username: str = ""
+    password: str = ""
+    cookie: str = ""
+
+
 def _get_store_or_404(db, store_id: int):
     row = db.execute("SELECT * FROM stores WHERE id = ?", (store_id,)).fetchone()
     if not row:
@@ -278,6 +288,70 @@ def _validate(body: StoreIn) -> str:
         except ValueError:
             raise HTTPException(status_code=400, detail="授权到期时间格式不正确")
     return expires
+
+
+def _mask_cookie(cookie: str) -> str:
+    if not cookie:
+        return ""
+    if len(cookie) <= 12:
+        return "****"
+    return cookie[:6] + "****" + cookie[-6:]
+
+
+def sync_store_row(db, row) -> dict:
+    """抓取单个店铺数据并写入 store_daily_data，返回保存后的记录。"""
+    metrics = fetch_store_daily(dict(row))
+    data_date = metrics["date"]
+    db.execute(
+        """
+        INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, conversion_rate, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(store_id, data_date) DO UPDATE SET
+            visitors = excluded.visitors, pv = excluded.pv, sales = excluded.sales,
+            orders = excluded.orders, conversion_rate = excluded.conversion_rate
+        """,
+        (
+            row["id"],
+            data_date,
+            metrics["visitors"],
+            metrics["pv"],
+            metrics["sales"],
+            metrics["orders"],
+            metrics["conversion_rate"],
+            _fmt(_now()),
+        ),
+    )
+    saved = db.execute(
+        "SELECT * FROM store_daily_data WHERE store_id = ? AND data_date = ?",
+        (row["id"], data_date),
+    ).fetchone()
+    return {
+        "store_id": row["id"],
+        "store_name": row["name"],
+        "data_date": saved["data_date"],
+        "visitors": saved["visitors"],
+        "pv": saved["pv"],
+        "sales": saved["sales"],
+        "orders": saved["orders"],
+        "conversion_rate": saved["conversion_rate"],
+    }
+
+
+def sync_all_stores(db, user=None) -> dict:
+    """同步所有配置了生意参谋凭证的店铺，逐店容错。"""
+    rows = db.execute(
+        "SELECT * FROM stores WHERE sycm_cookie != '' OR sycm_username != '' ORDER BY id ASC"
+    ).fetchall()
+    results = []
+    for row in rows:
+        try:
+            item = sync_store_row(db, row)
+            results.append(
+                {"store_id": item["store_id"], "store_name": item["store_name"], "ok": True, "data_date": item["data_date"]}
+            )
+        except Exception as exc:  # noqa: BLE001
+            results.append({"store_id": row["id"], "store_name": row["name"], "ok": False, "error": str(exc)})
+    return {"results": results, "total": len(rows), "ok": sum(1 for r in results if r["ok"])}
 
 
 @router.get("")
@@ -404,6 +478,64 @@ def set_status(
     item = _payload(_get_store_or_404(db, store_id))
     _log(db, user, "status", item["name"], label)
     return {"item": item}
+
+
+@router.put("/{store_id}/sycm")
+def update_store_sycm(
+    store_id: int,
+    body: SycmConfigIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_store_or_404(db, store_id)
+    username = body.username.strip() or row["sycm_username"]
+    password = body.password.strip() or row["sycm_password"]
+    cookie = body.cookie.strip() or row["sycm_cookie"]
+    db.execute(
+        "UPDATE stores SET sycm_username = ?, sycm_password = ?, sycm_cookie = ? WHERE id = ?",
+        (username, password, cookie, store_id),
+    )
+    _log(db, user, "配置生意参谋", row["name"], "更新生意参谋凭证")
+    return {"item": _payload(_get_store_or_404(db, store_id))}
+
+
+@router.post("/{store_id}/sycm/test")
+def test_store_sycm(
+    store_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_store_or_404(db, store_id)
+    try:
+        check_sycm_login(dict(row))
+    except SycmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/{store_id}/sync")
+def sync_store(
+    store_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_store_or_404(db, store_id)
+    try:
+        item = sync_store_row(db, row)
+    except SycmError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    _log(db, user, "同步生意参谋", row["name"], f"同步 {item['data_date']}")
+    return {"item": item}
+
+
+@router.post("/sync-all")
+def sync_all(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    result = sync_all_stores(db, user)
+    _log(db, user, "同步生意参谋", "全部店铺", f"同步完成：成功 {result['ok']} / 共 {result['total']}")
+    return result
 
 
 @router.get("/current")

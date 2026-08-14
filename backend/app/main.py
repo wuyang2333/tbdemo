@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -26,7 +27,7 @@ from backend.app.api import (
     tasks,
 )
 from backend.app.api.auth import get_current_user, require_admin, require_module
-from backend.app.api.stores import run_inspect_once
+from backend.app.api.stores import run_inspect_once, sync_all_stores
 from backend.app.core.db import DB_PATH, init_db
 from backend.app.core.modules import get_modules
 
@@ -41,11 +42,35 @@ async def _inspect_loop() -> None:
         await asyncio.sleep(300)
 
 
+def _run_sycm_sync() -> None:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        sync_all_stores(conn)
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+async def _sycm_sync_loop() -> None:
+    """生意参谋定时抓取：每 30 分钟同步一次各店数据。"""
+    while True:
+        try:
+            _run_sycm_sync()
+        except Exception:
+            pass
+        await asyncio.sleep(1800)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(_inspect_loop())
+    sycm_task = asyncio.create_task(_sycm_sync_loop())
     yield
     task.cancel()
+    sycm_task.cancel()
 
 
 def create_app() -> FastAPI:
