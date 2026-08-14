@@ -37,6 +37,7 @@ export function ModelConfigsPage() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [configured, setConfigured] = useState(false);
+  const [lastProvider, setLastProvider] = useState("openai");
 
   const load = async () => {
     try {
@@ -48,6 +49,7 @@ export function ModelConfigsPage() {
         temperature: data.temperature,
       });
       setConfigured(data.configured);
+      setLastProvider(data.provider);
     } catch (error) {
       message.error(getApiErrorMessage(error));
     }
@@ -90,8 +92,12 @@ export function ModelConfigsPage() {
     const defaults = PROVIDER_DEFAULTS[provider];
     if (!defaults) return;
     const current = form.getFieldsValue();
-    if (!current.base_url) form.setFieldValue("base_url", defaults.base_url);
-    if (!current.model) form.setFieldValue("model", defaults.model);
+    const prevDefaults = PROVIDER_DEFAULTS[lastProvider] ?? PROVIDER_DEFAULTS.openai;
+    const urlIsDefault = !current.base_url || (prevDefaults && current.base_url === prevDefaults.base_url);
+    const modelIsDefault = !current.model || (prevDefaults && current.model === prevDefaults.model);
+    if (urlIsDefault) form.setFieldValue("base_url", defaults.base_url);
+    if (modelIsDefault) form.setFieldValue("model", defaults.model);
+    setLastProvider(provider);
   };
 
   return (
