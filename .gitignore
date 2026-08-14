@@ -1,0 +1,7 @@
+node_modules/
+.pnpm-store/
+.vite/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
