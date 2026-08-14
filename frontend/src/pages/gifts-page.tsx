@@ -1,10 +1,11 @@
-﻿import { CloseOutlined, CopyOutlined, DeleteOutlined, DownloadOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, CloseOutlined, DeleteOutlined, DownloadOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
   Col,
   DatePicker,
   Divider,
+  Dropdown,
   Form,
   Input,
   InputNumber,
@@ -19,7 +20,7 @@ import {
   Typography,
   message,
 } from "antd";
-import type { TableColumnsType } from "antd";
+import type { MenuProps, TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Key } from "react";
@@ -485,6 +486,16 @@ export function GiftsPage() {
     }
   };
 
+  const batchMenuItems: MenuProps["items"] = [
+    { key: "reviewed", label: "标记已评论", onClick: () => batchSet("review_status", "reviewed") },
+    { key: "unreviewed", label: "标记未评论", onClick: () => batchSet("review_status", "none") },
+    { key: "settled", label: "标记已结款", onClick: () => batchSet("settle_status", "settled") },
+    { key: "unsettled", label: "标记未结款", onClick: () => batchSet("settle_status", "unsettled") },
+    { type: "divider" },
+    { key: "copy", label: "复制勾选订单", onClick: () => copyTable() },
+    { key: "clear", label: "取消选择", onClick: () => setSelectedKeys([]) },
+  ];
+
   const exportExcel = async () => {
     try {
       const params = new URLSearchParams();
@@ -749,28 +760,11 @@ export function GiftsPage() {
             重置
           </Button>
           <Divider type="vertical" />
-          {selectedKeys.length > 0 && (
-            <Text strong style={{ color: "#ff5000" }}>已选 {selectedKeys.length} 单</Text>
-          )}
-          <Button size="small" type="primary" ghost onClick={() => batchSet("review_status", "reviewed")}>
-            标记已评论
-          </Button>
-          <Button size="small" onClick={() => batchSet("review_status", "none")}>
-            标记未评论
-          </Button>
-          <Button size="small" type="primary" ghost onClick={() => batchSet("settle_status", "settled")}>
-            标记已结款
-          </Button>
-          <Button size="small" onClick={() => batchSet("settle_status", "unsettled")}>
-            标记未结款
-          </Button>
-          <Button size="small" onClick={() => setSelectedKeys([])}>
-            取消选择
-          </Button>
-          <Divider type="vertical" />
-          <Button icon={<CopyOutlined />} onClick={copyTable}>
-            复制勾选订单
-          </Button>
+          <Dropdown menu={{ items: batchMenuItems }}>
+            <Button type="primary" ghost icon={<AppstoreOutlined />}>
+              批量操作{selectedKeys.length > 0 ? `（已选 ${selectedKeys.length}）` : ""}
+            </Button>
+          </Dropdown>
         </Space>
       </Card>
 
