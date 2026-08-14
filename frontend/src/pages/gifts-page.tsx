@@ -709,6 +709,28 @@ export function GiftsPage() {
             options={SETTLE_OPTIONS}
             style={{ width: 120 }}
           />
+          <Button size="small" onClick={() => setDateRange([dayjs().startOf("day"), dayjs().endOf("day")])}>
+            今日
+          </Button>
+          <Button
+            size="small"
+            onClick={() =>
+              setDateRange([
+                dayjs().subtract(1, "day").startOf("day"),
+                dayjs().subtract(1, "day").endOf("day"),
+              ])
+            }
+          >
+            昨日
+          </Button>
+          <Button
+            size="small"
+            onClick={() =>
+              setDateRange([dayjs().subtract(6, "day").startOf("day"), dayjs().endOf("day")])
+            }
+          >
+            近七日
+          </Button>
           <DatePicker.RangePicker
             value={dateRange}
             onChange={setDateRange}
