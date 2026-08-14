@@ -1,4 +1,5 @@
 import {
+  ApiOutlined,
   BarChartOutlined,
   BellOutlined,
   DashboardOutlined,
@@ -50,6 +51,8 @@ const ICONS: Record<string, ReactNode> = {
   monitor: <EyeOutlined />,
   task: <ScheduleOutlined />,
   model: <RobotOutlined />,
+  robot: <RobotOutlined />,
+  api: <ApiOutlined />,
   settings: <SettingOutlined />,
   profile: <IdcardOutlined />,
   accounts: <UserSwitchOutlined />,

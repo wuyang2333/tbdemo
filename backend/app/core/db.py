@@ -238,6 +238,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_configs (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                provider TEXT NOT NULL DEFAULT 'openai',
+                base_url TEXT NOT NULL DEFAULT '',
+                api_key TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                temperature REAL NOT NULL DEFAULT 0.7,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
         _migrate(conn)
         _seed_stores(conn)

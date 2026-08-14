@@ -1,5 +1,5 @@
 import { HistoryOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Button, Card, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Select, Space, Table, Tag, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -7,8 +7,6 @@ import { useCallback, useEffect, useState } from "react";
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
 import type { OpLog } from "../types";
-
-const { Text } = Typography;
 
 const MODULE_OPTIONS = [
   { value: "", label: "全部模块" },

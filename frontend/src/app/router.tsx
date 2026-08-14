@@ -5,6 +5,7 @@ import { AppShell } from "../components/layout/app-shell";
 import { useAuth } from "../lib/auth";
 import { canAccessModule } from "../lib/modules";
 import { AccountsPage } from "../pages/accounts-page";
+import { AiPage } from "../pages/ai-page";
 import { AnalyticsPage } from "../pages/analytics-page";
 import { ContentPage } from "../pages/content-page";
 import { CustomersPage } from "../pages/customers-page";
@@ -82,6 +83,14 @@ export function AppRouter() {
           }
         />
         <Route path="/orders" element={<Navigate to="/gifts" replace />} />
+        <Route
+          path="/ai"
+          element={
+            <RequireModule id="ai">
+              <AiPage />
+            </RequireModule>
+          }
+        />
         <Route
           path="/customers"
           element={

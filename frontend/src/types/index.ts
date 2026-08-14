@@ -117,3 +117,20 @@ export type OpLog = {
   detail: string;
   created_at: string;
 };
+
+export type ChatRole = "user" | "assistant";
+
+export type ChatMessage = {
+  role: ChatRole;
+  content: string;
+};
+
+export type ModelConfig = {
+  provider: string;
+  base_url: string;
+  api_key: string;
+  model: string;
+  temperature: number;
+  updated_at: string | null;
+  configured: boolean;
+};

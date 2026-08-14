@@ -1,0 +1,79 @@
+﻿"""AI 助手：基于已配置的模型提供对话能力，并带上工作台实时数据快照。"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from backend.app.api.auth import get_current_user
+from backend.app.api.model_configs import _get_config
+from backend.app.core.ai_client import AIError, chat_completion
+from backend.app.core.db import get_db
+from backend.app.core.logs import log_op
+
+router = APIRouter()
+
+MAX_HISTORY = 10
+
+
+class ChatMessageIn(BaseModel):
+    role: str
+    content: str
+
+
+class ChatIn(BaseModel):
+    messages: list[ChatMessageIn]
+
+
+def _workbench_snapshot(db) -> str:
+    """把工作台当前状态压缩成一段文字，注入系统提示词。"""
+    store_count = db.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
+    active_stores = db.execute("SELECT COUNT(*) AS c FROM stores WHERE status = 'active'").fetchone()["c"]
+    gift_total = db.execute("SELECT COUNT(*) AS c FROM gifts").fetchone()["c"]
+    gift_pending = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'pending'").fetchone()["c"]
+    gift_shipped = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'shipped'").fetchone()["c"]
+    gift_delivered = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'delivered'").fetchone()["c"]
+    gift_refunded = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'refunded'").fetchone()["c"]
+    top_stores = db.execute("SELECT name, category FROM stores ORDER BY id ASC LIMIT 5").fetchall()
+    store_names = "、".join(f"{row['name']}（{row['category']}）" for row in top_stores) or "（暂无店铺）"
+    return (
+        f"店铺共 {store_count} 家，其中正常营业 {active_stores} 家；"
+        f"礼品单共 {gift_total} 单：待发货 {gift_pending}、已发货 {gift_shipped}、已完成 {gift_delivered}、已退款 {gift_refunded}。"
+        f"店铺列表（前 5 家）：{store_names}。"
+    )
+
+
+@router.post("/chat")
+def chat(
+    body: ChatIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = _get_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面填写 API Key")
+
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in body.messages[-MAX_HISTORY:]
+        if m.role in ("user", "assistant") and m.content.strip()
+    ]
+    if not history:
+        raise HTTPException(status_code=400, detail="请输入内容后再发送")
+
+    system_prompt = (
+        "你是「淘宝运营工作台」的 AI 运营助手，帮助运营人员分析店铺与礼品单数据、撰写文案、给出运营建议。"
+        "回答请使用简体中文，语气务实、简洁，分点说明时用短句。"
+        "以下是工作台当前的数据快照（基于数据库实时统计）：\n"
+        f"{_workbench_snapshot(db)}\n"
+        "数据快照仅供回答问题时参考；如果用户问的问题与快照无关，正常回答即可。"
+    )
+    messages = [{"role": "system", "content": system_prompt}, *history]
+
+    try:
+        reply = chat_completion(cfg, messages, timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    log_op(db, user, "ai", "对话", target_name="", detail=(history[-1]["content"][:60] if history else ""))
+    return {"reply": reply}

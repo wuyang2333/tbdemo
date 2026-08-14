@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.api import (
     accounts,
+    ai,
     analytics,
     auth,
     content,
@@ -129,6 +130,7 @@ def create_app() -> FastAPI:
         (monitoring.router, "/api/monitoring", "monitoring"),
         (tasks.router, "/api/tasks", "tasks"),
         (model_configs.router, "/api/model-configs", "model-configs"),
+        (ai.router, "/api/ai", "ai"),
     ]
     for router, prefix, tag in protected:
         app.include_router(
