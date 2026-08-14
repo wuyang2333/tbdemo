@@ -111,6 +111,7 @@ export type Gift = {
   order_time: string;
   review_status: GiftReviewStatus;
   settle_status: GiftSettleStatus;
+  qr_code: string;
   status: GiftStatus;
   recipient: string;
   gift_name: string;

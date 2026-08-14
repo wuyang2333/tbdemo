@@ -105,6 +105,8 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE gifts ADD COLUMN settle_status TEXT NOT NULL DEFAULT 'unsettled'")
     if "order_time" not in cols:
         conn.execute("ALTER TABLE gifts ADD COLUMN order_time TEXT")
+    if "qr_code" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN qr_code TEXT NOT NULL DEFAULT ''")
     conn.execute("UPDATE gifts SET order_time = created_at WHERE order_time IS NULL OR order_time = ''")
     conn.execute("UPDATE gifts SET wangwang = recipient WHERE wangwang = '' AND recipient != ''")
     conn.commit()

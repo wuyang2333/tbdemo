@@ -117,6 +117,9 @@ def create_app() -> FastAPI:
     avatar_dir = DB_PATH.parent / "avatars"
     avatar_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/api/avatars", StaticFiles(directory=str(avatar_dir)), name="avatars")
+    qr_dir = DB_PATH.parent / "qrcodes"
+    qr_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/api/qrcodes", StaticFiles(directory=str(qr_dir)), name="qrcodes")
 
     protected = [
         (dashboard.router, "/api/dashboard", "dashboard"),

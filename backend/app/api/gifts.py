@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import secrets
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user
-from backend.app.core.db import get_db
+from backend.app.core.db import DB_PATH, get_db
 from backend.app.core.logs import log_op
 
 router = APIRouter()
@@ -80,6 +82,7 @@ def _payload(row) -> dict:
         "recipient": row["recipient"],
         "gift_name": row["gift_name"],
         "quantity": row["quantity"],
+        "qr_code": row["qr_code"] or "",
         "created_at": row["created_at"],
     }
 
@@ -292,6 +295,61 @@ def update_gift_settle(
     db.execute("UPDATE gifts SET settle_status = ? WHERE id = ?", (body.status, gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "settle", row["order_no"], f"结款状态改为「{SETTLE_LABELS[body.status]}」")
+    return {"item": item}
+
+
+@router.post("/{gift_id}/qr")
+async def upload_gift_qr(
+    gift_id: int,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_gift_or_404(db, gift_id)
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="请选择二维码图片")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        raise HTTPException(status_code=400, detail="仅支持 PNG/JPG/GIF/WebP 图片")
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片不能超过 2MB")
+    qr_dir = DB_PATH.parent / "qrcodes"
+    qr_dir.mkdir(parents=True, exist_ok=True)
+    name = f"g{gift_id}_{uuid.uuid4().hex[:12]}{ext}"
+    (qr_dir / name).write_bytes(content)
+    old = row["qr_code"]
+    if old and old.startswith("/api/qrcodes/"):
+        old_path = qr_dir / Path(old.rsplit("/", 1)[-1])
+        if old_path.exists() and old_path.name != name:
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
+    db.execute("UPDATE gifts SET qr_code = ? WHERE id = ?", (f"/api/qrcodes/{name}", gift_id))
+    item = _payload(_get_gift_or_404(db, gift_id))
+    log_op(db, user, "gifts", "qr", row["order_no"], "上传二维码")
+    return {"item": item}
+
+
+@router.post("/{gift_id}/qr/clear")
+def clear_gift_qr(
+    gift_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_gift_or_404(db, gift_id)
+    old = row["qr_code"]
+    if old and old.startswith("/api/qrcodes/"):
+        old_path = DB_PATH.parent / "qrcodes" / Path(old.rsplit("/", 1)[-1])
+        if old_path.exists():
+            try:
+                old_path.unlink()
+            except OSError:
+                pass
+    db.execute("UPDATE gifts SET qr_code = '' WHERE id = ?", (gift_id,))
+    item = _payload(_get_gift_or_404(db, gift_id))
+    log_op(db, user, "gifts", "qr", row["order_no"], "移除二维码")
     return {"item": item}
 
 

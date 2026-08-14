@@ -1,4 +1,4 @@
-﻿import { DeleteOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+﻿import { CloseOutlined, DeleteOutlined, GiftOutlined, PlusOutlined, QrcodeOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -84,6 +84,9 @@ export function GiftsPage() {
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [qrTarget, setQrTarget] = useState<Gift | null>(null);
+  const [previewQr, setPreviewQr] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const enterRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -352,6 +355,35 @@ export function GiftsPage() {
     }
   };
 
+  const pickQr = (row: Gift) => {
+    setQrTarget(row);
+    fileInputRef.current?.click();
+  };
+
+  const uploadQr = async (row: Gift, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await http.post(`/gifts/${row.id}/qr`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      message.success("二维码已上传");
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const removeQr = async (row: Gift) => {
+    try {
+      await http.post(`/gifts/${row.id}/qr/clear`);
+      message.success("二维码已移除");
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
   const total = filtered.length;
   const unreviewed = filtered.filter((item) => item.review_status === "none").length;
   const unsettled = filtered.filter((item) => item.settle_status === "unsettled").length;
@@ -387,7 +419,41 @@ export function GiftsPage() {
     {
       title: "关键词",
       dataIndex: "keyword",
-      render: (_, row) => renderEditableCell(row, "keyword", row.keyword || "-"),
+      width: 150,
+      render: (_, row) => (
+        <Space size={4}>
+          {row.qr_code ? (
+            <>
+              <img
+                src={row.qr_code}
+                alt="二维码"
+                height={28}
+                style={{ cursor: "zoom-in", borderRadius: 4, verticalAlign: "middle" }}
+                onClick={() => setPreviewQr(row.qr_code)}
+                title="点击查看大图"
+              />
+              <Button
+                size="small"
+                type="text"
+                icon={<CloseOutlined />}
+                onClick={() => removeQr(row)}
+                title="移除二维码"
+              />
+            </>
+          ) : (
+            <>
+              {renderEditableCell(row, "keyword", row.keyword || <Text type="secondary">-</Text>)}
+              <Button
+                size="small"
+                type="text"
+                icon={<QrcodeOutlined />}
+                onClick={() => pickQr(row)}
+                title="上传二维码"
+              />
+            </>
+          )}
+        </Space>
+      ),
     },
     {
       title: "规格",
@@ -646,6 +712,32 @@ export function GiftsPage() {
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file && qrTarget) uploadQr(qrTarget, file);
+          event.target.value = "";
+        }}
+      />
+
+      <Modal
+        title="二维码预览"
+        open={Boolean(previewQr)}
+        footer={null}
+        onCancel={() => setPreviewQr(null)}
+        width={360}
+      >
+        {previewQr && (
+          <div style={{ textAlign: "center" }}>
+            <img src={previewQr} alt="二维码" style={{ maxWidth: "100%", borderRadius: 8 }} />
+          </div>
+        )}
       </Modal>
     </div>
   );
