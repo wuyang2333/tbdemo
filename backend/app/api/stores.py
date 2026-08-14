@@ -122,16 +122,31 @@ def _metrics_for(store_id: int, day: date_cls) -> dict:
     }
 
 
+def _metrics_for_day(db, store_id: int, day: date_cls) -> dict:
+    """按真实同步数据返回某天指标；没有数据时返回 0。"""
+    row = db.execute(
+        "SELECT sales, orders, visitors, conversion_rate FROM store_daily_data "
+        "WHERE store_id = ? AND data_date = ?",
+        (store_id, day.isoformat()),
+    ).fetchone()
+    if not row:
+        return {"sales": 0.0, "orders": 0, "visitors": 0, "refund_rate": 0.0}
+    return {
+        "sales": round(row["sales"] or 0.0, 2),
+        "orders": int(row["orders"] or 0),
+        "visitors": int(row["visitors"] or 0),
+        "refund_rate": 0.0,
+    }
+
+
 def _compute_alerts(db) -> list[dict]:
     items = []
     now = _now()
-    today = now.date()
     rows = db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
     for row in rows:
         name = row["name"]
         base = {"store_id": row["id"], "store_name": name, "created_at": _fmt(now)}
         status = _display_status(row)
-        metrics = _metrics_for(row["id"], today)
 
         if status == "auth_expired":
             items.append(
@@ -171,28 +186,8 @@ def _compute_alerts(db) -> list[dict]:
                 except ValueError:
                     pass
 
-        if metrics["refund_rate"] > 12:
-            items.append(
-                {
-                    **base,
-                    "id": f"al_{row['id']}_refund",
-                    "type": "refund",
-                    "level": "error",
-                    "message": f"「{name}」今日退款率 {metrics['refund_rate']}%，高于预警线 12%",
-                }
-            )
-        elif metrics["refund_rate"] > 8:
-            items.append(
-                {
-                    **base,
-                    "id": f"al_{row['id']}_refund",
-                    "type": "refund",
-                    "level": "warn",
-                    "message": f"「{name}」今日退款率 {metrics['refund_rate']}%，需要关注",
-                }
-            )
 
-        if min(row["dsr_desc"], row["dsr_service"], row["dsr_logistics"]) < 4.5:
+        if 0 < min(row["dsr_desc"], row["dsr_service"], row["dsr_logistics"]) < 4.5:
             items.append(
                 {
                     **base,
@@ -203,16 +198,6 @@ def _compute_alerts(db) -> list[dict]:
                 }
             )
 
-        if row["id"] % 3 == 0 and metrics["orders"] > 150:
-            items.append(
-                {
-                    **base,
-                    "id": f"al_{row['id']}_delivery",
-                    "type": "delivery",
-                    "level": "warn",
-                    "message": f"「{name}」今日订单量较大，请留意发货时效",
-                }
-            )
 
     order_map = {"error": 0, "warn": 1, "info": 2}
     items.sort(key=lambda item: (order_map[item["level"]], item["store_id"]))
@@ -609,7 +594,7 @@ def inspect_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -
 
 @router.get("/compare")
 def compare_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
-    today = _now().date()
+    today = date_cls.today()
     rows = _visible_rows(db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall(), user)
     items = []
     for row in rows:
@@ -618,7 +603,7 @@ def compare_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -
                 "store_id": row["id"],
                 "name": row["name"],
                 "display_status": _display_status(row),
-                **_metrics_for(row["id"], today),
+                **_metrics_for_day(db, row["id"], today),
             }
         )
     return {"items": items}
@@ -633,19 +618,18 @@ def store_metrics(
     row = _get_store_or_404(db, store_id)
     if not can_access_store(user, store_id):
         raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
-    today = _now().date()
+    today = date_cls.today()
     trend = []
     for offset in range(13, -1, -1):
         day = today - timedelta(days=offset)
-        trend.append({"date": day.isoformat(), **_metrics_for(store_id, day)})
+        trend.append({"date": day.isoformat(), **_metrics_for_day(db, store_id, day)})
 
-    sales_7d = sum(_metrics_for(store_id, today - timedelta(days=offset))["sales"] for offset in range(7))
-    orders_7d = sum(_metrics_for(store_id, today - timedelta(days=offset))["orders"] for offset in range(7))
+    sales_7d = sum(_metrics_for_day(db, store_id, today - timedelta(days=offset))["sales"] for offset in range(7))
+    orders_7d = sum(_metrics_for_day(db, store_id, today - timedelta(days=offset))["orders"] for offset in range(7))
     prev_sales_7d = sum(
-        _metrics_for(store_id, today - timedelta(days=offset))["sales"] for offset in range(7, 14)
+        _metrics_for_day(db, store_id, today - timedelta(days=offset))["sales"] for offset in range(7, 14)
     )
-    refunds = [_metrics_for(store_id, today - timedelta(days=offset))["refund_rate"] for offset in range(7)]
-    today_metrics = _metrics_for(store_id, today)
+    today_metrics = _metrics_for_day(db, store_id, today)
     change = (
         round((sales_7d - prev_sales_7d) / prev_sales_7d * 100, 1)
         if prev_sales_7d
@@ -658,7 +642,7 @@ def store_metrics(
         "summary": {
             "sales_7d": round(sales_7d, 2),
             "orders_7d": orders_7d,
-            "avg_refund_rate": round(sum(refunds) / len(refunds), 1),
+            "avg_refund_rate": 0.0,
             "sales_change_7d": change,
         },
         "trend": trend,
