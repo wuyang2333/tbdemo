@@ -14,6 +14,7 @@ import {
   Space,
   Table,
   Tag,
+  TimePicker,
   Typography,
   message,
 } from "antd";
@@ -221,16 +222,19 @@ export function GiftsPage() {
     }
     if (field === "order_time") {
       return (
-        <DatePicker
+        <TimePicker
           size="small"
-          showTime
+          format="HH:mm"
           open={pickerOpen}
           onOpenChange={setPickerOpen}
           value={cellEdit.value ? dayjs(String(cellEdit.value)) : undefined}
           onChange={(value) => {
-            saveCell(row, "order_time", value ? value.format("YYYY-MM-DD HH:mm:ss") : "");
+            if (!value) return;
+            const base = row.order_time ? dayjs(row.order_time) : dayjs();
+            const merged = base.hour(value.hour()).minute(value.minute()).second(0);
+            saveCell(row, "order_time", merged.format("YYYY-MM-DD HH:mm:ss"));
           }}
-          style={{ width: 160 }}
+          style={{ width: 92 }}
         />
       );
     }
