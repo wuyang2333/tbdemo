@@ -1,4 +1,4 @@
-﻿"""AI 助手：基于已配置的模型提供对话能力，并带上工作台实时数据快照。"""
+"""AI 助手：基于已配置的模型提供对话能力，并带上工作台实时数据快照。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user
-from backend.app.api.model_configs import _get_config
+from backend.app.api.model_configs import _get_config_by_id, get_default_config
 from backend.app.core.ai_client import AIError, chat_completion
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
@@ -23,6 +23,7 @@ class ChatMessageIn(BaseModel):
 
 class ChatIn(BaseModel):
     messages: list[ChatMessageIn]
+    model_id: int | None = None
 
 
 def _workbench_snapshot(db) -> str:
@@ -49,10 +50,11 @@ def chat(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    cfg = _get_config(db)
+    cfg = _get_config_by_id(db, body.model_id) if body.model_id is not None else None
+    if not cfg:
+        cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
-        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面填写 API Key")
-
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
     history = [
         {"role": m.role, "content": m.content}
         for m in body.messages[-MAX_HISTORY:]

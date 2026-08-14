@@ -49,6 +49,44 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_model_configs(conn: sqlite3.Connection) -> None:
+    """老版本单行 model_configs 表 → 多模型列表（带名称与默认标记）。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(model_configs)")}
+    except sqlite3.OperationalError:
+        return
+    if "name" in cols:
+        return
+    conn.execute("ALTER TABLE model_configs RENAME TO model_configs_old")
+    conn.execute(
+        """
+        CREATE TABLE model_configs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL DEFAULT '默认模型',
+            provider TEXT NOT NULL DEFAULT 'openai',
+            base_url TEXT NOT NULL DEFAULT '',
+            api_key TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            temperature REAL NOT NULL DEFAULT 0.7,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO model_configs (name, provider, base_url, api_key, model, temperature, is_default, created_at, updated_at)
+        SELECT '默认模型', provider, base_url, api_key, model, temperature, 1, ?, ?
+        FROM model_configs_old
+        """,
+        (now, now),
+    )
+    conn.execute("DROP TABLE model_configs_old")
+    conn.commit()
+
+
 def _seed_stores(conn: sqlite3.Connection) -> None:
     """首次运行时写入几家演示店铺，方便查看健康状态效果。"""
     count = conn.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
@@ -241,18 +279,23 @@ def init_db() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS model_configs (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '默认模型',
                 provider TEXT NOT NULL DEFAULT 'openai',
                 base_url TEXT NOT NULL DEFAULT '',
                 api_key TEXT NOT NULL DEFAULT '',
                 model TEXT NOT NULL DEFAULT '',
                 temperature REAL NOT NULL DEFAULT 0.7,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
+
         conn.commit()
         _migrate(conn)
+        _migrate_model_configs(conn)
         _seed_stores(conn)
         _migrate_logs(conn)
         _seed_gifts(conn)

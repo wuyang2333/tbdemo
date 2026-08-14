@@ -126,11 +126,15 @@ export type ChatMessage = {
 };
 
 export type ModelConfig = {
+  id: number;
+  name: string;
   provider: string;
   base_url: string;
   api_key: string;
   model: string;
   temperature: number;
-  updated_at: string | null;
+  is_default: boolean;
   configured: boolean;
+  created_at: string;
+  updated_at: string;
 };

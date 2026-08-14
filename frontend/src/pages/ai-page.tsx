@@ -1,11 +1,11 @@
-﻿import { ClearOutlined, RobotOutlined, SendOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Input, Space, Tag, Typography, message } from "antd";
+import { ClearOutlined, RobotOutlined, SendOutlined } from "@ant-design/icons";
+import { Button, Card, Empty, Input, Select, Space, Tag, Typography, message } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, ModelConfig } from "../types";
 
 const { Text } = Typography;
 const HISTORY_KEY = "tb-ai-history-v1";
@@ -27,6 +27,8 @@ export function AiPage() {
       return [];
     }
   });
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [modelId, setModelId] = useState<number | undefined>();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -39,6 +41,17 @@ export function AiPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  useEffect(() => {
+    http
+      .get<{ items: ModelConfig[] }>("/model-configs")
+      .then(({ data }) => {
+        setModels(data.items);
+        const def = data.items.find((m) => m.is_default) ?? data.items[0];
+        if (def) setModelId((prev) => prev ?? def.id);
+      })
+      .catch(() => {});
+  }, []);
+
   const send = async (text?: string) => {
     const content = (text ?? input).trim();
     if (!content || loading) return;
@@ -49,6 +62,7 @@ export function AiPage() {
     try {
       const { data } = await http.post<{ reply: string }>("/ai/chat", {
         messages: next.slice(-10),
+        model_id: modelId,
       });
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
     } catch (error) {
@@ -76,11 +90,25 @@ export function AiPage() {
         eyebrow="AI 运营助手"
         title="AI 助手"
         extra={
-          messages.length > 0 ? (
-            <Button icon={<ClearOutlined />} onClick={clear}>
-              清空对话
-            </Button>
-          ) : undefined
+          <Space>
+            {models.length > 0 && (
+              <Select
+                value={modelId}
+                onChange={setModelId}
+                style={{ minWidth: 170 }}
+                placeholder="选择模型"
+                options={models.map((m) => ({
+                  value: m.id,
+                  label: m.name + (m.is_default ? "（默认）" : ""),
+                }))}
+              />
+            )}
+            {messages.length > 0 && (
+              <Button icon={<ClearOutlined />} onClick={clear}>
+                清空对话
+              </Button>
+            )}
+          </Space>
         }
       />
 
@@ -187,7 +215,7 @@ export function AiPage() {
             </Button>
           </Space.Compact>
           <Tag style={{ marginTop: 8 }} color="orange">
-            小提示：第一次使用请先在左侧「模型配置」填写 API Key
+            小提示：右上角可随时切换本次对话的模型；默认模型在「模型配置」里设置
           </Tag>
         </div>
       </Card>
