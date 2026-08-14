@@ -208,7 +208,7 @@ def export_gifts(
         ws.append(
             [
                 ot[:10] if ot else "",
-                ot.replace("T", " ")[:19] if ot else "",
+                (ot.split("T")[-1].split(" ")[-1][:5]) if ot else "",
                 row["store_name"] or "未关联店铺",
                 row["keyword"],
                 row["spec"],

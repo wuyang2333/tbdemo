@@ -425,7 +425,7 @@ export function GiftsPage() {
       lines.push(
         [
           ot ? ot.format("YYYY-MM-DD") : "",
-          ot ? ot.format("YYYY-MM-DD HH:mm") : "",
+          ot ? ot.format("HH:mm") : "",
           row.store_name,
           row.keyword,
           row.spec,
@@ -499,7 +499,7 @@ export function GiftsPage() {
         renderEditableCell(
           row,
           "order_time",
-          row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD HH:mm") : "-"
+          row.order_time ? dayjs(row.order_time).format("HH:mm") : "-"
         ),
     },
     {
