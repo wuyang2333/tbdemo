@@ -112,6 +112,7 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE gifts SET order_time = created_at WHERE order_time IS NULL OR order_time = ''")
     conn.execute("UPDATE gifts SET wangwang = recipient WHERE wangwang = '' AND recipient != ''")
     conn.execute("UPDATE gifts SET image = qr_code WHERE image = '' AND qr_code != ''")
+    conn.execute("UPDATE gifts SET keyword = gift_name WHERE keyword = '' AND gift_name != ''")
     conn.commit()
 
 

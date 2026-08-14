@@ -1,4 +1,4 @@
-﻿import { CloseOutlined, DeleteOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+﻿import { CloseOutlined, CopyOutlined, DeleteOutlined, DownloadOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -78,6 +78,7 @@ export function GiftsPage() {
   const [storeFilter, setStoreFilter] = useState<number | undefined>();
   const [reviewFilter, setReviewFilter] = useState<GiftReviewStatus | undefined>();
   const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
   const [form] = Form.useForm<GiftFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -118,12 +119,23 @@ export function GiftsPage() {
     return [{ value: 0, label: "未关联店铺" }, ...list];
   }, [stores]);
 
+  const storeSelectOptions = useMemo(
+    () => storeOptions.filter((option) => option.value !== 0),
+    [storeOptions]
+  );
+
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((item) => {
       if (storeFilter !== undefined && item.store_id !== storeFilter) return false;
       if (reviewFilter && item.review_status !== reviewFilter) return false;
       if (settleFilter && item.settle_status !== settleFilter) return false;
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        const start = dateRange[0].startOf("day");
+        const end = dateRange[1].endOf("day");
+        const ot = item.order_time ? dayjs(item.order_time) : null;
+        if (!ot || ot.isBefore(start) || ot.isAfter(end)) return false;
+      }
       if (!kw) return true;
       return (
         item.order_no.toLowerCase().includes(kw) ||
@@ -132,13 +144,14 @@ export function GiftsPage() {
         item.spec.toLowerCase().includes(kw)
       );
     });
-  }, [items, keyword, storeFilter, reviewFilter, settleFilter]);
+  }, [items, keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
 
   const resetFilters = () => {
     setKeyword("");
     setStoreFilter(undefined);
     setReviewFilter(undefined);
     setSettleFilter(undefined);
+    setDateRange(null);
   };
 
   const getCellValue = (row: Gift, field: EditableField): string | number => {
@@ -227,7 +240,7 @@ export function GiftsPage() {
           size="small"
           autoFocus
           value={Number(cellEdit.value)}
-          options={storeOptions}
+          options={storeSelectOptions}
           onChange={(value) => saveCell(row, "store_id", value)}
           onBlur={() => setCellEdit(null)}
           style={{ minWidth: 130 }}
@@ -397,6 +410,73 @@ export function GiftsPage() {
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const copyTable = async () => {
+    if (filtered.length === 0) {
+      message.warning("当前没有可复制的数据");
+      return;
+    }
+    const headers = ["日期", "下单时间", "店铺", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态"];
+    const lines = [headers.join("\t")];
+    for (const row of filtered) {
+      const ot = row.order_time ? dayjs(row.order_time) : null;
+      lines.push(
+        [
+          ot ? ot.format("YYYY-MM-DD") : "",
+          ot ? ot.format("YYYY-MM-DD HH:mm") : "",
+          row.store_name,
+          row.keyword,
+          row.spec,
+          Number(row.price).toFixed(2),
+          Number(row.commission).toFixed(2),
+          row.wangwang,
+          row.order_no,
+          REVIEW_META[row.review_status].label,
+          SETTLE_META[row.settle_status].label,
+        ].join("\t")
+      );
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      message.success(`已复制 ${filtered.length} 行，可直接粘贴到 Excel`);
+    } catch {
+      message.error("复制失败，请手动选择后复制");
+    }
+  };
+
+  const exportExcel = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (keyword.trim()) params.set("keyword", keyword.trim());
+      if (storeFilter !== undefined) params.set("store_id", String(storeFilter));
+      if (reviewFilter) params.set("review_status", reviewFilter);
+      if (settleFilter) params.set("settle_status", settleFilter);
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        params.set("date_from", dateRange[0].format("YYYY-MM-DD"));
+        params.set("date_to", dateRange[1].format("YYYY-MM-DD"));
+      }
+      const token = localStorage.getItem("tb-workbench-token") ?? "";
+      const response = await fetch(`/api/gifts/export?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        message.error((data as { detail?: string }).detail || "导出失败");
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `礼品单_${dayjs().format("YYYYMMDD_HHmm")}.xlsx`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      message.error("导出失败，请稍后重试");
     }
   };
 
@@ -592,11 +672,22 @@ export function GiftsPage() {
             options={SETTLE_OPTIONS}
             style={{ width: 120 }}
           />
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={setDateRange}
+            style={{ width: 260 }}
+          />
+          <Button icon={<CopyOutlined />} onClick={copyTable}>
+            复制表格
+          </Button>
+          <Button type="primary" ghost icon={<DownloadOutlined />} onClick={exportExcel}>
+            导出 Excel
+          </Button>
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
           </Button>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            💡 点单元格直接编辑，回车跳下一行；关键词格可 Ctrl+V 直接粘贴图片
+            💡 点单元格直接编辑，回车跳下一行；关键词格可 Ctrl+V 粘贴图片
           </Text>
         </Space>
       </Card>
@@ -680,14 +771,14 @@ export function GiftsPage() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="store_id" label="店铺" initialValue={0}>
-                <Select options={storeOptions} />
+              <Form.Item name="store_id" label="店铺" rules={[{ required: true, message: "请选择店铺" }]}>
+                <Select options={storeSelectOptions} placeholder="请选择店铺" />
               </Form.Item>
             </Col>
           </Row>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="keyword" label="关键词">
+              <Form.Item name="keyword" label="关键词" rules={[{ required: true, message: "请输入关键词" }]}>
                 <Input placeholder="如：礼品 女装" />
               </Form.Item>
             </Col>
@@ -699,8 +790,20 @@ export function GiftsPage() {
           </Row>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="price" label="金额（元）" initialValue={0}>
-                <InputNumber min={0} step={1} style={{ width: "100%" }} />
+              <Form.Item
+                name="price"
+                label="金额（元）"
+                rules={[
+                  { required: true, message: "请输入金额" },
+                  {
+                    validator: (_, value) =>
+                      typeof value === "number" && value > 0
+                        ? Promise.resolve()
+                        : Promise.reject(new Error("金额需大于 0")),
+                  },
+                ]}
+              >
+                <InputNumber min={1} step={1} style={{ width: "100%" }} />
               </Form.Item>
             </Col>
             <Col span={12}>

@@ -5,9 +5,13 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user
@@ -91,6 +95,12 @@ def _validate(body: GiftIn) -> dict:
     keyword = body.keyword.strip()
     spec = body.spec.strip()
     wangwang = body.wangwang.strip()
+    if body.store_id == 0:
+        raise HTTPException(status_code=400, detail="请选择店铺")
+    if not keyword:
+        raise HTTPException(status_code=400, detail="关键词不能为空")
+    if body.price <= 0:
+        raise HTTPException(status_code=400, detail="金额必须大于 0")
     if not (0 <= body.price <= 999999):
         raise HTTPException(status_code=400, detail="金额超出范围")
     if not (0 <= body.commission <= 999999):
@@ -147,6 +157,81 @@ def list_gifts(
     query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
     rows = db.execute(query, params).fetchall()
     return {"items": [_payload(row) for row in rows]}
+
+
+@router.get("/export")
+def export_gifts(
+    keyword: str = "",
+    store_id: int | None = None,
+    review_status: str | None = None,
+    settle_status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> StreamingResponse:
+    query = """
+        SELECT g.*, COALESCE(s.name, '') AS store_name
+        FROM gifts g
+        LEFT JOIN stores s ON s.id = g.store_id
+        WHERE 1 = 1
+    """
+    params: list = []
+    if store_id is not None:
+        query += " AND g.store_id = ?"
+        params.append(store_id)
+    if review_status:
+        query += " AND g.review_status = ?"
+        params.append(review_status)
+    if settle_status:
+        query += " AND g.settle_status = ?"
+        params.append(settle_status)
+    if keyword.strip():
+        kw = f"%{keyword.strip()}%"
+        query += " AND (g.order_no LIKE ? OR g.wangwang LIKE ? OR g.keyword LIKE ? OR g.spec LIKE ?)"
+        params += [kw, kw, kw, kw]
+    if date_from:
+        query += " AND COALESCE(g.order_time, g.created_at) >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND COALESCE(g.order_time, g.created_at) <= ?"
+        params.append(date_to)
+    query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
+    rows = db.execute(query, params).fetchall()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "礼品单"
+    ws.append(["日期", "下单时间", "店铺", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态"])
+    for row in rows:
+        ot = row["order_time"] or row["created_at"] or ""
+        ws.append(
+            [
+                ot[:10] if ot else "",
+                ot.replace("T", " ")[:19] if ot else "",
+                row["store_name"] or "未关联店铺",
+                row["keyword"],
+                row["spec"],
+                row["price"],
+                row["commission"],
+                row["wangwang"],
+                row["order_no"],
+                REVIEW_LABELS.get(row["review_status"], row["review_status"]),
+                SETTLE_LABELS.get(row["settle_status"], row["settle_status"]),
+            ]
+        )
+    widths = [12, 18, 20, 18, 14, 10, 10, 16, 24, 10, 10]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[chr(64 + idx)].width = width
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"礼品单_{datetime.now().strftime('%Y%m%d%H%M')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.post("/batch")
