@@ -19,7 +19,7 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Key } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
@@ -84,6 +84,7 @@ export function GiftsPage() {
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const enterRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -172,8 +173,21 @@ export function GiftsPage() {
   };
 
   const startCellEdit = (row: Gift, field: EditableField) => {
+    enterRef.current = false;
     setCellEdit({ id: row.id, field, value: getCellValue(row, field) });
     if (field === "order_time") setPickerOpen(true);
+  };
+
+  const moveToNext = async (row: Gift, field: EditableField, value: string | number) => {
+    const idx = filtered.findIndex((item) => item.id === row.id);
+    const next = idx >= 0 ? filtered[idx + 1] : undefined;
+    await saveCell(row, field, value);
+    if (next) {
+      setCellEdit({ id: next.id, field, value: getCellValue(next, field) });
+      if (field === "order_time") setPickerOpen(true);
+    } else {
+      setCellEdit(null);
+    }
   };
 
   const renderEditableCell = (row: Gift, field: EditableField, display: React.ReactNode) => {
@@ -227,8 +241,14 @@ export function GiftsPage() {
           onChange={(value) =>
             setCellEdit((prev) => (prev ? { ...prev, value: value ?? 0 } : prev))
           }
-          onBlur={() => saveCell(row, field, Number(cellEdit.value ?? 0))}
-          onPressEnter={() => (document.activeElement as HTMLElement | null)?.blur()}
+          onBlur={() => {
+            if (enterRef.current) return;
+            saveCell(row, field, Number(cellEdit.value ?? 0));
+          }}
+          onPressEnter={() => {
+            enterRef.current = true;
+            moveToNext(row, field, Number(cellEdit.value ?? 0));
+          }}
           style={{ width: 100 }}
         />
       );
@@ -241,8 +261,14 @@ export function GiftsPage() {
         onChange={(event) =>
           setCellEdit((prev) => (prev ? { ...prev, value: event.target.value } : prev))
         }
-        onBlur={() => saveCell(row, field, String(cellEdit.value ?? ""))}
-        onPressEnter={() => (document.activeElement as HTMLElement | null)?.blur()}
+        onBlur={() => {
+          if (enterRef.current) return;
+          saveCell(row, field, String(cellEdit.value ?? ""));
+        }}
+        onPressEnter={() => {
+          enterRef.current = true;
+          moveToNext(row, field, String(cellEdit.value ?? ""));
+        }}
         maxLength={field === "order_no" ? 40 : 100}
         style={{ minWidth: 110 }}
       />
@@ -487,6 +513,9 @@ export function GiftsPage() {
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
           </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            💡 点单元格直接编辑，回车保存并跳到下一行
+          </Text>
         </Space>
       </Card>
 
