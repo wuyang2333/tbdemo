@@ -76,7 +76,10 @@ export function GiftsPage() {
   const [storeFilter, setStoreFilter] = useState<number | undefined>();
   const [reviewFilter, setReviewFilter] = useState<GiftReviewStatus | undefined>();
   const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null);
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(() => [
+    dayjs().startOf("day"),
+    dayjs().endOf("day"),
+  ]);
   const [form] = Form.useForm<GiftFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -151,7 +154,7 @@ export function GiftsPage() {
     setStoreFilter(undefined);
     setReviewFilter(undefined);
     setSettleFilter(undefined);
-    setDateRange(null);
+    setDateRange([dayjs().startOf("day"), dayjs().endOf("day")]);
   };
 
   const getCellValue = (row: Gift, field: EditableField): string | number => {
