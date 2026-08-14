@@ -169,7 +169,7 @@ def list_gifts(
     if settle_status:
         query += " AND g.settle_status = ?"
         params.append(settle_status)
-    query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
+    query += " ORDER BY COALESCE(g.order_time, g.created_at) ASC, g.id ASC"
     rows = db.execute(query, params).fetchall()
     return {"items": [_payload(row) for row in rows]}
 
@@ -218,7 +218,7 @@ def export_gifts(
             placeholders = ",".join("?" for _ in id_list)
             query += f" AND g.id IN ({placeholders})"
             params.extend(id_list)
-    query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
+    query += " ORDER BY COALESCE(g.order_time, g.created_at) ASC, g.id ASC"
     rows = db.execute(query, params).fetchall()
 
     wb = Workbook()
