@@ -226,15 +226,16 @@ def update_gift(
         store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
         if not store:
             raise HTTPException(status_code=400, detail="所选店铺不存在")
-    order_no = body.order_no.strip() or row["order_no"]
-    if len(order_no) > 40:
-        raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
-    exists = db.execute(
-        "SELECT id FROM gifts WHERE order_no = ? AND id != ?",
-        (order_no, gift_id),
-    ).fetchone()
-    if exists:
-        raise HTTPException(status_code=400, detail=f"订单号「{order_no}」已存在，请检查后重试")
+    order_no = body.order_no.strip()
+    if order_no:
+        if len(order_no) > 40:
+            raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
+        exists = db.execute(
+            "SELECT id FROM gifts WHERE order_no = ? AND id != ?",
+            (order_no, gift_id),
+        ).fetchone()
+        if exists:
+            raise HTTPException(status_code=400, detail=f"订单号「{order_no}」已存在，请检查后重试")
     order_time = body.order_time.strip() or row["order_time"] or row["created_at"]
     db.execute(
         """
