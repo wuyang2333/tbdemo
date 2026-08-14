@@ -160,6 +160,13 @@ export function GiftsPage() {
   }, [filtered, page]);
   const amountSubtotal = pageRows.reduce((sum, row) => sum + Number(row.price), 0);
   const commissionSubtotal = pageRows.reduce((sum, row) => sum + Number(row.commission), 0);
+  const selectedRows = useMemo(
+    () => filtered.filter((item) => selectedKeys.includes(item.id)),
+    [filtered, selectedKeys]
+  );
+  const selectedAmount = selectedRows.reduce((sum, row) => sum + Number(row.price), 0);
+  const selectedCommission = selectedRows.reduce((sum, row) => sum + Number(row.commission), 0);
+  const selectedTotal = selectedAmount + selectedCommission;
 
   useEffect(() => {
     setPage(1);
@@ -814,6 +821,15 @@ export function GiftsPage() {
             onChange: (next) => setPage(next),
             showTotal: (count) => (
               <span>
+                {selectedKeys.length > 0 && (
+                  <span style={{ marginRight: 14 }}>
+                    <span style={{ marginRight: 12 }}>佣金总额 ¥{selectedCommission.toFixed(2)}</span>
+                    <span style={{ marginRight: 12 }}>金额总额 ¥{selectedAmount.toFixed(2)}</span>
+                    <span style={{ color: "#ff5000", fontWeight: 700, marginRight: 12 }}>
+                      总金额 ¥{selectedTotal.toFixed(2)}
+                    </span>
+                  </span>
+                )}
                 <span style={{ color: "#ff5000", fontWeight: 700, marginRight: 10 }}>
                   已选 {selectedKeys.length} 单
                 </span>
@@ -827,10 +843,10 @@ export function GiftsPage() {
                 <Text strong>本页小计</Text>
               </Table.Summary.Cell>
               <Table.Summary.Cell index={5}>
-                <Text strong>金额小计 ¥{amountSubtotal.toFixed(2)}</Text>
+                <Text strong>¥{amountSubtotal.toFixed(2)}</Text>
               </Table.Summary.Cell>
               <Table.Summary.Cell index={6}>
-                <Text strong>佣金小计 ¥{commissionSubtotal.toFixed(2)}</Text>
+                <Text strong>¥{commissionSubtotal.toFixed(2)}</Text>
               </Table.Summary.Cell>
               <Table.Summary.Cell index={7} colSpan={5} />
             </Table.Summary.Row>
