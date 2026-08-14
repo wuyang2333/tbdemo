@@ -1,4 +1,4 @@
-﻿import { DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+﻿import { DeleteOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -41,6 +41,16 @@ type GiftFormValues = {
   settle_status: GiftSettleStatus;
 };
 
+type EditableField =
+  | "order_no"
+  | "store_id"
+  | "keyword"
+  | "spec"
+  | "price"
+  | "commission"
+  | "wangwang"
+  | "order_time";
+
 const REVIEW_META: Record<GiftReviewStatus, { label: string; color: string }> = {
   none: { label: "未评论", color: "orange" },
   reviewed: { label: "已评论", color: "green" },
@@ -70,9 +80,10 @@ export function GiftsPage() {
   const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
   const [form] = Form.useForm<GiftFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
-  const [editing, setEditing] = useState<Gift | null>(null);
   const [saving, setSaving] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
+  const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -126,11 +137,123 @@ export function GiftsPage() {
     setSettleFilter(undefined);
   };
 
+  const getCellValue = (row: Gift, field: EditableField): string | number => {
+    if (field === "store_id" || field === "price" || field === "commission") {
+      return Number(row[field] ?? 0);
+    }
+    if (field === "order_time") {
+      return row.order_time || "";
+    }
+    return String(row[field] ?? "");
+  };
+
+  const saveCell = async (row: Gift, field: EditableField, value: string | number) => {
+    setCellEdit(null);
+    setPickerOpen(false);
+    const payload = {
+      order_no: field === "order_no" ? String(value).trim() : row.order_no,
+      store_id: field === "store_id" ? Number(value) : row.store_id,
+      keyword: field === "keyword" ? String(value).trim() : row.keyword,
+      spec: field === "spec" ? String(value).trim() : row.spec,
+      price: field === "price" ? Number(value) : row.price,
+      commission: field === "commission" ? Number(value) : row.commission,
+      wangwang: field === "wangwang" ? String(value).trim() : row.wangwang,
+      order_time: field === "order_time" ? String(value) : row.order_time || "",
+      review_status: row.review_status,
+      settle_status: row.settle_status,
+    };
+    try {
+      await http.put(`/gifts/${row.id}`, payload);
+      message.success("已保存");
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const startCellEdit = (row: Gift, field: EditableField) => {
+    setCellEdit({ id: row.id, field, value: getCellValue(row, field) });
+    if (field === "order_time") setPickerOpen(true);
+  };
+
+  const renderEditableCell = (row: Gift, field: EditableField, display: React.ReactNode) => {
+    const active = cellEdit?.id === row.id && cellEdit?.field === field;
+    if (!active) {
+      return (
+        <span
+          style={{ cursor: "text", display: "inline-block", minWidth: 56, minHeight: 20 }}
+          onClick={() => startCellEdit(row, field)}
+          title="点击修改"
+        >
+          {display}
+        </span>
+      );
+    }
+    if (field === "order_time") {
+      return (
+        <DatePicker
+          size="small"
+          showTime
+          open={pickerOpen}
+          onOpenChange={setPickerOpen}
+          value={cellEdit.value ? dayjs(String(cellEdit.value)) : undefined}
+          onChange={(value) => {
+            saveCell(row, "order_time", value ? value.format("YYYY-MM-DD HH:mm:ss") : "");
+          }}
+          style={{ width: 160 }}
+        />
+      );
+    }
+    if (field === "store_id") {
+      return (
+        <Select
+          size="small"
+          autoFocus
+          value={Number(cellEdit.value)}
+          options={storeOptions}
+          onChange={(value) => saveCell(row, "store_id", value)}
+          onBlur={() => setCellEdit(null)}
+          style={{ minWidth: 130 }}
+        />
+      );
+    }
+    if (field === "price" || field === "commission") {
+      return (
+        <InputNumber
+          size="small"
+          autoFocus
+          min={0}
+          value={Number(cellEdit.value)}
+          onChange={(value) =>
+            setCellEdit((prev) => (prev ? { ...prev, value: value ?? 0 } : prev))
+          }
+          onBlur={() => saveCell(row, field, Number(cellEdit.value ?? 0))}
+          onPressEnter={() => (document.activeElement as HTMLElement | null)?.blur()}
+          style={{ width: 100 }}
+        />
+      );
+    }
+    return (
+      <Input
+        size="small"
+        autoFocus
+        value={String(cellEdit.value ?? "")}
+        onChange={(event) =>
+          setCellEdit((prev) => (prev ? { ...prev, value: event.target.value } : prev))
+        }
+        onBlur={() => saveCell(row, field, String(cellEdit.value ?? ""))}
+        onPressEnter={() => (document.activeElement as HTMLElement | null)?.blur()}
+        maxLength={field === "order_no" ? 40 : 100}
+        style={{ minWidth: 110 }}
+      />
+    );
+  };
+
   const toggleReview = async (row: Gift) => {
     const next: GiftReviewStatus = row.review_status === "reviewed" ? "none" : "reviewed";
     try {
       await http.post(`/gifts/${row.id}/review`, { status: next });
-      message.success(`「${row.order_no}」已标记为「${REVIEW_META[next].label}」`);
+      message.success(`「${row.order_no || row.wangwang || "该单"}」已标记为「${REVIEW_META[next].label}」`);
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -141,7 +264,7 @@ export function GiftsPage() {
     const next: GiftSettleStatus = row.settle_status === "settled" ? "unsettled" : "settled";
     try {
       await http.post(`/gifts/${row.id}/settle`, { status: next });
-      message.success(`「${row.order_no}」已标记为「${SETTLE_META[next].label}」`);
+      message.success(`「${row.order_no || row.wangwang || "该单"}」已标记为「${SETTLE_META[next].label}」`);
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -181,15 +304,9 @@ export function GiftsPage() {
         review_status: values.review_status ?? "none",
         settle_status: values.settle_status ?? "unsettled",
       };
-      if (editing) {
-        await http.put(`/gifts/${editing.id}`, payload);
-        message.success(`「${editing.order_no}」已更新`);
-      } else {
-        await http.post("/gifts", payload);
-        message.success("礼品单已创建");
-      }
+      await http.post("/gifts", payload);
+      message.success("礼品单已创建");
       setCreateOpen(false);
-      setEditing(null);
       form.resetFields();
       load();
     } catch (error) {
@@ -197,23 +314,6 @@ export function GiftsPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const openEdit = (row: Gift) => {
-    setEditing(row);
-    form.setFieldsValue({
-      order_no: row.order_no,
-      store_id: row.store_id,
-      keyword: row.keyword,
-      spec: row.spec,
-      price: row.price,
-      commission: row.commission,
-      wangwang: row.wangwang,
-      order_time: row.order_time ? dayjs(row.order_time) : undefined,
-      review_status: row.review_status,
-      settle_status: row.settle_status,
-    });
-    setCreateOpen(true);
   };
 
   const removeGift = async (row: Gift) => {
@@ -234,28 +334,63 @@ export function GiftsPage() {
     {
       title: "日期",
       key: "date",
-      width: 110,
+      width: 105,
       render: (_, row) => (row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD") : "-"),
     },
     {
       title: "下单时间",
       key: "order_time",
-      width: 150,
-      render: (_, row) => (row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD HH:mm") : "-"),
+      width: 165,
+      render: (_, row) =>
+        renderEditableCell(
+          row,
+          "order_time",
+          row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD HH:mm") : "-"
+        ),
     },
     {
       title: "店铺",
       dataIndex: "store_name",
       filters: storeOptions.map((option) => ({ text: option.label, value: option.value })),
       onFilter: (value, row) => row.store_id === value,
-      render: (value: string) => (value === "未关联店铺" ? <Text type="secondary">未关联店铺</Text> : value),
+      render: (_, row) => {
+        const label = row.store_name === "未关联店铺" ? <Text type="secondary">未关联店铺</Text> : row.store_name;
+        return renderEditableCell(row, "store_id", label);
+      },
     },
-    { title: "关键词", dataIndex: "keyword", render: (value: string) => value || "-" },
-    { title: "规格", dataIndex: "spec", render: (value: string) => value || "-" },
-    { title: "金额", dataIndex: "price", width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
-    { title: "佣金", dataIndex: "commission", width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
-    { title: "旺旺号", dataIndex: "wangwang", render: (value: string) => value || "-" },
-    { title: "订单编号", dataIndex: "order_no", width: 150, render: (value: string) => <Text code>{value}</Text> },
+    {
+      title: "关键词",
+      dataIndex: "keyword",
+      render: (_, row) => renderEditableCell(row, "keyword", row.keyword || "-"),
+    },
+    {
+      title: "规格",
+      dataIndex: "spec",
+      render: (_, row) => renderEditableCell(row, "spec", row.spec || "-"),
+    },
+    {
+      title: "金额",
+      dataIndex: "price",
+      width: 100,
+      render: (_, row) => renderEditableCell(row, "price", `¥${Number(row.price).toFixed(2)}`),
+    },
+    {
+      title: "佣金",
+      dataIndex: "commission",
+      width: 100,
+      render: (_, row) => renderEditableCell(row, "commission", `¥${Number(row.commission).toFixed(2)}`),
+    },
+    {
+      title: "旺旺号",
+      dataIndex: "wangwang",
+      render: (_, row) => renderEditableCell(row, "wangwang", row.wangwang || "-"),
+    },
+    {
+      title: "订单编号",
+      dataIndex: "order_no",
+      width: 150,
+      render: (_, row) => renderEditableCell(row, "order_no", row.order_no ? <Text code>{row.order_no}</Text> : <Text type="secondary">未填写</Text>),
+    },
     {
       title: "评论状态",
       dataIndex: "review_status",
@@ -279,23 +414,18 @@ export function GiftsPage() {
     {
       title: "操作",
       key: "actions",
-      width: 130,
+      width: 80,
       render: (_, row) => (
-        <Space size={4} wrap>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
-            编辑
+        <Popconfirm
+          title={`删除 ${row.order_no || row.wangwang || "该单"}？删除后不可恢复`}
+          okText="删除"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => removeGift(row)}
+        >
+          <Button size="small" danger icon={<DeleteOutlined />}>
+            删除
           </Button>
-          <Popconfirm
-            title={`删除礼品单 ${row.order_no}？删除后不可恢复`}
-            okText="删除"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => removeGift(row)}
-          >
-            <Button size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
+        </Popconfirm>
       ),
     },
   ];
@@ -312,7 +442,6 @@ export function GiftsPage() {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
-              setEditing(null);
               setCreateOpen(true);
             }}
           >
@@ -419,20 +548,17 @@ export function GiftsPage() {
             onChange: (keys) => setSelectedKeys(keys),
           }}
           pagination={{ pageSize: 10, showTotal: (count) => `共 ${count} 单` }}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1500 }}
         />
       </Card>
 
       <Modal
-        title={editing ? `编辑礼品单 ${editing.order_no}` : "新增礼品单"}
+        title="新增礼品单"
         open={createOpen}
         onOk={() => form.submit()}
-        onCancel={() => {
-          setCreateOpen(false);
-          setEditing(null);
-        }}
+        onCancel={() => setCreateOpen(false)}
         confirmLoading={saving}
-        okText={editing ? "保存" : "创建"}
+        okText="创建"
         destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={submitGift} style={{ marginTop: 8 }}>
