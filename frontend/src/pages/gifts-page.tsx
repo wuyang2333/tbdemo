@@ -89,6 +89,7 @@ export function GiftsPage() {
   const [saving, setSaving] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [imageTarget, setImageTarget] = useState<Gift | null>(null);
@@ -165,11 +166,10 @@ export function GiftsPage() {
     });
   }, [items, keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
 
-  const pageSize = 10;
   const pageRows = useMemo(() => {
     const start = (page - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, page]);
+  }, [filtered, page, pageSize]);
   const amountSubtotal = pageRows.reduce((sum, row) => sum + Number(row.price), 0);
   const commissionSubtotal = pageRows.reduce((sum, row) => sum + Number(row.commission), 0);
   const selectedRows = useMemo(
@@ -833,6 +833,12 @@ export function GiftsPage() {
             pageSize,
             current: page,
             onChange: (next) => setPage(next),
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50, 100],
+            onShowSizeChange: (_current, size) => {
+              setPageSize(size);
+              setPage(1);
+            },
             showTotal: (count) => (
               <span>
                 {selectedKeys.length > 0 && (
