@@ -70,7 +70,7 @@ def _now() -> str:
 def _get_gift_or_404(db, gift_id: int):
     row = db.execute(
         """
-        SELECT g.*, COALESCE(s.name, '') AS store_name
+        SELECT g.*, COALESCE(s.name, '') AS linked_store_name
         FROM gifts g
         LEFT JOIN stores s ON s.id = g.store_id
         WHERE g.id = ?
@@ -86,7 +86,10 @@ def _payload(row) -> dict:
     return {
         "id": row["id"],
         "store_id": row["store_id"],
-        "store_name": row["store_name"] or "未关联店铺",
+        "store_name": (
+            (row["linked_store_name"] or "") if row["store_id"] != 0 else (row["store_name"] or "")
+        )
+        or "未关联店铺",
         "order_no": row["order_no"],
         "keyword": row["keyword"],
         "spec": row["spec"],
@@ -105,12 +108,12 @@ def _payload(row) -> dict:
     }
 
 
-def _validate(body: GiftIn, has_image: bool = False) -> dict:
+def _validate(body: GiftIn, has_image: bool = False, existing_store_name: str = "") -> dict:
     keyword = body.keyword.strip()
     spec = body.spec.strip()
     wangwang = body.wangwang.strip()
-    if body.store_id == 0:
-        raise HTTPException(status_code=400, detail="请选择店铺")
+    if body.store_id == 0 and not body.store_name.strip() and not existing_store_name:
+        raise HTTPException(status_code=400, detail="请选择或输入店铺")
     if not keyword and not has_image:
         raise HTTPException(status_code=400, detail="关键词不能为空（可填文字或粘贴图片）")
     if body.price <= 0:
@@ -155,7 +158,7 @@ def list_gifts(
     db=Depends(get_db),
 ) -> dict:
     query = """
-        SELECT g.*, COALESCE(s.name, '') AS store_name
+        SELECT g.*, COALESCE(s.name, '') AS linked_store_name
         FROM gifts g
         LEFT JOIN stores s ON s.id = g.store_id
         WHERE 1 = 1
@@ -164,6 +167,9 @@ def list_gifts(
     if store_id is not None:
         query += " AND g.store_id = ?"
         params.append(store_id)
+    if store_name.strip():
+        query += " AND COALESCE(CASE WHEN g.store_id != 0 THEN s.name ELSE g.store_name END, '') = ?"
+        params.append(store_name.strip())
     if review_status:
         query += " AND g.review_status = ?"
         params.append(review_status)
@@ -179,6 +185,7 @@ def list_gifts(
 def export_gifts(
     keyword: str = "",
     store_id: int | None = None,
+    store_name: str = "",
     review_status: str | None = None,
     settle_status: str | None = None,
     date_from: str | None = None,
@@ -188,7 +195,7 @@ def export_gifts(
     db=Depends(get_db),
 ) -> StreamingResponse:
     query = """
-        SELECT g.*, COALESCE(s.name, '') AS store_name
+        SELECT g.*, COALESCE(s.name, '') AS linked_store_name
         FROM gifts g
         LEFT JOIN stores s ON s.id = g.store_id
         WHERE 1 = 1
@@ -232,7 +239,7 @@ def export_gifts(
             [
                 ot[:10] if ot else "",
                 (ot.split("T")[-1].split(" ")[-1][:5]) if ot else "",
-                row["store_name"] or "未关联店铺",
+                (row["linked_store_name"] or "") if row["store_id"] != 0 else (row["store_name"] or ""),
                 row["keyword"],
                 row["spec"],
                 row["price"],
@@ -299,22 +306,17 @@ def batch_create_gifts(
         if not store:
             raise HTTPException(status_code=400, detail="所选店铺不存在")
         store_id = body.store_id
+        gift_store_name = ""
     else:
-        store_name = body.store_name.strip()
-        if not store_name:
+        gift_store_name = body.store_name.strip()
+        if not gift_store_name:
             raise HTTPException(status_code=400, detail="请选择或输入店铺")
-        row = db.execute("SELECT id FROM stores WHERE name = ?", (store_name,)).fetchone()
+        row = db.execute("SELECT id FROM stores WHERE name = ?", (gift_store_name,)).fetchone()
         if row:
             store_id = row["id"]
+            gift_store_name = ""
         else:
-            cur = db.execute(
-                """
-                INSERT INTO stores (name, owner, category, level, location, dsr_desc, dsr_service, dsr_logistics, status, created_at)
-                VALUES (?, '', '', '', '', 0, 0, 0, 'active', ?)
-                """,
-                (store_name, _now()),
-            )
-            store_id = cur.lastrowid
+            store_id = 0
 
     now = datetime.now()
     base_date = now.date()
@@ -337,12 +339,13 @@ def batch_create_gifts(
         order_time = ts.strftime("%Y-%m-%d %H:%M:%S")
         cur = db.execute(
             """
-            INSERT INTO gifts (store_id, order_no, keyword, spec, price, commission, wangwang, order_time,
+            INSERT INTO gifts (store_id, store_name, order_no, keyword, spec, price, commission, wangwang, order_time,
                                review_status, settle_status, status, created_at, image)
-            VALUES (?, ?, ?, ?, ?, ?, '', ?, 'none', 'unsettled', 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'none', 'unsettled', 'pending', ?, ?)
             """,
             (
                 store_id,
+                gift_store_name,
                 "",
                 keyword,
                 body.spec.strip(),
@@ -398,16 +401,24 @@ def create_gift(
         store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
         if not store:
             raise HTTPException(status_code=400, detail="所选店铺不存在")
+        store_id = body.store_id
+        gift_store_name = ""
+    else:
+        gift_store_name = body.store_name.strip()
+        if not gift_store_name:
+            raise HTTPException(status_code=400, detail="请选择或输入店铺")
+        store_id = 0
     order_no = _resolve_order_no(db, body)
     order_time = body.order_time.strip() or _now()
     cur = db.execute(
         """
-        INSERT INTO gifts (store_id, order_no, keyword, spec, price, commission, wangwang, order_time,
+        INSERT INTO gifts (store_id, store_name, order_no, keyword, spec, price, commission, wangwang, order_time,
                            review_status, settle_status, status, created_at, image)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
         """,
         (
-            body.store_id,
+            store_id,
+            gift_store_name,
             order_no,
             fields["keyword"],
             fields["spec"],
@@ -434,11 +445,23 @@ def update_gift(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
-    fields = _validate(body, has_image=bool(body.image.strip() or row["image"]))
+    fields = _validate(
+        body,
+        has_image=bool(body.image.strip() or row["image"]),
+        existing_store_name=row["store_name"] or "",
+    )
     if body.store_id != 0:
         store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
         if not store:
             raise HTTPException(status_code=400, detail="所选店铺不存在")
+        store_id = body.store_id
+        gift_store_name = ""
+    elif body.store_name.strip():
+        store_id = 0
+        gift_store_name = body.store_name.strip()
+    else:
+        store_id = row["store_id"]
+        gift_store_name = row["store_name"] or ""
     order_no = body.order_no.strip()
     if order_no:
         if order_no != row["order_no"] and not order_no.isdigit():
@@ -455,12 +478,13 @@ def update_gift(
     db.execute(
         """
         UPDATE gifts
-        SET store_id = ?, order_no = ?, keyword = ?, spec = ?, price = ?, commission = ?,
+        SET store_id = ?, store_name = ?, order_no = ?, keyword = ?, spec = ?, price = ?, commission = ?,
             wangwang = ?, order_time = ?, review_status = ?, settle_status = ?
         WHERE id = ?
         """,
         (
-            body.store_id,
+            store_id,
+            gift_store_name,
             order_no,
             fields["keyword"],
             fields["spec"],

@@ -78,7 +78,7 @@ export function GiftsPage() {
   const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [storeFilter, setStoreFilter] = useState<number | undefined>();
+  const [storeFilter, setStoreFilter] = useState<string | undefined>();
   const [reviewFilter, setReviewFilter] = useState<GiftReviewStatus | undefined>();
   const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(() => [
@@ -133,10 +133,21 @@ export function GiftsPage() {
     [storeOptions]
   );
 
+  const storeFilterOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    stores.forEach((store) => names.set(store.name, store.name));
+    items.forEach((item) => {
+      if (item.store_name && item.store_name !== "未关联店铺") {
+        names.set(item.store_name, item.store_name);
+      }
+    });
+    return Array.from(names.values()).map((name) => ({ value: name, label: name }));
+  }, [stores, items]);
+
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((item) => {
-      if (storeFilter !== undefined && item.store_id !== storeFilter) return false;
+      if (storeFilter && item.store_name !== storeFilter) return false;
       if (reviewFilter && item.review_status !== reviewFilter) return false;
       if (settleFilter && item.settle_status !== settleFilter) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
@@ -530,6 +541,7 @@ export function GiftsPage() {
     try {
       const params = new URLSearchParams();
       params.set("ids", selectedKeys.join(","));
+      if (storeFilter) params.set("store_name", storeFilter);
       const token = localStorage.getItem("tb-workbench-token") ?? "";
       const response = await fetch(`/api/gifts/export?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -579,8 +591,8 @@ export function GiftsPage() {
       title: "店铺",
       dataIndex: "store_name",
       width: 140,
-      filters: storeOptions.map((option) => ({ text: option.label, value: option.value })),
-      onFilter: (value, row) => row.store_id === value,
+      filters: storeFilterOptions.map((option) => ({ text: option.label, value: option.value })),
+      onFilter: (value, row) => row.store_name === value,
       render: (_, row) => {
         const label = row.store_name === "未关联店铺" ? <Text type="secondary">未关联店铺</Text> : row.store_name;
         return renderEditableCell(row, "store_id", label);
@@ -730,7 +742,7 @@ export function GiftsPage() {
             onChange={setStoreFilter}
             placeholder="按店铺筛选"
             allowClear
-            options={storeOptions}
+            options={storeFilterOptions}
             style={{ width: 180 }}
           />
           <Select
