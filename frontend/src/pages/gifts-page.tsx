@@ -758,7 +758,7 @@ export function GiftsPage() {
           <Divider type="vertical" />
           <Dropdown menu={{ items: batchMenuItems }}>
             <Button type="primary" ghost icon={<AppstoreOutlined />}>
-              批量操作{selectedKeys.length > 0 ? `（已选 ${selectedKeys.length}）` : ""}
+              批量操作
             </Button>
           </Dropdown>
         </Space>
@@ -795,7 +795,17 @@ export function GiftsPage() {
             selectedRowKeys: selectedKeys,
             onChange: (keys) => setSelectedKeys(keys),
           }}
-          pagination={{ pageSize: 10, showTotal: (count) => `共 ${count} 单` }}
+          pagination={{
+            pageSize: 10,
+            showTotal: (count) => (
+              <span>
+                <span style={{ color: "#ff5000", fontWeight: 700, marginRight: 10 }}>
+                  已选 {selectedKeys.length} 单
+                </span>
+                共 {count} 单
+              </span>
+            ),
+          }}
           scroll={{ x: 1360 }}
         />
       </Card>
