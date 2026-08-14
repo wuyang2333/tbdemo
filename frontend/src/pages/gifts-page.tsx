@@ -1,5 +1,6 @@
 import { AppstoreOutlined, CloseOutlined, DeleteOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
+  AutoComplete,
   Button,
   Card,
   Col,
@@ -35,7 +36,7 @@ const { Text } = Typography;
 type GiftFormValues = {
   date: dayjs.Dayjs;
   start_time: dayjs.Dayjs;
-  store_id: number;
+  store_name: string;
   keyword: string;
   spec: string;
   price: number;
@@ -388,7 +389,8 @@ export function GiftsPage() {
       const { data } = await http.post<{ items: Gift[] }>("/gifts/batch-create", {
         date: values.date ? values.date.format("YYYY-MM-DD") : "",
         start_time: values.start_time ? values.start_time.format("HH:mm") : "",
-        store_id: values.store_id ?? 0,
+        store_id: 0,
+        store_name: values.store_name?.trim() ?? "",
         keyword: values.keyword?.trim() ?? "",
         spec: values.spec?.trim() ?? "",
         price: values.price ?? 0,
@@ -901,8 +903,18 @@ export function GiftsPage() {
           </Row>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="store_id" label="店铺" rules={[{ required: true, message: "请选择店铺" }]}>
-                <Select options={storeSelectOptions} placeholder="请选择店铺" />
+              <Form.Item
+                name="store_name"
+                label="店铺"
+                rules={[{ required: true, message: "请选择或输入店铺" }]}
+              >
+                <AutoComplete
+                  options={stores.map((store) => ({ value: store.name }))}
+                  placeholder="选择或输入店铺名称"
+                  filterOption={(input, option) =>
+                    (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
+                  }
+                />
               </Form.Item>
             </Col>
             <Col span={12}>

@@ -54,6 +54,7 @@ class GiftBatchCreateIn(BaseModel):
     date: str = ""
     start_time: str = ""
     store_id: int = 0
+    store_name: str = ""
     keyword: str = ""
     spec: str = ""
     price: float = 0
@@ -285,8 +286,6 @@ def batch_create_gifts(
     quantity = body.quantity
     if not (1 <= quantity <= 100):
         raise HTTPException(status_code=400, detail="下单数量需在 1-100 之间")
-    if body.store_id == 0:
-        raise HTTPException(status_code=400, detail="请选择店铺")
     keyword = body.keyword.strip()
     image = body.image.strip()
     if not keyword and not image:
@@ -295,9 +294,27 @@ def batch_create_gifts(
         raise HTTPException(status_code=400, detail="金额必须大于 0")
     if not (0 <= body.commission <= 999999):
         raise HTTPException(status_code=400, detail="佣金超出范围")
-    store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
-    if not store:
-        raise HTTPException(status_code=400, detail="所选店铺不存在")
+    if body.store_id != 0:
+        store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+        if not store:
+            raise HTTPException(status_code=400, detail="所选店铺不存在")
+        store_id = body.store_id
+    else:
+        store_name = body.store_name.strip()
+        if not store_name:
+            raise HTTPException(status_code=400, detail="请选择或输入店铺")
+        row = db.execute("SELECT id FROM stores WHERE name = ?", (store_name,)).fetchone()
+        if row:
+            store_id = row["id"]
+        else:
+            cur = db.execute(
+                """
+                INSERT INTO stores (name, owner, category, level, location, dsr_desc, dsr_service, dsr_logistics, status, created_at)
+                VALUES (?, '', '', '', '', 0, 0, 0, 'active', ?)
+                """,
+                (store_name, _now()),
+            )
+            store_id = cur.lastrowid
 
     now = datetime.now()
     base_date = now.date()
@@ -325,7 +342,7 @@ def batch_create_gifts(
             VALUES (?, ?, ?, ?, ?, ?, '', ?, 'none', 'unsettled', 'pending', ?, ?)
             """,
             (
-                body.store_id,
+                store_id,
                 "",
                 keyword,
                 body.spec.strip(),
