@@ -52,6 +52,7 @@ class GiftBatchIn(BaseModel):
 
 class GiftBatchCreateIn(BaseModel):
     date: str = ""
+    start_time: str = ""
     store_id: int = 0
     keyword: str = ""
     spec: str = ""
@@ -306,6 +307,12 @@ def batch_create_gifts(
         except ValueError:
             raise HTTPException(status_code=400, detail="下单日期格式不正确")
     base = datetime.combine(base_date, now.time())
+    if body.start_time.strip():
+        try:
+            start_h, start_m = (int(x) for x in body.start_time.strip().split(":"))
+            base = base.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="开始时间格式不正确（应为 HH:mm）")
     created_at = _now()
     items = []
     for i in range(quantity):

@@ -34,6 +34,7 @@ const { Text } = Typography;
 
 type GiftFormValues = {
   date: dayjs.Dayjs;
+  start_time: dayjs.Dayjs;
   store_id: number;
   keyword: string;
   spec: string;
@@ -386,6 +387,7 @@ export function GiftsPage() {
     try {
       const { data } = await http.post<{ items: Gift[] }>("/gifts/batch-create", {
         date: values.date ? values.date.format("YYYY-MM-DD") : "",
+        start_time: values.start_time ? values.start_time.format("HH:mm") : "",
         store_id: values.store_id ?? 0,
         keyword: values.keyword?.trim() ?? "",
         spec: values.spec?.trim() ?? "",
@@ -872,12 +874,17 @@ export function GiftsPage() {
       >
         <Form form={form} layout="vertical" onFinish={submitGift} style={{ marginTop: 8 }}>
           <Row gutter={12}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="date" label="下单日期" rules={[{ required: true, message: "请选择下单日期" }]}>
                 <DatePicker style={{ width: "100%" }} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
+              <Form.Item name="start_time" label="下单时间" extra="留空则从当前时间开始排">
+                <TimePicker format="HH:mm" style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
               <Form.Item
                 name="quantity"
                 label="下单数量"
@@ -959,7 +966,7 @@ export function GiftsPage() {
             <InputNumber min={0} step={1} style={{ width: "100%" }} />
           </Form.Item>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            将按下单数量生成对应行数，下单时间每行相隔 15 分钟（每小时最多 4 行）；订单编号、旺旺号可在表格里逐行填写。
+            将按下单数量生成对应行数，下单时间从所选时间（或当前时间）开始，每行相隔 15 分钟（每小时最多 4 行）；订单编号、旺旺号可在表格里逐行填写。
           </Text>
         </Form>
       </Modal>
