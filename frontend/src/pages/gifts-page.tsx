@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Key } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { PageFooter } from "../components/ui/page-footer";
 import { PageHeader } from "../components/ui/page-header";
 import type { Gift, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
 
@@ -745,9 +746,6 @@ export function GiftsPage() {
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
           </Button>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            💡 点单元格直接编辑，回车跳下一行；关键词格可 Ctrl+V 粘贴图片
-          </Text>
         </Space>
       </Card>
 
@@ -812,6 +810,8 @@ export function GiftsPage() {
           scroll={{ x: 1360 }}
         />
       </Card>
+
+      <PageFooter>💡 点单元格直接编辑，回车跳下一行；关键词格可 Ctrl+V 粘贴图片</PageFooter>
 
       <Modal
         title="新增礼品单"
