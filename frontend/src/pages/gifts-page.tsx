@@ -87,6 +87,7 @@ export function GiftsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
+  const [page, setPage] = useState(1);
   const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [imageTarget, setImageTarget] = useState<Gift | null>(null);
@@ -151,6 +152,18 @@ export function GiftsPage() {
       );
     });
   }, [items, keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
+
+  const pageSize = 10;
+  const pageRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page]);
+  const amountSubtotal = pageRows.reduce((sum, row) => sum + Number(row.price), 0);
+  const commissionSubtotal = pageRows.reduce((sum, row) => sum + Number(row.commission), 0);
+
+  useEffect(() => {
+    setPage(1);
+  }, [keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
 
   const resetFilters = () => {
     setKeyword("");
@@ -796,7 +809,9 @@ export function GiftsPage() {
             onChange: (keys) => setSelectedKeys(keys),
           }}
           pagination={{
-            pageSize: 10,
+            pageSize,
+            current: page,
+            onChange: (next) => setPage(next),
             showTotal: (count) => (
               <span>
                 <span style={{ color: "#ff5000", fontWeight: 700, marginRight: 10 }}>
@@ -806,6 +821,20 @@ export function GiftsPage() {
               </span>
             ),
           }}
+          summary={() => (
+            <Table.Summary.Row>
+              <Table.Summary.Cell index={0} colSpan={5}>
+                <Text strong>本页小计</Text>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={5}>
+                <Text strong>金额小计 ¥{amountSubtotal.toFixed(2)}</Text>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={6}>
+                <Text strong>佣金小计 ¥{commissionSubtotal.toFixed(2)}</Text>
+              </Table.Summary.Cell>
+              <Table.Summary.Cell index={7} colSpan={5} />
+            </Table.Summary.Row>
+          )}
           scroll={{ x: 1360 }}
         />
       </Card>
