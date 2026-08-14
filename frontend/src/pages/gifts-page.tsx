@@ -880,7 +880,11 @@ export function GiftsPage() {
               </Form.Item>
             </Col>
             <Col span={8}>
-              <Form.Item name="start_time" label="下单时间" extra="留空则从当前时间开始排">
+              <Form.Item
+                name="start_time"
+                label="时间"
+                rules={[{ required: true, message: "请选择开始时间" }]}
+              >
                 <TimePicker format="HH:mm" style={{ width: "100%" }} />
               </Form.Item>
             </Col>
@@ -966,7 +970,7 @@ export function GiftsPage() {
             <InputNumber min={0} step={1} style={{ width: "100%" }} />
           </Form.Item>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            将按下单数量生成对应行数，下单时间从所选时间（或当前时间）开始，每行相隔 15 分钟（每小时最多 4 行）；订单编号、旺旺号可在表格里逐行填写。
+            将按下单数量生成对应行数，下单时间从所选时间开始，每行相隔 15 分钟（每小时最多 4 行）；订单编号、旺旺号可在表格里逐行填写。
           </Text>
         </Form>
       </Modal>
