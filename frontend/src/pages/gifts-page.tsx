@@ -1,4 +1,4 @@
-﻿import { CloseOutlined, DeleteOutlined, GiftOutlined, PlusOutlined, QrcodeOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+﻿import { CloseOutlined, DeleteOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -84,8 +84,8 @@ export function GiftsPage() {
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [qrTarget, setQrTarget] = useState<Gift | null>(null);
-  const [previewQr, setPreviewQr] = useState<string | null>(null);
+  const [imageTarget, setImageTarget] = useState<Gift | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const enterRef = useRef(false);
 
@@ -272,6 +272,22 @@ export function GiftsPage() {
           enterRef.current = true;
           moveToNext(row, field, String(cellEdit.value ?? ""));
         }}
+        onPaste={(event) => {
+          if (field !== "keyword") return;
+          const items = event.clipboardData?.items;
+          if (!items) return;
+          for (const item of items) {
+            if (item.type.startsWith("image/")) {
+              event.preventDefault();
+              const file = item.getAsFile();
+              if (file) {
+                setCellEdit(null);
+                uploadImage(row, file);
+              }
+              return;
+            }
+          }
+        }}
         maxLength={field === "order_no" ? 40 : 100}
         style={{ minWidth: 110 }}
       />
@@ -355,29 +371,29 @@ export function GiftsPage() {
     }
   };
 
-  const pickQr = (row: Gift) => {
-    setQrTarget(row);
+  const pickImage = (row: Gift) => {
+    setImageTarget(row);
     fileInputRef.current?.click();
   };
 
-  const uploadQr = async (row: Gift, file: File) => {
+  const uploadImage = async (row: Gift, file: File) => {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      await http.post(`/gifts/${row.id}/qr`, formData, {
+      await http.post(`/gifts/${row.id}/image`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      message.success("二维码已上传");
+      message.success("图片已上传");
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     }
   };
 
-  const removeQr = async (row: Gift) => {
+  const removeImage = async (row: Gift) => {
     try {
-      await http.post(`/gifts/${row.id}/qr/clear`);
-      message.success("二维码已移除");
+      await http.post(`/gifts/${row.id}/image/clear`);
+      message.success("图片已移除");
       load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -422,22 +438,22 @@ export function GiftsPage() {
       width: 150,
       render: (_, row) => (
         <Space size={4}>
-          {row.qr_code ? (
+          {row.image ? (
             <>
               <img
-                src={row.qr_code}
-                alt="二维码"
+                src={row.image}
+                alt="图片"
                 height={28}
                 style={{ cursor: "zoom-in", borderRadius: 4, verticalAlign: "middle" }}
-                onClick={() => setPreviewQr(row.qr_code)}
+                onClick={() => setPreviewImage(row.image)}
                 title="点击查看大图"
               />
               <Button
                 size="small"
                 type="text"
                 icon={<CloseOutlined />}
-                onClick={() => removeQr(row)}
-                title="移除二维码"
+                onClick={() => removeImage(row)}
+                title="移除图片"
               />
             </>
           ) : (
@@ -446,9 +462,9 @@ export function GiftsPage() {
               <Button
                 size="small"
                 type="text"
-                icon={<QrcodeOutlined />}
-                onClick={() => pickQr(row)}
-                title="上传二维码"
+                icon={<PictureOutlined />}
+                onClick={() => pickImage(row)}
+                title="上传 / 粘贴图片"
               />
             </>
           )}
@@ -580,7 +596,7 @@ export function GiftsPage() {
             重置
           </Button>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            💡 点单元格直接编辑，回车保存并跳到下一行
+            💡 点单元格直接编辑，回车跳下一行；关键词格可 Ctrl+V 直接粘贴图片
           </Text>
         </Space>
       </Card>
@@ -721,21 +737,21 @@ export function GiftsPage() {
         style={{ display: "none" }}
         onChange={(event) => {
           const file = event.target.files?.[0];
-          if (file && qrTarget) uploadQr(qrTarget, file);
+          if (file && imageTarget) uploadImage(imageTarget, file);
           event.target.value = "";
         }}
       />
 
       <Modal
-        title="二维码预览"
-        open={Boolean(previewQr)}
+        title="图片预览"
+        open={Boolean(previewImage)}
         footer={null}
-        onCancel={() => setPreviewQr(null)}
+        onCancel={() => setPreviewImage(null)}
         width={360}
       >
-        {previewQr && (
+        {previewImage && (
           <div style={{ textAlign: "center" }}>
-            <img src={previewQr} alt="二维码" style={{ maxWidth: "100%", borderRadius: 8 }} />
+            <img src={previewImage} alt="图片" style={{ maxWidth: "100%", borderRadius: 8 }} />
           </div>
         )}
       </Modal>

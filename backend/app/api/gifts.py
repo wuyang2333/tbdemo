@@ -82,7 +82,7 @@ def _payload(row) -> dict:
         "recipient": row["recipient"],
         "gift_name": row["gift_name"],
         "quantity": row["quantity"],
-        "qr_code": row["qr_code"] or "",
+        "image": row["image"] or "",
         "created_at": row["created_at"],
     }
 
@@ -298,8 +298,8 @@ def update_gift_settle(
     return {"item": item}
 
 
-@router.post("/{gift_id}/qr")
-async def upload_gift_qr(
+@router.post("/{gift_id}/image")
+async def upload_gift_image(
     gift_id: int,
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
@@ -314,42 +314,42 @@ async def upload_gift_qr(
     content = await file.read()
     if len(content) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="图片不能超过 2MB")
-    qr_dir = DB_PATH.parent / "qrcodes"
+    qr_dir = DB_PATH.parent / "images"
     qr_dir.mkdir(parents=True, exist_ok=True)
     name = f"g{gift_id}_{uuid.uuid4().hex[:12]}{ext}"
     (qr_dir / name).write_bytes(content)
-    old = row["qr_code"]
-    if old and old.startswith("/api/qrcodes/"):
+    old = row["image"]
+    if old and old.startswith("/api/images/"):
         old_path = qr_dir / Path(old.rsplit("/", 1)[-1])
         if old_path.exists() and old_path.name != name:
             try:
                 old_path.unlink()
             except OSError:
                 pass
-    db.execute("UPDATE gifts SET qr_code = ? WHERE id = ?", (f"/api/qrcodes/{name}", gift_id))
+    db.execute("UPDATE gifts SET image = ? WHERE id = ?", (f"/api/images/{name}", gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
-    log_op(db, user, "gifts", "qr", row["order_no"], "上传二维码")
+    log_op(db, user, "gifts", "image", row["order_no"], "上传图片")
     return {"item": item}
 
 
-@router.post("/{gift_id}/qr/clear")
-def clear_gift_qr(
+@router.post("/{gift_id}/image/clear")
+def clear_gift_image(
     gift_id: int,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
-    old = row["qr_code"]
-    if old and old.startswith("/api/qrcodes/"):
-        old_path = DB_PATH.parent / "qrcodes" / Path(old.rsplit("/", 1)[-1])
+    old = row["image"]
+    if old and old.startswith("/api/images/"):
+        old_path = DB_PATH.parent / "images" / Path(old.rsplit("/", 1)[-1])
         if old_path.exists():
             try:
                 old_path.unlink()
             except OSError:
                 pass
-    db.execute("UPDATE gifts SET qr_code = '' WHERE id = ?", (gift_id,))
+    db.execute("UPDATE gifts SET image = '' WHERE id = ?", (gift_id,))
     item = _payload(_get_gift_or_404(db, gift_id))
-    log_op(db, user, "gifts", "qr", row["order_no"], "移除二维码")
+    log_op(db, user, "gifts", "image", row["order_no"], "移除图片")
     return {"item": item}
 
 

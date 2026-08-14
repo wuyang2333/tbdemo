@@ -107,8 +107,11 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE gifts ADD COLUMN order_time TEXT")
     if "qr_code" not in cols:
         conn.execute("ALTER TABLE gifts ADD COLUMN qr_code TEXT NOT NULL DEFAULT ''")
+    if "image" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN image TEXT NOT NULL DEFAULT ''")
     conn.execute("UPDATE gifts SET order_time = created_at WHERE order_time IS NULL OR order_time = ''")
     conn.execute("UPDATE gifts SET wangwang = recipient WHERE wangwang = '' AND recipient != ''")
+    conn.execute("UPDATE gifts SET image = qr_code WHERE image = '' AND qr_code != ''")
     conn.commit()
 
 
