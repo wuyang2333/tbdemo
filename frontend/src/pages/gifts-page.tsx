@@ -1,4 +1,4 @@
-import { DeleteOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
@@ -27,6 +27,7 @@ import type { Gift, GiftStatus } from "../types";
 const { Text } = Typography;
 
 type GiftFormValues = {
+  order_no: string;
   recipient: string;
   gift_name: string;
   quantity: number;
@@ -48,6 +49,7 @@ export function GiftsPage() {
   const [storeFilter, setStoreFilter] = useState<string | undefined>();
   const [form] = Form.useForm<GiftFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<Gift | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -92,17 +94,25 @@ export function GiftsPage() {
     setStoreFilter(undefined);
   };
 
-  const createGift = async (values: GiftFormValues) => {
+  const submitGift = async (values: GiftFormValues) => {
     setSaving(true);
     try {
-      await http.post("/gifts", {
+      const payload = {
+        order_no: values.order_no?.trim() ?? "",
         recipient: values.recipient.trim(),
         gift_name: values.gift_name.trim(),
         quantity: values.quantity,
         price: values.price,
-      });
-      message.success("礼品单已创建");
+      };
+      if (editing) {
+        await http.put(`/gifts/${editing.id}`, payload);
+        message.success(`「${editing.order_no}」已更新`);
+      } else {
+        await http.post("/gifts", payload);
+        message.success("礼品单已创建");
+      }
       setCreateOpen(false);
+      setEditing(null);
       form.resetFields();
       load();
     } catch (error) {
@@ -110,6 +120,18 @@ export function GiftsPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const openEdit = (row: Gift) => {
+    setEditing(row);
+    form.setFieldsValue({
+      order_no: row.order_no,
+      recipient: row.recipient,
+      gift_name: row.gift_name,
+      quantity: row.quantity,
+      price: row.price,
+    });
+    setCreateOpen(true);
   };
 
   const changeStatus = async (row: Gift, status: GiftStatus, label: string) => {
@@ -183,6 +205,9 @@ export function GiftsPage() {
       width: 220,
       render: (_, row) => (
         <Space size={4} wrap>
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
+            编辑
+          </Button>
           {row.status === "pending" && (
             <Button size="small" type="primary" ghost onClick={() => changeStatus(row, "shipped", "发货")}>
               发货
@@ -225,6 +250,7 @@ export function GiftsPage() {
             icon={<PlusOutlined />}
             onClick={() => {
               form.resetFields();
+              setEditing(null);
               setCreateOpen(true);
             }}
           >
@@ -298,14 +324,24 @@ export function GiftsPage() {
       </Card>
 
       <Modal
-        title="新增礼品单"
+        title={editing ? `编辑礼品单 ${editing.order_no}` : "新增礼品单"}
         open={createOpen}
         onOk={() => form.submit()}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => {
+          setCreateOpen(false);
+          setEditing(null);
+        }}
         confirmLoading={saving}
-        okText="创建"
+        okText={editing ? "保存" : "创建"}
       >
-        <Form form={form} layout="vertical" onFinish={createGift} style={{ marginTop: 8 }}>
+        <Form form={form} layout="vertical" onFinish={submitGift} style={{ marginTop: 8 }}>
+          <Form.Item
+            name="order_no"
+            label="订单号"
+            extra="留空自动生成"
+          >
+            <Input placeholder="如：淘宝订单号，留空自动生成" maxLength={40} />
+          </Form.Item>
           <Form.Item
             name="recipient"
             label="收礼人"

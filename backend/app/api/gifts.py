@@ -1,4 +1,4 @@
-"""礼品单：礼品订单管理（不区分店铺），带操作日志。"""
+﻿"""礼品单：礼品订单管理（不区分店铺），支持手动/自动订单号、编辑与操作日志。"""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ STATUS_LABELS = {
 
 
 class GiftIn(BaseModel):
+    order_no: str = ""
     recipient: str
     gift_name: str
     quantity: int = 1
@@ -68,6 +69,39 @@ def _payload(row) -> dict:
     }
 
 
+def _validate_fields(body: GiftIn) -> tuple[str, str]:
+    recipient = body.recipient.strip()
+    gift_name = body.gift_name.strip()
+    if not recipient:
+        raise HTTPException(status_code=400, detail="收礼人不能为空")
+    if not gift_name:
+        raise HTTPException(status_code=400, detail="礼品名称不能为空")
+    if not (1 <= body.quantity <= 999):
+        raise HTTPException(status_code=400, detail="数量需在 1-999 之间")
+    if not (0 <= body.price <= 999999):
+        raise HTTPException(status_code=400, detail="单价超出范围")
+    return recipient, gift_name
+
+
+def _resolve_order_no(db, body: GiftIn, exclude_id: int | None = None) -> str:
+    """手动订单号优先；留空则自动生成。手动订单号做查重。"""
+    order_no = body.order_no.strip()
+    if order_no:
+        if len(order_no) > 40:
+            raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
+        if exclude_id is not None:
+            exists = db.execute(
+                "SELECT id FROM gifts WHERE order_no = ? AND id != ?",
+                (order_no, exclude_id),
+            ).fetchone()
+        else:
+            exists = db.execute("SELECT id FROM gifts WHERE order_no = ?", (order_no,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=400, detail=f"订单号「{order_no}」已存在，请检查后重试")
+        return order_no
+    return f"G{datetime.now().strftime('%y%m%d')}{secrets.token_hex(3).upper()}"
+
+
 @router.get("")
 def list_gifts(
     store_id: int | None = None,
@@ -99,18 +133,8 @@ def create_gift(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    recipient = body.recipient.strip()
-    gift_name = body.gift_name.strip()
-    if not recipient:
-        raise HTTPException(status_code=400, detail="收礼人不能为空")
-    if not gift_name:
-        raise HTTPException(status_code=400, detail="礼品名称不能为空")
-    if not (1 <= body.quantity <= 999):
-        raise HTTPException(status_code=400, detail="数量需在 1-999 之间")
-    if not (0 <= body.price <= 999999):
-        raise HTTPException(status_code=400, detail="单价超出范围")
-
-    order_no = f"G{datetime.now().strftime('%y%m%d')}{secrets.token_hex(3).upper()}"
+    recipient, gift_name = _validate_fields(body)
+    order_no = _resolve_order_no(db, body)
     cur = db.execute(
         """
         INSERT INTO gifts (store_id, order_no, recipient, gift_name, quantity, price, status, created_at)
@@ -120,6 +144,37 @@ def create_gift(
     )
     item = _payload(_get_gift_or_404(db, cur.lastrowid))
     log_op(db, user, "gifts", "create", f"{recipient} · {gift_name}", f"新增礼品单 {order_no}")
+    return {"item": item}
+
+
+@router.put("/{gift_id}")
+def update_gift(
+    gift_id: int,
+    body: GiftIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_gift_or_404(db, gift_id)
+    recipient, gift_name = _validate_fields(body)
+    order_no = body.order_no.strip() or row["order_no"]
+    if len(order_no) > 40:
+        raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
+    exists = db.execute(
+        "SELECT id FROM gifts WHERE order_no = ? AND id != ?",
+        (order_no, gift_id),
+    ).fetchone()
+    if exists:
+        raise HTTPException(status_code=400, detail=f"订单号「{order_no}」已存在，请检查后重试")
+    db.execute(
+        """
+        UPDATE gifts
+        SET order_no = ?, recipient = ?, gift_name = ?, quantity = ?, price = ?
+        WHERE id = ?
+        """,
+        (order_no, recipient, gift_name, body.quantity, body.price, gift_id),
+    )
+    item = _payload(_get_gift_or_404(db, gift_id))
+    log_op(db, user, "gifts", "update", order_no, f"编辑礼品单 {row['order_no']}")
     return {"item": item}
 
 
