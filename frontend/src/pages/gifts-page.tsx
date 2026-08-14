@@ -452,13 +452,14 @@ export function GiftsPage() {
   };
 
   const copyTable = async () => {
-    if (filtered.length === 0) {
-      message.warning("当前没有可复制的数据");
+    const rows = filtered.filter((item) => selectedKeys.includes(item.id));
+    if (rows.length === 0) {
+      message.warning("请先在表格里勾选要复制的订单");
       return;
     }
     const headers = ["日期", "下单时间", "店铺", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态"];
     const lines = [headers.join("\t")];
-    for (const row of filtered) {
+    for (const row of rows) {
       const ot = row.order_time ? dayjs(row.order_time) : null;
       lines.push(
         [
@@ -478,7 +479,7 @@ export function GiftsPage() {
     }
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
-      message.success(`已复制 ${filtered.length} 行，可直接粘贴到 Excel`);
+      message.success(`已复制 ${rows.length} 行，可直接粘贴到 Excel`);
     } catch {
       message.error("复制失败，请手动选择后复制");
     }
@@ -741,9 +742,6 @@ export function GiftsPage() {
             onChange={setDateRange}
             style={{ width: 260 }}
           />
-          <Button icon={<CopyOutlined />} onClick={copyTable}>
-            复制表格
-          </Button>
           <Button type="primary" ghost icon={<DownloadOutlined />} onClick={exportExcel}>
             导出 Excel
           </Button>
@@ -768,6 +766,10 @@ export function GiftsPage() {
           </Button>
           <Button size="small" onClick={() => setSelectedKeys([])}>
             取消选择
+          </Button>
+          <Divider type="vertical" />
+          <Button icon={<CopyOutlined />} onClick={copyTable}>
+            复制勾选订单
           </Button>
         </Space>
       </Card>
