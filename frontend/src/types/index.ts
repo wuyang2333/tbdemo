@@ -149,4 +149,36 @@ export type ModelConfig = {
   configured: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type AnalyticsBucket = {
+  orders: number;
+  amount: number;
+  commission: number;
 };
+
+export type AnalyticsTrendPoint = AnalyticsBucket & {
+  date: string;
+};
+
+export type AnalyticsStoreAgg = {
+  store: string;
+  orders: number;
+  amount: number;
+  commission: number;
+};
+
+export type AnalyticsSummary = {
+  today: AnalyticsBucket;
+  week: AnalyticsBucket;
+  month: AnalyticsBucket;
+  total: AnalyticsBucket;
+  trend: AnalyticsTrendPoint[];
+  by_store: AnalyticsStoreAgg[];
+  status: {
+    reviewed: number;
+    unreviewed: number;
+    settled: number;
+    unsettled: number;
+  };
+};
