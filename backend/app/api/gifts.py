@@ -51,6 +51,10 @@ class GiftBatchIn(BaseModel):
     settle_status: str | None = None
 
 
+class GiftBatchDeleteIn(BaseModel):
+    ids: list[int]
+
+
 class GiftBatchCreateIn(BaseModel):
     date: str = ""
     start_time: str = ""
@@ -388,6 +392,20 @@ def batch_update_gifts(
             (body.settle_status, *body.ids),
         )
     log_op(db, user, "gifts", "batch", "", f"批量更新 {len(body.ids)} 单")
+    return {"ok": True, "count": len(body.ids)}
+
+
+@router.post("/batch-delete")
+def batch_delete_gifts(
+    body: GiftBatchDeleteIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="请先选择要删除的礼品单")
+    placeholders = ",".join("?" for _ in body.ids)
+    db.execute(f"DELETE FROM gifts WHERE id IN ({placeholders})", body.ids)
+    log_op(db, user, "gifts", "delete", "", f"批量删除 {len(body.ids)} 单")
     return {"ok": True, "count": len(body.ids)}
 
 

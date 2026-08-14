@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloseOutlined, DeleteOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, CloseOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   AutoComplete,
   Button,
@@ -11,7 +11,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Row,
   Select,
   Space,
@@ -448,16 +447,6 @@ export function GiftsPage() {
     }
   };
 
-  const removeGift = async (row: Gift) => {
-    try {
-      await http.delete(`/gifts/${row.id}`);
-      message.success("礼品单已删除");
-      load();
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    }
-  };
-
   const pickImage = (row: Gift) => {
     setImageTarget(row);
     fileInputRef.current?.click();
@@ -521,6 +510,30 @@ export function GiftsPage() {
     }
   };
 
+  const batchDelete = () => {
+    if (selectedKeys.length === 0) {
+      message.warning("请先在表格里勾选要删除的订单");
+      return;
+    }
+    Modal.confirm({
+      title: `确定删除选中的 ${selectedKeys.length} 单？`,
+      content: "删除后不可恢复",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await http.post("/gifts/batch-delete", { ids: selectedKeys });
+          message.success(`已删除 ${selectedKeys.length} 单`);
+          setSelectedKeys([]);
+          load();
+        } catch (error) {
+          message.error(getApiErrorMessage(error));
+        }
+      },
+    });
+  };
+
   const batchMenuItems: MenuProps["items"] = [
     { key: "reviewed", label: "标记已评论", onClick: () => batchSet("review_status", "reviewed") },
     { key: "unreviewed", label: "标记未评论", onClick: () => batchSet("review_status", "none") },
@@ -529,6 +542,8 @@ export function GiftsPage() {
     { type: "divider" },
     { key: "copy", label: "复制勾选订单", onClick: () => copyTable() },
     { key: "export", label: "导出勾选订单（Excel）", onClick: () => exportExcel() },
+    { type: "divider" },
+    { key: "delete", label: "删除勾选订单", danger: true, onClick: () => batchDelete() },
     { type: "divider" },
     { key: "clear", label: "取消选择", onClick: () => setSelectedKeys([]) },
   ];
@@ -685,23 +700,6 @@ export function GiftsPage() {
         <Tag color={SETTLE_META[row.settle_status].color} style={{ cursor: "pointer" }} onClick={() => toggleSettle(row)}>
           {SETTLE_META[row.settle_status].label}
         </Tag>
-      ),
-    },
-    {
-      title: "操作",
-      key: "actions",
-      width: 80,
-      render: (_, row) => (
-        <Popconfirm
-          title={`删除 ${row.order_no || row.wangwang || "该单"}？删除后不可恢复`}
-          okText="删除"
-          okButtonProps={{ danger: true }}
-          onConfirm={() => removeGift(row)}
-        >
-          <Button size="small" danger icon={<DeleteOutlined />}>
-            删除
-          </Button>
-        </Popconfirm>
       ),
     },
   ];
