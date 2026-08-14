@@ -13,7 +13,13 @@ from pydantic import BaseModel
 from backend.app.api.auth import get_current_user
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
-from backend.app.core.sycm import SycmError, check_sycm_login, fetch_store_daily
+from backend.app.core.sycm import (
+    SycmError,
+    bind_login,
+    check_sycm_login,
+    fetch_store_daily,
+    has_profile,
+)
 
 router = APIRouter()
 
@@ -63,7 +69,7 @@ def _payload(row) -> dict:
         "auth_expires_at": row["auth_expires_at"],
         "created_at": row["created_at"],
         "sycm_username": row["sycm_username"],
-        "sycm_configured": bool(row["sycm_cookie"] or row["sycm_username"]),
+        "sycm_configured": has_profile(row["id"]),
         "sycm_cookie_masked": _mask_cookie(row["sycm_cookie"]),
     }
 
@@ -339,9 +345,8 @@ def sync_store_row(db, row) -> dict:
 
 def sync_all_stores(db, user=None) -> dict:
     """同步所有配置了生意参谋凭证的店铺，逐店容错。"""
-    rows = db.execute(
-        "SELECT * FROM stores WHERE sycm_cookie != '' OR sycm_username != '' ORDER BY id ASC"
-    ).fetchall()
+    rows = db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
+    rows = [row for row in rows if has_profile(row["id"])]
     results = []
     for row in rows:
         try:
@@ -511,6 +516,24 @@ def test_store_sycm(
     except SycmError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@router.post("/{store_id}/sycm/bind")
+def bind_store_sycm(
+    store_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """打开专用 Chrome 等待用户登录该店铺生意参谋，成功后保存登录档案。"""
+    row = _get_store_or_404(db, store_id)
+    if not can_access_store(user, store_id):
+        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    try:
+        result = bind_login(dict(row))
+    except SycmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _log(db, user, "sycm_bind", row["name"], "打开浏览器绑定生意参谋登录")
+    return {"ok": True, "store_id": row["id"], "metrics": result.get("metrics")}
 
 
 @router.post("/{store_id}/sync")

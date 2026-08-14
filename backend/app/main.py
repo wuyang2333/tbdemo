@@ -55,10 +55,10 @@ def _run_sycm_sync() -> None:
 
 
 async def _sycm_sync_loop() -> None:
-    """生意参谋定时抓取：每 30 分钟同步一次各店数据。"""
+    """生意参谋定时抓取：每 30 分钟同步一次各店数据（在线程中执行，避免卡住接口）。"""
     while True:
         try:
-            _run_sycm_sync()
+            await asyncio.to_thread(_run_sycm_sync)
         except Exception:
             pass
         await asyncio.sleep(1800)

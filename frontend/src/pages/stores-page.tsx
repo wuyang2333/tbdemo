@@ -4,6 +4,7 @@ import {
   EditOutlined,
   EyeOutlined,
   HistoryOutlined,
+  LoginOutlined,
   ReloadOutlined,
   SafetyOutlined,
   ShopOutlined,
@@ -12,6 +13,7 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -90,10 +92,10 @@ export function StoresPage() {
   const [sycmOpen, setSycmOpen] = useState(false);
   const [sycmUsername, setSycmUsername] = useState("");
   const [sycmPassword, setSycmPassword] = useState("");
-  const [sycmCookie, setSycmCookie] = useState("");
   const [sycmSaving, setSycmSaving] = useState(false);
   const [sycmTesting, setSycmTesting] = useState(false);
   const [sycmSyncing, setSycmSyncing] = useState(false);
+  const [sycmBinding, setSycmBinding] = useState(false);
 
   const ACTION_LABELS: Record<string, string> = {
     bind: "绑定店铺",
@@ -342,7 +344,6 @@ export function StoresPage() {
     setSycmStore(row);
     setSycmUsername(row.sycm_username || "");
     setSycmPassword("");
-    setSycmCookie("");
     setSycmOpen(true);
   };
 
@@ -353,7 +354,7 @@ export function StoresPage() {
       await http.put(`/stores/${sycmStore.id}/sycm`, {
         username: sycmUsername,
         password: sycmPassword,
-        cookie: sycmCookie,
+        cookie: "",
       });
       message.success("生意参谋配置已保存");
       refresh();
@@ -374,6 +375,20 @@ export function StoresPage() {
       message.error(getApiErrorMessage(error));
     } finally {
       setSycmTesting(false);
+    }
+  };
+
+  const bindSycm = async () => {
+    if (!sycmStore) return;
+    setSycmBinding(true);
+    try {
+      await http.post(`/stores/${sycmStore.id}/sycm/bind`);
+      message.success("生意参谋登录已绑定成功");
+      refresh();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setSycmBinding(false);
     }
   };
 
@@ -623,11 +638,14 @@ export function StoresPage() {
         onCancel={() => setSycmOpen(false)}
         footer={
           <Space>
+            <Button icon={<LoginOutlined />} loading={sycmBinding} onClick={bindSycm}>
+              打开浏览器登录
+            </Button>
             <Button icon={<ThunderboltOutlined />} loading={sycmTesting} onClick={testSycm}>
               测试连接
             </Button>
             <Button icon={<SyncOutlined />} loading={sycmSyncing} onClick={syncSycm}>
-              同步数据
+              同步今天数据
             </Button>
             <Button type="primary" loading={sycmSaving} onClick={saveSycm}>
               保存
@@ -640,19 +658,27 @@ export function StoresPage() {
           <Text type="secondary" style={{ fontSize: 12 }}>
             当前状态：
             {sycmStore?.sycm_configured ? (
-              <Tag color="green">已配置</Tag>
+              <Tag color="green">已绑定登录</Tag>
             ) : (
-              <Tag color="orange">未配置</Tag>
+              <Tag color="orange">未绑定</Tag>
             )}
-            {sycmStore?.sycm_cookie_masked ? ` Cookie：${sycmStore.sycm_cookie_masked}` : ""}
           </Text>
         </div>
+        {sycmBinding && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="已打开 Chrome 登录窗口"
+            description="请在弹出的 Chrome 窗口里用本店铺的淘宝账号登录生意参谋。如果是另一个店铺的账号，请先在窗口里退出当前账号再登录。登录成功后会自动保存并继续，无需关闭页面。"
+          />
+        )}
         <Form layout="vertical">
-          <Form.Item label="账号">
+          <Form.Item label="账号" extra="仅用于备注，不会自动登录">
             <Input
               value={sycmUsername}
               onChange={(event) => setSycmUsername(event.target.value)}
-              placeholder="生意参谋登录账号"
+              placeholder="如：该店铺的淘宝账号"
             />
           </Form.Item>
           <Form.Item label="密码">
@@ -660,17 +686,6 @@ export function StoresPage() {
               value={sycmPassword}
               onChange={(event) => setSycmPassword(event.target.value)}
               placeholder="留空不修改"
-            />
-          </Form.Item>
-          <Form.Item
-            label="登录凭证 Cookie"
-            extra="在浏览器登录生意参谋后，从开发者工具复制 Cookie 粘贴到这里；留空不修改"
-          >
-            <Input.TextArea
-              rows={4}
-              value={sycmCookie}
-              onChange={(event) => setSycmCookie(event.target.value)}
-              placeholder="粘贴生意参谋 Cookie"
             />
           </Form.Item>
         </Form>

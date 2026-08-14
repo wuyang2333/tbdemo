@@ -1,81 +1,271 @@
-﻿"""生意参谋数据抓取适配：使用店铺保存的登录凭证调用生意参谋接口，解析为每日指标。"""
+﻿"""生意参谋数据抓取：通过专用 Chrome 的登录态调用生意参谋接口。
+
+- 今天（实时）：调用 portal/live/new/index/overview/v3.json?dateType=today
+  （与生意参谋首页「数据概览」实时卡一致，返回 支付金额/访客/浏览量/支付买家数/支付订单数/转化率）
+- 历史日期：调用 portal/coreIndex/new/overview/v3.json（数据概览按日）
+
+Windows 上读取 Chrome 登录态采用 CDP（Chrome DevTools Protocol）方案：
+- 首次使用会在专用 Chrome 窗口里登录一次，登录态自动保存（不导出 Cookie、不动日常浏览器）
+- 每个店铺对应一份命名登录档案，同步时按店铺读取，互不干扰
+"""
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+import time
 from datetime import date
+from pathlib import Path
 
-import httpx
+# 项目内内置的 sycm-cli（MIT 协议，见 backend/sycm_cli/LICENSE）
+CLI_DIR = Path(__file__).resolve().parent.parent.parent / "sycm_cli"
+CLI_SCRIPT = CLI_DIR / "sycm_cli.py"
+PYTHON = sys.executable
 
-SYCM_HOME = "https://sycm.taobao.com"
+# 后台自动同步可能发生在夜间，放开 CLI 的 1:00-6:00 禁跑限制
+_ENV = dict(os.environ)
+_ENV["SYCM_BYPASS_CURFEW"] = "1"
+_ENV["PYTHONIOENCODING"] = "utf-8"
+_ENV["PYTHONUTF8"] = "1"
+
+LOGIN_WAIT_SECONDS = int(os.environ.get("SYCM_LOGIN_WAIT", "300"))
+BIND_POLL_STEP = 5
+
+_LIVE_PATH = "/portal/live/new/index/overview/v3.json"
+_DAY_PATH = "/portal/coreIndex/new/overview/v3.json"
+_HOME_REFERER = "https://sycm.taobao.com/portal/home.htm"
 
 
 class SycmError(Exception):
     """带用户可读信息的抓取错误。"""
 
 
-def _headers(store: dict) -> dict:
+# ---------- 店铺登录档案 ----------
+
+def profile_name(store_id: int) -> str:
+    return f"store_{store_id}"
+
+
+def profile_path(store_id: int) -> Path:
+    root = Path(
+        os.environ.get(
+            "TAOBAO_CLI_PROFILE_DIR",
+            str(Path.home() / ".taobao-cli" / "profiles"),
+        )
+    )
+    return root / f"{profile_name(store_id)}.json"
+
+
+def has_profile(store_id: int) -> bool:
+    """该店铺是否已保存生意参谋登录档案。"""
+    return profile_path(store_id).exists()
+
+
+# ---------- 调用内置 CLI ----------
+
+def _run_cli(args: list[str], timeout: float = 120) -> tuple[str, str, int]:
+    """运行内置 sycm-cli，返回 (stdout, stderr, exit_code)。"""
+    if not CLI_SCRIPT.exists():
+        raise SycmError("生意参谋组件缺失，请先更新程序")
+    cmd = [str(PYTHON), str(CLI_SCRIPT), *args]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=_ENV,
+            cwd=str(CLI_DIR),
+        )
+    except FileNotFoundError as exc:
+        raise SycmError(f"无法启动 Python：{exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SycmError("生意参谋请求超时，请稍后再试") from exc
+    return proc.stdout or "", proc.stderr or "", proc.returncode or 0
+
+
+def _friendly_error(text: str) -> str:
+    """把 CLI 的报错翻译成给用户看的提示。"""
+    if not text:
+        return "生意参谋操作失败，请稍后再试"
+    if "不存在" in text and ("profile" in text.lower() or "登录态" in text):
+        return "该店铺还没有绑定生意参谋登录，请先点「打开浏览器登录」"
+    if (
+        "You must login" in text
+        or "登录系统" in text
+        or "未找到淘宝登录态" in text
+        or "登录已过期" in text
+        or "请重新登录" in text
+    ):
+        return "生意参谋登录已失效，请重新打开浏览器登录"
+    if "验证码" in text or "滑块" in text or "风控" in text or "操作过于频繁" in text:
+        return "生意参谋触发了安全验证，请稍后再试"
+    if "超时" in text:
+        return "等待登录超时，请确认已在 Chrome 窗口完成登录后重试"
+    return text
+
+
+def _ensure_profile(store: dict) -> None:
+    if not has_profile(store["id"]):
+        raise SycmError("该店铺还没有绑定生意参谋登录，请先点「打开浏览器登录」")
+
+
+def _run_api_json(args: list[str], timeout: float = 120) -> dict:
+    """运行 CLI 的 api 命令并解析返回 JSON。"""
+    out, err, code = _run_cli(args, timeout=timeout)
+    if code != 0:
+        text = (err or out or "").strip().replace("\n", "；")
+        raise SycmError(_friendly_error(text))
+    try:
+        return json.loads(out)
+    except ValueError as exc:
+        raise SycmError("生意参谋返回异常，请稍后再试") from exc
+
+
+def _check_content(payload: dict) -> None:
+    content = payload.get("content") or {}
+    code = content.get("code")
+    if payload.get("hasError") is True or code not in (None, 0, 200, "0", "200"):
+        msg = content.get("message") or content.get("msg") or "未知错误"
+        raise SycmError(_friendly_error(f"生意参谋返回失败：{msg}"))
+
+
+def _to_num(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _take(item: dict, field: str):
+    """从 {字段: {value, cycleCrc}} 结构里取值。"""
+    return (item.get(field) or {}).get("value")
+
+
+# ---------- 实时（今天） ----------
+
+def _run_live_overview(store: dict, timeout: float = 120) -> dict:
+    _ensure_profile(store)
+    return _run_api_json(
+        [
+            "--store",
+            profile_name(store["id"]),
+            "api",
+            _LIVE_PATH,
+            "-p",
+            "dateType=today",
+            "--referer",
+            _HOME_REFERER,
+        ],
+        timeout=timeout,
+    )
+
+
+def _parse_live_overview(payload: dict) -> dict:
+    _check_content(payload)
+    data = (payload.get("content") or {}).get("data") or {}
+    today = (data.get("data") or {}).get("today") or {}
     return {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-        ),
-        "Cookie": (store.get("sycm_cookie") or "").strip(),
-        "Referer": f"{SYCM_HOME}/",
+        "visitors": int(_to_num(_take(today, "uv"))),
+        "pv": int(_to_num(_take(today, "pv"))),
+        "sales": round(_to_num(_take(today, "payAmt")), 2),
+        "orders": int(_to_num(_take(today, "payOrdCnt") or _take(today, "payByrCnt"))),
+        "conversion_rate": round(_to_num(_take(today, "payRate")) * 100, 2),
+        "update_time": (data.get("data") or {}).get("updateTime") or (data.get("updateTime") or ""),
     }
 
 
+# ---------- 历史日期（数据概览按日） ----------
+
+def _run_day_overview(store: dict, target_date: str, timeout: float = 120) -> dict:
+    _ensure_profile(store)
+    return _run_api_json(
+        [
+            "--store",
+            profile_name(store["id"]),
+            "api",
+            _DAY_PATH,
+            "-p",
+            f"dateType=day",
+            "-p",
+            f"dateRange={target_date}|{target_date}",
+            "-p",
+            "needCycleCrc=true",
+            "--referer",
+            _HOME_REFERER,
+        ],
+        timeout=timeout,
+    )
+
+
+def _parse_day_overview(payload: dict) -> dict:
+    _check_content(payload)
+    data = (payload.get("content") or {}).get("data") or {}
+    self_ = data.get("self") or {}
+    return {
+        "visitors": int(_to_num(_take(self_, "uv"))),
+        "pv": int(_to_num(_take(self_, "pv"))),
+        "sales": round(_to_num(_take(self_, "payAmt")), 2),
+        "orders": int(_to_num(_take(self_, "payOrdCnt") or _take(self_, "payByrCnt"))),
+        "conversion_rate": round(_to_num(_take(self_, "payRate")) * 100, 2),
+    }
+
+
+# ---------- 对外接口 ----------
+
 def check_sycm_login(store: dict) -> dict:
-    """用保存的 Cookie 访问生意参谋首页，验证登录态是否有效。"""
-    cookie = (store.get("sycm_cookie") or "").strip()
-    if not cookie:
-        raise SycmError("还没有配置生意参谋登录凭证（Cookie），请先在店铺管理填写")
-    try:
-        resp = httpx.get(f"{SYCM_HOME}/", headers=_headers(store), timeout=30, follow_redirects=True)
-    except httpx.HTTPError as exc:
-        raise SycmError(f"无法连接生意参谋：{exc}") from exc
-    text = resp.text
-    if resp.status_code >= 400 or ("login" in resp.url.path.lower() and "portal" not in resp.url.path.lower()):
-        raise SycmError("登录凭证已失效，请到店铺管理重新粘贴生意参谋 Cookie")
-    if "登录" in text and "工作台" not in text:
-        raise SycmError("登录凭证已失效（页面显示需要登录），请重新粘贴 Cookie")
-    return {"ok": True}
+    """验证该店铺的生意参谋登录是否有效（调一次今天的实时接口）。"""
+    payload = _run_live_overview(store)
+    _parse_live_overview(payload)
+    return {"ok": True, "store_id": store["id"], "store_name": store["name"]}
 
 
 def fetch_store_daily(store: dict, target_date: str | None = None) -> dict:
-    """抓取单个店铺指定日期的核心指标。
-
-    返回 {date, visitors, pv, sales, orders, conversion_rate}
-    真实生意参谋接口需要签名参数且接口地址不对外公开；接入时请用浏览器抓包
-    拿到的地址/参数替换下方 url 与解析逻辑（或把抓包请求发给我来对接）。
-    """
-    check_sycm_login(store)
+    """抓取单个店铺指定日期的指标：今天走实时接口，历史日期走数据概览。"""
     target = target_date or date.today().isoformat()
+    if target == date.today().isoformat():
+        payload = _run_live_overview(store)
+        metrics = _parse_live_overview(payload)
+    else:
+        payload = _run_day_overview(store, target)
+        metrics = _parse_day_overview(payload)
+    metrics["date"] = target
+    return metrics
 
-    # TODO: 用真实抓包地址替换。下方先请求数据服务入口，验证连通性。
-    url = f"{SYCM_HOME}/mc/portal/dwq/index.htm"
-    try:
-        resp = httpx.get(url, headers=_headers(store), timeout=30, follow_redirects=True)
-    except httpx.HTTPError as exc:
-        raise SycmError(f"无法连接生意参谋数据服务：{exc}") from exc
-    if resp.status_code >= 400:
-        raise SycmError(f"生意参谋数据服务返回错误（HTTP {resp.status_code}）")
 
-    # 真实接口返回 JSON；字段名以实际抓包为准。这里做防御性解析。
-    try:
-        data = resp.json()
-    except ValueError as exc:
-        raise SycmError(
-            "生意参谋数据服务返回的不是 JSON（接口地址或参数待对接）。"
-            "请在浏览器开发者工具 → 网络 里找到生意参谋的数据请求，"
-            "右键 Copy as cURL 发给我，我把它接上即可。"
-        ) from exc
+def bind_login(store: dict, wait_seconds: int | None = None) -> dict:
+    """打开专用 Chrome 并等待用户登录该店铺，登录成功后保存档案并验证。
 
-    # TODO: 按真实返回结构映射字段
-    return {
-        "date": target,
-        "visitors": 0,
-        "pv": 0,
-        "sales": 0.0,
-        "orders": 0,
-        "conversion_rate": 0.0,
-    }
+    返回 {"ok": True, "profile": ..., "metrics": {...}}
+    """
+    name = profile_name(store["id"])
+    deadline = time.time() + (wait_seconds or LOGIN_WAIT_SECONDS)
+    last_error = ""
+    while time.time() < deadline:
+        # 1) 确保专用 Chrome 打开，并把当前登录态保存为该店铺的档案
+        try:
+            _run_cli(["export-profile", name], timeout=60)
+        except SycmError as exc:
+            last_error = str(exc)
+            time.sleep(2)
+            continue
+        # 2) 用刚保存的档案调一次今天的实时接口，能取到 = 真正登录成功
+        try:
+            payload = _run_live_overview(store, timeout=60)
+            metrics = _parse_live_overview(payload)
+            return {
+                "ok": True,
+                "profile": name,
+                "metrics": metrics,
+            }
+        except SycmError as exc:
+            last_error = str(exc)
+        time.sleep(BIND_POLL_STEP)
+    raise SycmError(
+        last_error
+        or "等待登录超时，请确认已在 Chrome 窗口完成登录后重试"
+    )

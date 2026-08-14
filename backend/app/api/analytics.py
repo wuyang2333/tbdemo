@@ -118,8 +118,11 @@ def analytics_summary(
         "SELECT MAX(created_at) AS m FROM store_daily_data"
     ).fetchone()["m"]
 
+    today_sum = _sum_rows(today_rows)
+    if len(today_rows) == 1 and today_rows[0]["conversion_rate"]:
+        today_sum["conversion_rate"] = round(today_rows[0]["conversion_rate"], 2)
     return {
-        "today": _sum_rows(today_rows),
+        "today": today_sum,
         "week": _sum_rows(week_rows),
         "month": _sum_rows(month_rows),
         "total": _sum_rows(rows),

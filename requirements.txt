@@ -6,3 +6,6 @@ pyyaml
 httpx
 python-multipart
 openpyxl
+curl-cffi
+websocket-client
+browser-cookie3
