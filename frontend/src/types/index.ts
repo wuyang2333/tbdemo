@@ -94,16 +94,27 @@ export type StoreLog = {
 
 export type GiftStatus = "pending" | "shipped" | "delivered" | "refunded";
 
+export type GiftReviewStatus = "none" | "reviewed";
+
+export type GiftSettleStatus = "unsettled" | "settled";
+
 export type Gift = {
   id: number;
   store_id: number;
   store_name: string;
   order_no: string;
+  keyword: string;
+  spec: string;
+  price: number;
+  commission: number;
+  wangwang: string;
+  order_time: string;
+  review_status: GiftReviewStatus;
+  settle_status: GiftSettleStatus;
+  status: GiftStatus;
   recipient: string;
   gift_name: string;
   quantity: number;
-  price: number;
-  status: GiftStatus;
   created_at: string;
 };
 

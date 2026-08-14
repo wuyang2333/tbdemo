@@ -1,8 +1,9 @@
-import { DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+﻿import { DeleteOutlined, EditOutlined, GiftOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Button,
   Card,
   Col,
+  DatePicker,
   Form,
   Input,
   InputNumber,
@@ -22,31 +23,50 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import type { Gift, GiftStatus } from "../types";
+import type { Gift, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
 
 const { Text } = Typography;
 
 type GiftFormValues = {
   order_no: string;
-  recipient: string;
-  gift_name: string;
-  quantity: number;
+  store_id: number;
+  keyword: string;
+  spec: string;
   price: number;
+  commission: number;
+  wangwang: string;
+  order_time: dayjs.Dayjs;
+  review_status: GiftReviewStatus;
+  settle_status: GiftSettleStatus;
 };
 
-const STATUS_META: Record<GiftStatus, { label: string; color: string }> = {
-  pending: { label: "待发货", color: "orange" },
-  shipped: { label: "已发货", color: "blue" },
-  delivered: { label: "已完成", color: "green" },
-  refunded: { label: "已退款", color: "default" },
+const REVIEW_META: Record<GiftReviewStatus, { label: string; color: string }> = {
+  none: { label: "未评论", color: "orange" },
+  reviewed: { label: "已评论", color: "green" },
 };
+
+const SETTLE_META: Record<GiftSettleStatus, { label: string; color: string }> = {
+  unsettled: { label: "未结款", color: "orange" },
+  settled: { label: "已结款", color: "green" },
+};
+
+const REVIEW_OPTIONS = (Object.entries(REVIEW_META) as [GiftReviewStatus, { label: string }][]).map(([value, meta]) => ({
+  value,
+  label: meta.label,
+}));
+const SETTLE_OPTIONS = (Object.entries(SETTLE_META) as [GiftSettleStatus, { label: string }][]).map(([value, meta]) => ({
+  value,
+  label: meta.label,
+}));
 
 export function GiftsPage() {
   const [items, setItems] = useState<Gift[]>([]);
+  const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [statusFilter, setStatusFilter] = useState<GiftStatus | undefined>();
-  const [storeFilter, setStoreFilter] = useState<string | undefined>();
+  const [storeFilter, setStoreFilter] = useState<number | undefined>();
+  const [reviewFilter, setReviewFilter] = useState<GiftReviewStatus | undefined>();
+  const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
   const [form] = Form.useForm<GiftFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<Gift | null>(null);
@@ -69,29 +89,61 @@ export function GiftsPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    http
+      .get<{ items: Store[] }>("/stores")
+      .then(({ data }) => setStores(data.items))
+      .catch(() => {});
+  }, []);
+
   const storeOptions = useMemo(() => {
-    const names = Array.from(new Set(items.map((item) => item.store_name))).sort();
-    return names.map((name) => ({ value: name, text: name, label: name }));
-  }, [items]);
+    const list = stores.map((store) => ({ value: store.id, label: store.name }));
+    return [{ value: 0, label: "未关联店铺" }, ...list];
+  }, [stores]);
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((item) => {
-      if (statusFilter && item.status !== statusFilter) return false;
-      if (storeFilter && item.store_name !== storeFilter) return false;
+      if (storeFilter !== undefined && item.store_id !== storeFilter) return false;
+      if (reviewFilter && item.review_status !== reviewFilter) return false;
+      if (settleFilter && item.settle_status !== settleFilter) return false;
       if (!kw) return true;
       return (
         item.order_no.toLowerCase().includes(kw) ||
-        item.recipient.toLowerCase().includes(kw) ||
-        item.gift_name.toLowerCase().includes(kw)
+        item.wangwang.toLowerCase().includes(kw) ||
+        item.keyword.toLowerCase().includes(kw) ||
+        item.spec.toLowerCase().includes(kw)
       );
     });
-  }, [items, keyword, statusFilter, storeFilter]);
+  }, [items, keyword, storeFilter, reviewFilter, settleFilter]);
 
   const resetFilters = () => {
     setKeyword("");
-    setStatusFilter(undefined);
     setStoreFilter(undefined);
+    setReviewFilter(undefined);
+    setSettleFilter(undefined);
+  };
+
+  const toggleReview = async (row: Gift) => {
+    const next: GiftReviewStatus = row.review_status === "reviewed" ? "none" : "reviewed";
+    try {
+      await http.post(`/gifts/${row.id}/review`, { status: next });
+      message.success(`「${row.order_no}」已标记为「${REVIEW_META[next].label}」`);
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const toggleSettle = async (row: Gift) => {
+    const next: GiftSettleStatus = row.settle_status === "settled" ? "unsettled" : "settled";
+    try {
+      await http.post(`/gifts/${row.id}/settle`, { status: next });
+      message.success(`「${row.order_no}」已标记为「${SETTLE_META[next].label}」`);
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
   };
 
   const submitGift = async (values: GiftFormValues) => {
@@ -99,10 +151,15 @@ export function GiftsPage() {
     try {
       const payload = {
         order_no: values.order_no?.trim() ?? "",
-        recipient: values.recipient.trim(),
-        gift_name: values.gift_name.trim(),
-        quantity: values.quantity,
-        price: values.price,
+        store_id: values.store_id ?? 0,
+        keyword: values.keyword?.trim() ?? "",
+        spec: values.spec?.trim() ?? "",
+        price: values.price ?? 0,
+        commission: values.commission ?? 0,
+        wangwang: values.wangwang?.trim() ?? "",
+        order_time: values.order_time ? values.order_time.format("YYYY-MM-DD HH:mm:ss") : "",
+        review_status: values.review_status ?? "none",
+        settle_status: values.settle_status ?? "unsettled",
       };
       if (editing) {
         await http.put(`/gifts/${editing.id}`, payload);
@@ -126,22 +183,17 @@ export function GiftsPage() {
     setEditing(row);
     form.setFieldsValue({
       order_no: row.order_no,
-      recipient: row.recipient,
-      gift_name: row.gift_name,
-      quantity: row.quantity,
+      store_id: row.store_id,
+      keyword: row.keyword,
+      spec: row.spec,
       price: row.price,
+      commission: row.commission,
+      wangwang: row.wangwang,
+      order_time: row.order_time ? dayjs(row.order_time) : undefined,
+      review_status: row.review_status,
+      settle_status: row.settle_status,
     });
     setCreateOpen(true);
-  };
-
-  const changeStatus = async (row: Gift, status: GiftStatus, label: string) => {
-    try {
-      await http.post(`/gifts/${row.id}/status`, { status });
-      message.success(`「${row.order_no}」已${label}`);
-      load();
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    }
   };
 
   const removeGift = async (row: Gift) => {
@@ -155,74 +207,64 @@ export function GiftsPage() {
   };
 
   const total = filtered.length;
-  const pending = filtered.filter((item) => item.status === "pending").length;
-  const shipped = filtered.filter((item) => item.status === "shipped").length;
-
-  const statusFilters = Object.entries(STATUS_META).map(([value, meta]) => ({
-    value,
-    text: meta.label,
-  }));
+  const unreviewed = filtered.filter((item) => item.review_status === "none").length;
+  const unsettled = filtered.filter((item) => item.settle_status === "unsettled").length;
 
   const columns: TableColumnsType<Gift> = [
-    { title: "单号", dataIndex: "order_no", render: (value: string) => <Text code>{value}</Text> },
-    { title: "收礼人", dataIndex: "recipient" },
-    { title: "礼品", dataIndex: "gift_name" },
-    { title: "数量", dataIndex: "quantity" },
     {
-      title: "单价",
-      dataIndex: "price",
-      render: (value: number) => `¥${value.toFixed(2)}`,
+      title: "日期",
+      key: "date",
+      width: 110,
+      render: (_, row) => (row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD") : "-"),
     },
     {
-      title: "金额",
-      key: "amount",
-      render: (_, row) => <Text strong>¥{(row.quantity * row.price).toFixed(2)}</Text>,
+      title: "下单时间",
+      key: "order_time",
+      width: 150,
+      render: (_, row) => (row.order_time ? dayjs(row.order_time).format("YYYY-MM-DD HH:mm") : "-"),
     },
     {
       title: "店铺",
       dataIndex: "store_name",
-      filters: storeOptions,
-      onFilter: (value, row) => row.store_name === value,
+      filters: storeOptions.map((option) => ({ text: option.label, value: option.value })),
+      onFilter: (value, row) => row.store_id === value,
       render: (value: string) => (value === "未关联店铺" ? <Text type="secondary">未关联店铺</Text> : value),
     },
+    { title: "关键词", dataIndex: "keyword", render: (value: string) => value || "-" },
+    { title: "规格", dataIndex: "spec", render: (value: string) => value || "-" },
+    { title: "金额", dataIndex: "price", width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
+    { title: "佣金", dataIndex: "commission", width: 100, render: (value: number) => `¥${Number(value).toFixed(2)}` },
+    { title: "旺旺号", dataIndex: "wangwang", render: (value: string) => value || "-" },
+    { title: "订单编号", dataIndex: "order_no", width: 150, render: (value: string) => <Text code>{value}</Text> },
     {
-      title: "状态",
-      dataIndex: "status",
-      filters: statusFilters,
-      onFilter: (value, row) => row.status === value,
-      render: (status: GiftStatus) => (
-        <Tag color={STATUS_META[status].color}>{STATUS_META[status].label}</Tag>
+      title: "评论状态",
+      dataIndex: "review_status",
+      width: 100,
+      render: (_, row) => (
+        <Tag color={REVIEW_META[row.review_status].color} style={{ cursor: "pointer" }} onClick={() => toggleReview(row)}>
+          {REVIEW_META[row.review_status].label}
+        </Tag>
       ),
     },
     {
-      title: "创建时间",
-      dataIndex: "created_at",
-      render: (value: string) => dayjs(value).format("YYYY-MM-DD HH:mm"),
+      title: "结款状态",
+      dataIndex: "settle_status",
+      width: 100,
+      render: (_, row) => (
+        <Tag color={SETTLE_META[row.settle_status].color} style={{ cursor: "pointer" }} onClick={() => toggleSettle(row)}>
+          {SETTLE_META[row.settle_status].label}
+        </Tag>
+      ),
     },
     {
       title: "操作",
       key: "actions",
-      width: 220,
+      width: 130,
       render: (_, row) => (
         <Space size={4} wrap>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
             编辑
           </Button>
-          {row.status === "pending" && (
-            <Button size="small" type="primary" ghost onClick={() => changeStatus(row, "shipped", "发货")}>
-              发货
-            </Button>
-          )}
-          {row.status === "shipped" && (
-            <Button size="small" type="primary" ghost onClick={() => changeStatus(row, "delivered", "完成")}>
-              完成
-            </Button>
-          )}
-          {(row.status === "pending" || row.status === "shipped") && (
-            <Button size="small" onClick={() => changeStatus(row, "refunded", "退款")}>
-              退款
-            </Button>
-          )}
           <Popconfirm
             title={`删除礼品单 ${row.order_no}？删除后不可恢复`}
             okText="删除"
@@ -242,7 +284,7 @@ export function GiftsPage() {
     <div>
       <PageHeader
         icon={<GiftOutlined />}
-        eyebrow="礼品单"
+        eyebrow="礼品单台账"
         title="礼品单"
         extra={
           <Button
@@ -265,17 +307,9 @@ export function GiftsPage() {
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
             prefix={<SearchOutlined style={{ color: "var(--ops-text-secondary)" }} />}
-            placeholder="搜索单号 / 收礼人 / 礼品"
+            placeholder="搜索订单编号 / 旺旺号 / 关键词 / 规格"
             allowClear
-            style={{ width: 240 }}
-          />
-          <Select
-            value={statusFilter}
-            onChange={setStatusFilter}
-            placeholder="按状态筛选"
-            allowClear
-            options={statusFilters}
-            style={{ width: 150 }}
+            style={{ width: 260 }}
           />
           <Select
             value={storeFilter}
@@ -284,6 +318,22 @@ export function GiftsPage() {
             allowClear
             options={storeOptions}
             style={{ width: 180 }}
+          />
+          <Select
+            value={reviewFilter}
+            onChange={setReviewFilter}
+            placeholder="评论状态"
+            allowClear
+            options={REVIEW_OPTIONS}
+            style={{ width: 120 }}
+          />
+          <Select
+            value={settleFilter}
+            onChange={setSettleFilter}
+            placeholder="结款状态"
+            allowClear
+            options={SETTLE_OPTIONS}
+            style={{ width: 120 }}
           />
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
@@ -300,14 +350,14 @@ export function GiftsPage() {
         </Col>
         <Col xs={24} sm={8}>
           <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>待发货</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#fa8c16" }}>{pending}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>未评论</Text>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#fa8c16" }}>{unreviewed}</div>
           </Card>
         </Col>
         <Col xs={24} sm={8}>
           <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>已发货</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#1677ff" }}>{shipped}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>未结款</Text>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#1677ff" }}>{unsettled}</div>
           </Card>
         </Col>
       </Row>
@@ -319,7 +369,7 @@ export function GiftsPage() {
           columns={columns}
           dataSource={filtered}
           pagination={{ pageSize: 10, showTotal: (count) => `共 ${count} 单` }}
-          scroll={{ x: 1100 }}
+          scroll={{ x: 1400 }}
         />
       </Card>
 
@@ -333,48 +383,60 @@ export function GiftsPage() {
         }}
         confirmLoading={saving}
         okText={editing ? "保存" : "创建"}
+        destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={submitGift} style={{ marginTop: 8 }}>
-          <Form.Item
-            name="order_no"
-            label="订单号"
-            extra="留空自动生成"
-          >
-            <Input placeholder="如：淘宝订单号，留空自动生成" maxLength={40} />
-          </Form.Item>
-          <Form.Item
-            name="recipient"
-            label="收礼人"
-            rules={[{ required: true, message: "请输入收礼人" }]}
-          >
-            <Input placeholder="收礼人姓名" />
-          </Form.Item>
-          <Form.Item
-            name="gift_name"
-            label="礼品名称"
-            rules={[{ required: true, message: "请输入礼品名称" }]}
-          >
-            <Input placeholder="如：中秋伴手礼盒" />
-          </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item
-                name="quantity"
-                label="数量"
-                initialValue={1}
-                rules={[{ required: true, message: "请输入数量" }]}
-              >
-                <InputNumber min={1} max={999} style={{ width: "100%" }} />
+              <Form.Item name="order_time" label="下单时间">
+                <DatePicker showTime style={{ width: "100%" }} />
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item
-                name="price"
-                label="单价（元）"
-                initialValue={0}
-                rules={[{ required: true, message: "请输入单价" }]}
-              >
+              <Form.Item name="store_id" label="店铺" initialValue={0}>
+                <Select options={storeOptions} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="keyword" label="关键词">
+                <Input placeholder="如：礼品 女装" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="spec" label="规格">
+                <Input placeholder="如：S 码 / 红色" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="price" label="金额（元）" initialValue={0}>
                 <InputNumber min={0} step={1} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="commission" label="佣金（元）" initialValue={0}>
+                <InputNumber min={0} step={1} style={{ width: "100%" }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="wangwang" label="旺旺号">
+            <Input placeholder="买家旺旺号" />
+          </Form.Item>
+          <Form.Item name="order_no" label="订单编号" extra="留空自动生成">
+            <Input placeholder="如：淘宝订单号，留空自动生成" maxLength={40} />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="review_status" label="评论状态" initialValue="none">
+                <Select options={REVIEW_OPTIONS} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="settle_status" label="结款状态" initialValue="unsettled">
+                <Select options={SETTLE_OPTIONS} />
               </Form.Item>
             </Col>
           </Row>

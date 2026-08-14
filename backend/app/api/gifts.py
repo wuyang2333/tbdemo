@@ -1,4 +1,4 @@
-﻿"""礼品单：礼品订单管理（不区分店铺），支持手动/自动订单号、编辑与操作日志。"""
+"""礼品单：订单台账管理（日期/下单时间/店铺/关键词/规格/金额/佣金/旺旺号/订单号/评论/结款）。"""
 
 from __future__ import annotations
 
@@ -14,21 +14,23 @@ from backend.app.core.logs import log_op
 
 router = APIRouter()
 
-GIFT_STATUSES = ("pending", "shipped", "delivered", "refunded")
-STATUS_LABELS = {
-    "pending": "待发货",
-    "shipped": "已发货",
-    "delivered": "已完成",
-    "refunded": "已退款",
-}
+REVIEW_STATUSES = ("none", "reviewed")
+SETTLE_STATUSES = ("unsettled", "settled")
+REVIEW_LABELS = {"none": "未评论", "reviewed": "已评论"}
+SETTLE_LABELS = {"unsettled": "未结款", "settled": "已结款"}
 
 
 class GiftIn(BaseModel):
     order_no: str = ""
-    recipient: str
-    gift_name: str
-    quantity: int = 1
+    store_id: int = 0
+    keyword: str = ""
+    spec: str = ""
     price: float = 0
+    commission: float = 0
+    wangwang: str = ""
+    order_time: str = ""
+    review_status: str = "none"
+    settle_status: str = "unsettled"
 
 
 class GiftStatusIn(BaseModel):
@@ -60,31 +62,38 @@ def _payload(row) -> dict:
         "store_id": row["store_id"],
         "store_name": row["store_name"] or "未关联店铺",
         "order_no": row["order_no"],
+        "keyword": row["keyword"],
+        "spec": row["spec"],
+        "price": row["price"],
+        "commission": row["commission"],
+        "wangwang": row["wangwang"],
+        "order_time": row["order_time"],
+        "review_status": row["review_status"],
+        "settle_status": row["settle_status"],
+        "status": row["status"],
         "recipient": row["recipient"],
         "gift_name": row["gift_name"],
         "quantity": row["quantity"],
-        "price": row["price"],
-        "status": row["status"],
         "created_at": row["created_at"],
     }
 
 
-def _validate_fields(body: GiftIn) -> tuple[str, str]:
-    recipient = body.recipient.strip()
-    gift_name = body.gift_name.strip()
-    if not recipient:
-        raise HTTPException(status_code=400, detail="收礼人不能为空")
-    if not gift_name:
-        raise HTTPException(status_code=400, detail="礼品名称不能为空")
-    if not (1 <= body.quantity <= 999):
-        raise HTTPException(status_code=400, detail="数量需在 1-999 之间")
+def _validate(body: GiftIn) -> dict:
+    keyword = body.keyword.strip()
+    spec = body.spec.strip()
+    wangwang = body.wangwang.strip()
     if not (0 <= body.price <= 999999):
-        raise HTTPException(status_code=400, detail="单价超出范围")
-    return recipient, gift_name
+        raise HTTPException(status_code=400, detail="金额超出范围")
+    if not (0 <= body.commission <= 999999):
+        raise HTTPException(status_code=400, detail="佣金超出范围")
+    if body.review_status not in REVIEW_STATUSES:
+        raise HTTPException(status_code=400, detail="评论状态不正确")
+    if body.settle_status not in SETTLE_STATUSES:
+        raise HTTPException(status_code=400, detail="结款状态不正确")
+    return {"keyword": keyword, "spec": spec, "wangwang": wangwang}
 
 
 def _resolve_order_no(db, body: GiftIn, exclude_id: int | None = None) -> str:
-    """手动订单号优先；留空则自动生成。手动订单号做查重。"""
     order_no = body.order_no.strip()
     if order_no:
         if len(order_no) > 40:
@@ -105,7 +114,8 @@ def _resolve_order_no(db, body: GiftIn, exclude_id: int | None = None) -> str:
 @router.get("")
 def list_gifts(
     store_id: int | None = None,
-    status: str | None = None,
+    review_status: str | None = None,
+    settle_status: str | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -119,10 +129,13 @@ def list_gifts(
     if store_id is not None:
         query += " AND g.store_id = ?"
         params.append(store_id)
-    if status:
-        query += " AND g.status = ?"
-        params.append(status)
-    query += " ORDER BY g.id DESC"
+    if review_status:
+        query += " AND g.review_status = ?"
+        params.append(review_status)
+    if settle_status:
+        query += " AND g.settle_status = ?"
+        params.append(settle_status)
+    query += " ORDER BY COALESCE(g.order_time, g.created_at) DESC, g.id DESC"
     rows = db.execute(query, params).fetchall()
     return {"items": [_payload(row) for row in rows]}
 
@@ -133,17 +146,35 @@ def create_gift(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    recipient, gift_name = _validate_fields(body)
+    fields = _validate(body)
+    if body.store_id != 0:
+        store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+        if not store:
+            raise HTTPException(status_code=400, detail="所选店铺不存在")
     order_no = _resolve_order_no(db, body)
+    order_time = body.order_time.strip() or _now()
     cur = db.execute(
         """
-        INSERT INTO gifts (store_id, order_no, recipient, gift_name, quantity, price, status, created_at)
-        VALUES (0, ?, ?, ?, ?, ?, 'pending', ?)
+        INSERT INTO gifts (store_id, order_no, keyword, spec, price, commission, wangwang, order_time,
+                           review_status, settle_status, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
-        (order_no, recipient, gift_name, body.quantity, body.price, _now()),
+        (
+            body.store_id,
+            order_no,
+            fields["keyword"],
+            fields["spec"],
+            body.price,
+            body.commission,
+            fields["wangwang"],
+            order_time,
+            body.review_status,
+            body.settle_status,
+            _now(),
+        ),
     )
     item = _payload(_get_gift_or_404(db, cur.lastrowid))
-    log_op(db, user, "gifts", "create", f"{recipient} · {gift_name}", f"新增礼品单 {order_no}")
+    log_op(db, user, "gifts", "create", order_no, f"新增礼品单 {order_no}")
     return {"item": item}
 
 
@@ -155,7 +186,11 @@ def update_gift(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
-    recipient, gift_name = _validate_fields(body)
+    fields = _validate(body)
+    if body.store_id != 0:
+        store = db.execute("SELECT id FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+        if not store:
+            raise HTTPException(status_code=400, detail="所选店铺不存在")
     order_no = body.order_no.strip() or row["order_no"]
     if len(order_no) > 40:
         raise HTTPException(status_code=400, detail="订单号过长（最多 40 个字符）")
@@ -165,39 +200,62 @@ def update_gift(
     ).fetchone()
     if exists:
         raise HTTPException(status_code=400, detail=f"订单号「{order_no}」已存在，请检查后重试")
+    order_time = body.order_time.strip() or row["order_time"] or row["created_at"]
     db.execute(
         """
         UPDATE gifts
-        SET order_no = ?, recipient = ?, gift_name = ?, quantity = ?, price = ?
+        SET store_id = ?, order_no = ?, keyword = ?, spec = ?, price = ?, commission = ?,
+            wangwang = ?, order_time = ?, review_status = ?, settle_status = ?
         WHERE id = ?
         """,
-        (order_no, recipient, gift_name, body.quantity, body.price, gift_id),
+        (
+            body.store_id,
+            order_no,
+            fields["keyword"],
+            fields["spec"],
+            body.price,
+            body.commission,
+            fields["wangwang"],
+            order_time,
+            body.review_status,
+            body.settle_status,
+            gift_id,
+        ),
     )
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "update", order_no, f"编辑礼品单 {row['order_no']}")
     return {"item": item}
 
 
-@router.post("/{gift_id}/status")
-def update_gift_status(
+@router.post("/{gift_id}/review")
+def update_gift_review(
     gift_id: int,
     body: GiftStatusIn,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    if body.status not in GIFT_STATUSES:
-        raise HTTPException(status_code=400, detail="状态不正确")
+    if body.status not in REVIEW_STATUSES:
+        raise HTTPException(status_code=400, detail="评论状态不正确")
     row = _get_gift_or_404(db, gift_id)
-    db.execute("UPDATE gifts SET status = ? WHERE id = ?", (body.status, gift_id))
+    db.execute("UPDATE gifts SET review_status = ? WHERE id = ?", (body.status, gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
-    log_op(
-        db,
-        user,
-        "gifts",
-        "status",
-        row["order_no"],
-        f"状态更新为「{STATUS_LABELS[body.status]}」",
-    )
+    log_op(db, user, "gifts", "review", row["order_no"], f"评论状态改为「{REVIEW_LABELS[body.status]}」")
+    return {"item": item}
+
+
+@router.post("/{gift_id}/settle")
+def update_gift_settle(
+    gift_id: int,
+    body: GiftStatusIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if body.status not in SETTLE_STATUSES:
+        raise HTTPException(status_code=400, detail="结款状态不正确")
+    row = _get_gift_or_404(db, gift_id)
+    db.execute("UPDATE gifts SET settle_status = ? WHERE id = ?", (body.status, gift_id))
+    item = _payload(_get_gift_or_404(db, gift_id))
+    log_op(db, user, "gifts", "settle", row["order_no"], f"结款状态改为「{SETTLE_LABELS[body.status]}」")
     return {"item": item}
 
 

@@ -87,6 +87,29 @@ def _migrate_model_configs(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+
+def _migrate_gifts(conn: sqlite3.Connection) -> None:
+    """礼品单台账化：补充关键词、规格、佣金、旺旺号、评论/结款状态、下单时间。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(gifts)")}
+    if "keyword" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN keyword TEXT NOT NULL DEFAULT ''")
+    if "spec" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN spec TEXT NOT NULL DEFAULT ''")
+    if "commission" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN commission REAL NOT NULL DEFAULT 0")
+    if "wangwang" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN wangwang TEXT NOT NULL DEFAULT ''")
+    if "review_status" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN review_status TEXT NOT NULL DEFAULT 'none'")
+    if "settle_status" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN settle_status TEXT NOT NULL DEFAULT 'unsettled'")
+    if "order_time" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN order_time TEXT")
+    conn.execute("UPDATE gifts SET order_time = created_at WHERE order_time IS NULL OR order_time = ''")
+    conn.execute("UPDATE gifts SET wangwang = recipient WHERE wangwang = '' AND recipient != ''")
+    conn.commit()
+
+
 def _seed_stores(conn: sqlite3.Connection) -> None:
     """首次运行时写入几家演示店铺，方便查看健康状态效果。"""
     count = conn.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
@@ -299,5 +322,6 @@ def init_db() -> None:
         _seed_stores(conn)
         _migrate_logs(conn)
         _seed_gifts(conn)
+        _migrate_gifts(conn)
     finally:
         conn.close()
