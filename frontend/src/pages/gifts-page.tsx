@@ -4,6 +4,7 @@ import {
   Card,
   Col,
   DatePicker,
+  Divider,
   Form,
   Input,
   InputNumber,
@@ -342,7 +343,10 @@ export function GiftsPage() {
     field: "review_status" | "settle_status",
     value: GiftReviewStatus | GiftSettleStatus
   ) => {
-    if (selectedKeys.length === 0) return;
+    if (selectedKeys.length === 0) {
+      message.warning("请先在表格里勾选要操作的订单");
+      return;
+    }
     try {
       await http.post("/gifts/batch", {
         ids: selectedKeys,
@@ -746,6 +750,25 @@ export function GiftsPage() {
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
           </Button>
+          <Divider type="vertical" />
+          {selectedKeys.length > 0 && (
+            <Text strong style={{ color: "#ff5000" }}>已选 {selectedKeys.length} 单</Text>
+          )}
+          <Button size="small" type="primary" ghost onClick={() => batchSet("review_status", "reviewed")}>
+            标记已评论
+          </Button>
+          <Button size="small" onClick={() => batchSet("review_status", "none")}>
+            标记未评论
+          </Button>
+          <Button size="small" type="primary" ghost onClick={() => batchSet("settle_status", "settled")}>
+            标记已结款
+          </Button>
+          <Button size="small" onClick={() => batchSet("settle_status", "unsettled")}>
+            标记未结款
+          </Button>
+          <Button size="small" onClick={() => setSelectedKeys([])}>
+            取消选择
+          </Button>
         </Space>
       </Card>
 
@@ -769,32 +792,6 @@ export function GiftsPage() {
           </Card>
         </Col>
       </Row>
-
-      {selectedKeys.length > 0 && (
-        <Card
-          variant="borderless"
-          style={{ marginBottom: 16, background: "#fff7e6", border: "1px solid #ffd591" }}
-        >
-          <Space wrap>
-            <Text strong>已选 {selectedKeys.length} 单</Text>
-            <Button size="small" type="primary" ghost onClick={() => batchSet("review_status", "reviewed")}>
-              标记已评论
-            </Button>
-            <Button size="small" onClick={() => batchSet("review_status", "none")}>
-              标记未评论
-            </Button>
-            <Button size="small" type="primary" ghost onClick={() => batchSet("settle_status", "settled")}>
-              标记已结款
-            </Button>
-            <Button size="small" onClick={() => batchSet("settle_status", "unsettled")}>
-              标记未结款
-            </Button>
-            <Button size="small" onClick={() => setSelectedKeys([])}>
-              取消选择
-            </Button>
-          </Space>
-        </Card>
-      )}
 
       <Card variant="borderless">
         <Table<Gift>
