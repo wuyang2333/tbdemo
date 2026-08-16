@@ -295,7 +295,6 @@ export function AnalyticsProductsPage() {
           { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
           { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
           { title: "占比", dataIndex: "sales_share", align: "right", width: 90, sorter: numSorter("sales_share"), render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
-          { title: "天数", dataIndex: "days", align: "right", width: 80, sorter: numSorter("days") },
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
@@ -351,7 +350,7 @@ export function AnalyticsProductsPage() {
             })}
             pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
             tableLayout="fixed"
-            scroll={{ x: isRealtime ? 1220 : 1310 }}
+            scroll={{ x: isRealtime ? 1220 : 1230 }}
           />
         </Card>
       )}
