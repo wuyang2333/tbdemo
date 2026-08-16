@@ -10,7 +10,6 @@ export type AlertConfig = {
     visitors_drop_pct: number;
     conversion_low: number;
     promo_roi_low: number;
-    real_roi_low: number;
     roi_high: number;
     min_visitors: number;
   };
@@ -20,7 +19,7 @@ export type AlertConfig = {
 
 export const DEFAULT_ALERT_CONFIG: AlertConfig = {
   hour: { roi_high: 2, roi_low: 1, drop_pct: 50, surge_pct: 100 },
-  product: { sales_drop_pct: 50, visitors_drop_pct: 50, conversion_low: 0.5, promo_roi_low: 1, real_roi_low: 1, roi_high: 2, min_visitors: 50 },
+  product: { sales_drop_pct: 50, visitors_drop_pct: 50, conversion_low: 0.5, promo_roi_low: 1, roi_high: 2, min_visitors: 50 },
   plan: { budget_over: 1, budget_warn: 0.8, roi_low: 1, roi_drop_ratio: 0.6 },
   rules: [],
 };

@@ -312,14 +312,12 @@ export function AnalyticsProductsPage() {
       const conv = item.conversion_rate;
       const roi = item.promo_roi;
       const spend = item.promo_spend ?? 0;
-      const realRoi = spend > 0 ? item.sales / spend : null;
       const out: { level: string; type: string; message: string }[] = [];
       const name = `${item.item_title}（${item.item_id}）`;
       if (cyc != null && cyc < -alertConfig.product.sales_drop_pct) out.push({ level: "error", type: "销售额骤降", message: `${name}销售额环比 ${cyc.toFixed(1)}%` });
       if (vcyc != null && vcyc < -alertConfig.product.visitors_drop_pct) out.push({ level: "warning", type: "访客骤降", message: `${name}访客环比 ${vcyc.toFixed(1)}%` });
       if (conv != null && conv < alertConfig.product.conversion_low && (item.visitors ?? 0) > alertConfig.product.min_visitors) out.push({ level: "warning", type: "转化异常", message: `${name}转化率仅 ${conv.toFixed(2)}%` });
       if (roi != null && roi < alertConfig.product.promo_roi_low && spend > 0) out.push({ level: "error", type: "推广ROI偏低", message: `${name}推广ROI ${roi.toFixed(2)}` });
-      if (realRoi != null && realRoi < alertConfig.product.real_roi_low) out.push({ level: "error", type: "真实ROI偏低", message: `${name}真实ROI ${realRoi.toFixed(2)}` });
       if (roi != null && roi >= alertConfig.product.roi_high && spend > 0) out.push({ level: "success", type: "推广ROI优秀", message: `${name}推广ROI ${roi.toFixed(2)}，值得加推` });
       return out;
     })
@@ -962,7 +960,6 @@ export function AnalyticsProductsPage() {
           { group: "product", key: "visitors_drop_pct", label: "访客骤降阈值 %", hint: "访客环比下跌超过该百分比提醒", min: 1, max: 500, step: 5 },
           { group: "product", key: "conversion_low", label: "转化率下限 %", hint: "转化率低于该值且有流量时提醒", min: 0.01, max: 10, step: 0.1 },
           { group: "product", key: "promo_roi_low", label: "推广 ROI 下限", hint: "推广ROI低于该值提醒", min: 0.1, max: 10, step: 0.1 },
-          { group: "product", key: "real_roi_low", label: "真实 ROI 下限", hint: "销售额÷推广花费 低于该值提醒", min: 0.1, max: 10, step: 0.1 },
           { group: "product", key: "roi_high", label: "建议加推 ROI 门槛", hint: "推广ROI达到该值提示值得加推", min: 0.1, max: 100, step: 0.1 },
           { group: "product", key: "min_visitors", label: "最低访客数", hint: "转化提醒的访客门槛（避免低流量误报）", min: 1, max: 1000, step: 10 },
         ]}

@@ -22,6 +22,7 @@ export const RULE_FIELDS: Record<RuleModule, RuleField[]> = {
     { key: "promo_spend", label: "推广花费", kind: "value" },
     { key: "promo_sales", label: "推广成交", kind: "value" },
     { key: "promo_roi", label: "推广ROI", kind: "value" },
+    { key: "real_roi", label: "真实ROI", kind: "value" },
   ],
   plan: [
     { key: "spend", label: "花费", kind: "cycle" },
@@ -55,6 +56,11 @@ const CYCLE_MAP: Record<string, string> = {
 };
 
 export function ruleValue(item: Record<string, unknown>, field: string): number | null {
+  if (field === "real_roi") {
+    const spend = typeof item.promo_spend === "number" ? item.promo_spend : 0;
+    const sales = typeof item.sales === "number" ? item.sales : 0;
+    return spend > 0 ? sales / spend : null;
+  }
   const v = item[field];
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
