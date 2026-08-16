@@ -153,8 +153,8 @@ export function PromotionsPlansPage() {
 
   const columns: TableColumnsType<PromoPlan> = [
     { title: "场景", dataIndex: "scene_name", width: 120, sorter: (a, b) => a.scene_name.localeCompare(b.scene_name, "zh") },
-    { title: "计划名", dataIndex: "plan_name", width: 200, ellipsis: true, sorter: (a, b) => a.plan_name.localeCompare(b.plan_name, "zh") },
-    { title: "商品", key: "item", width: 200, ellipsis: true, render: (_, row: PromoPlan) => planItems[row.campaign_id]?.item_title || "—", sorter: (a, b) => (planItems[a.campaign_id]?.item_title || "").localeCompare(planItems[b.campaign_id]?.item_title || "", "zh") },
+    { title: "计划名", dataIndex: "plan_name", width: 200, ellipsis: true },
+    { title: "商品", key: "item", width: 200, ellipsis: true, render: (_, row: PromoPlan) => planItems[row.campaign_id]?.item_title || "—" },
     { title: "状态", dataIndex: "status", width: 80, sorter: (a, b) => a.status.localeCompare(b.status, "zh"), render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
     { title: "日预算", dataIndex: "day_budget", align: "right", width: 90, sorter: (a, b) => a.day_budget - b.day_budget, render: (v: number) => (v ? fmtMoney(v) : "—") },
     { title: "出价", key: "bid", width: 110, sorter: (a, b) => (a.bid_value || 0) - (b.bid_value || 0), render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
