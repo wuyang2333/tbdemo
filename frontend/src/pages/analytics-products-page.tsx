@@ -1,4 +1,4 @@
-import { BarChartOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, CopyOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
@@ -112,45 +112,15 @@ export function AnalyticsProductsPage() {
         ) : (
           <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
         )}
-        <div style={{ minWidth: 0, position: "relative", paddingTop: hovered ? 26 : 0, transition: "padding-top 0.15s" }}>
-          {hovered && (
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                display: "flex",
-                background: "#1677ff",
-                borderRadius: 4,
-                overflow: "hidden",
-                zIndex: 2,
-              }}
-            >
-              <Button
-                size="small"
-                type="text"
-                style={{ color: "#fff", height: 22, lineHeight: "22px", padding: "0 10px", fontSize: 12 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyItemId(row.item_id);
-                }}
-              >
-                复制
-              </Button>
-              <Button
-                size="small"
-                type="text"
-                style={{ color: "#fff", height: 22, lineHeight: "22px", padding: "0 10px", fontSize: 12 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  message.info("AI分析功能开发中");
-                }}
-              >
-                AI分析
-              </Button>
-            </div>
-          )}
+        <div style={{ minWidth: 0, position: "relative", paddingTop: hovered ? 28 : 0, transition: "padding-top 0.16s ease" }}>
+          <div className={`product-hover-bar${hovered ? " visible" : ""}`} onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="phb-btn" onClick={() => copyItemId(row.item_id)}>
+              <CopyOutlined /> 复制
+            </button>
+            <button type="button" className="phb-btn" onClick={() => message.info("AI分析功能开发中")}>
+              <RobotOutlined /> AI分析
+            </button>
+          </div>
           <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
           <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>ID {row.item_id}</div>
         </div>

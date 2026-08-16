@@ -448,3 +448,47 @@ body[data-theme="light"] .ops-hero::before {
     transform: translateY(0);
   }
 }
+
+/* 商品分析表格 hover 操作栏 */
+.product-hover-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px;
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  border-radius: 7px;
+  box-shadow: 0 3px 12px rgba(22, 119, 255, 0.35);
+  opacity: 0;
+  transform: translateY(-3px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+  z-index: 3;
+}
+.product-hover-bar.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.product-hover-bar .phb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  font-size: 12px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.product-hover-bar .phb-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
