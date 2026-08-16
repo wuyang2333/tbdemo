@@ -565,6 +565,31 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS promo_item_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                item_title TEXT NOT NULL DEFAULT '',
+                mode TEXT NOT NULL,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                orders INTEGER NOT NULL DEFAULT 0,
+                impressions INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'report',
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, item_id, mode)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promo_item_stats ON promo_item_stats(store_id, item_id, mode)
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS promo_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,

@@ -362,3 +362,113 @@ def fetch_plan_realtime(store: dict) -> list[dict]:
         item["roi"] = round(item["sales"] / item["spend"], 2) if item["spend"] else 0.0
         out.append(item)
     return out
+
+
+def fetch_item_report(store: dict, start: str, end: str, realtime: bool = False) -> list[dict]:
+    """万相台商品报表（方案A）：按商品维度的推广花费/成交/ROI/点击。
+
+    实时走 report-realtime（--dim promotion），历史走 report-item；两者都支持任意日期区间。
+    """
+    cmd = "report-realtime" if realtime else "report-item"
+    all_rows: list[dict] = []
+    offset = 0
+    for _ in range(200):
+        payload = _run_json(
+            store,
+            [cmd, "--date", start, "--end-date", end, "--dim", "promotion", "--limit", "100", "--offset", str(offset), "--raw"],
+            timeout=180,
+        )
+        d = payload.get("data") or {}
+        rows = d.get("list") or []
+        count = int(_num(d.get("count")))
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            item_id = str(r.get("promotionId") or "").strip()
+            if not item_id:
+                continue
+            all_rows.append(
+                {
+                    "item_id": item_id,
+                    "item_title": r.get("promotionName") or "",
+                    "spend": round(_num(r.get("charge")), 2),
+                    "sales": round(_num(r.get("alipayInshopAmt")), 2),
+                    "roi": round(_num(r.get("roi")), 2),
+                    "clicks": int(_num(r.get("click"))),
+                    "orders": int(_num(r.get("alipayInshopNum"))),
+                    "impressions": int(_num(r.get("adPv"))),
+                }
+            )
+        offset += len(rows)
+        if not rows or offset >= count:
+            break
+    return all_rows
+
+
+def _campaign_item(row: dict) -> tuple[str | None, str | None]:
+    """从计划行里取出 (宝贝ID, 商品标题)，对应 CLI 的 _promo_item。"""
+    for ag_field in ("adgroupList", "lastAdgroup"):
+        ag = row.get(ag_field)
+        if isinstance(ag, dict):
+            ag = [ag]
+        if isinstance(ag, list) and ag:
+            mat = (ag[0] or {}).get("material") or {}
+            mid = mat.get("materialId")
+            if mid:
+                return str(mid), (mat.get("title") or mat.get("itemTitle") or "")
+    return None, None
+
+
+def _promo_item_map(store: dict) -> dict[str, list[dict]]:
+    """宝贝↔计划映射：campaign_id -> [{item_id, item_title}]（方案B）。"""
+    mapping: dict[str, list[dict]] = {}
+    for cmd in ("promo-wholesite", "promo-keyword", "promo-crowd"):
+        offset = 0
+        for _ in range(200):
+            payload = _run_json(store, [cmd, "--limit", "100", "--page", str(offset // 100 + 1), "--raw"], timeout=180)
+            d = payload.get("data") or {}
+            rows = d.get("list") or []
+            count = int(_num(d.get("count")))
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                cid = str(r.get("campaignId") or "").strip()
+                if not cid:
+                    continue
+                item_id, item_title = _campaign_item(r)
+                if not item_id:
+                    continue
+                mapping.setdefault(cid, []).append({"item_id": item_id, "item_title": item_title or ""})
+            offset += len(rows)
+            if not rows or offset >= count:
+                break
+    return mapping
+
+
+def fetch_promo_item_fallback(store: dict, start: str, end: str, realtime: bool = False) -> list[dict]:
+    """方案B兜底：宝贝↔计划映射 + 计划花费归因（单商品计划全额，多商品计划均摊）。"""
+    stats = fetch_plan_realtime(store) if realtime else fetch_plan_reports(store, start, end)
+    mapping = _promo_item_map(store)
+    agg: dict[str, dict] = {}
+    for st in stats:
+        cid = st.get("campaign_id") or ""
+        items = mapping.get(cid) or []
+        if not items:
+            continue
+        n = len(items)
+        for it in items:
+            row = agg.setdefault(
+                it["item_id"],
+                {"item_id": it["item_id"], "item_title": it.get("item_title") or "", "spend": 0.0, "sales": 0.0, "roi": 0.0, "clicks": 0, "orders": 0, "impressions": 0},
+            )
+            row["spend"] += _num(st.get("spend")) / n
+            row["sales"] += _num(st.get("sales")) / n
+            row["clicks"] += int(_num(st.get("clicks"))) / n
+    out: list[dict] = []
+    for row in agg.values():
+        row["spend"] = round(row["spend"], 2)
+        row["sales"] = round(row["sales"], 2)
+        row["clicks"] = int(row["clicks"])
+        row["roi"] = round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0
+        out.append(row)
+    return out

@@ -420,6 +420,10 @@ export type AnalyticsProduct = {
   sales_cycle?: number;
   conversion_cycle?: number;
   add_cart_cycle?: number;
+  promo_spend?: number | null;
+  promo_sales?: number | null;
+  promo_roi?: number | null;
+  promo_share?: number | null;
 };
 
 export type AnalyticsProducts = {

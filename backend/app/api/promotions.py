@@ -15,9 +15,11 @@ from backend.app.api.auth import get_current_user
 from backend.app.core.alimama import (
     AlimamaError,
     check_access,
+    fetch_item_report,
     fetch_plan_realtime,
     fetch_plan_reports,
     fetch_plan_snapshots,
+    fetch_promo_item_fallback,
     fetch_realtime,
     fetch_scene_daily,
 )
@@ -435,6 +437,69 @@ def sync_plans(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
     _log(db, user, "同步推广计划", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+
+
+@router.post("/sync-items")
+def sync_items(
+    mode: str = "realtime",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """同步商品级推广数据到 promo_item_stats。
+
+    优先方案A：万相台商品报表（report-item / report-realtime，按商品维度）；
+    商品报表为空或失败时退回方案B：宝贝↔计划映射 + 计划花费归因（单商品计划全额，多商品均摊）。
+    """
+    today = date_cls.today()
+    if mode == "realtime":
+        start = end = today.isoformat()
+        realtime = True
+        db_mode = "realtime"
+    elif mode == "yesterday":
+        d = today - timedelta(days=1)
+        start = end = d.isoformat()
+        realtime = False
+        db_mode = "yesterday"
+    else:
+        try:
+            days = int(mode)
+        except (TypeError, ValueError):
+            days = 7
+        if not (1 <= days <= 90):
+            days = 7
+        start = (today - timedelta(days=days - 1)).isoformat()
+        end = today.isoformat()
+        realtime = False
+        db_mode = str(days)
+    now = _now()
+    results = []
+    for store in _bound_stores(db):
+        try:
+            rows = fetch_item_report(store, start, end, realtime=realtime)
+            source = "report"
+            if not rows:
+                rows = fetch_promo_item_fallback(store, start, end, realtime=realtime)
+                source = "plan"
+            for it in rows:
+                db.execute(
+                    "INSERT INTO promo_item_stats (store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(store_id, item_id, mode) DO UPDATE SET "
+                    "item_title = excluded.item_title, spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
+                    "clicks = excluded.clicks, orders = excluded.orders, impressions = excluded.impressions, "
+                    "source = excluded.source, updated_at = excluded.updated_at",
+                    (
+                        store["id"], it["item_id"], it.get("item_title") or "", db_mode,
+                        it.get("spend") or 0, it.get("sales") or 0, it.get("roi") or 0,
+                        it.get("clicks") or 0, it.get("orders") or 0, it.get("impressions") or 0,
+                        source, now,
+                    ),
+                )
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(rows), "source": source})
+        except AlimamaError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+    _log(db, user, "同步商品推广数据", "", f"模式={db_mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "mode": db_mode}
 
 
 @router.put("/plans/{plan_id}")

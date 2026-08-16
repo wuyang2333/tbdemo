@@ -1098,6 +1098,21 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, db) -> 
         range_label = f"近 {days} 天（{start.strftime('%m-%d')}~{today.strftime('%m-%d')}）"
         trend = [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
 
+    promo_mode = "realtime" if mode == "realtime" else ("yesterday" if mode == "yesterday" else (str(int(mode)) if str(mode).isdigit() else "7"))
+    prow = db.execute(
+        "SELECT * FROM promo_item_stats WHERE item_id = ? AND mode = ?" + sf,
+        [item_id, promo_mode] + sp,
+    ).fetchone()
+    promo = (
+        {
+            "spend": round(prow["spend"] or 0, 2),
+            "sales": round(prow["sales"] or 0, 2),
+            "roi": round(prow["roi"] or 0, 2),
+            "clicks": int(prow["clicks"] or 0),
+        }
+        if prow
+        else None
+    )
     return {
         "item_id": item_id,
         "title": title or item_id,
@@ -1109,6 +1124,7 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, db) -> 
         "rank": rank,
         "share": share,
         "store_total_sales": store_total,
+        "promo": promo,
     }
 
 
@@ -1128,6 +1144,10 @@ def _product_data_lines(d: dict) -> list[str]:
         ),
         f"店铺内排名第 {d['rank']} 名，占全店销售额 {d['share']}%（全店同期销售额 {d['store_total_sales']:.0f} 元）",
     ]
+    if d.get("promo"):
+        promo = d["promo"]
+        share = round(min(promo["sales"] / (d["cur"]["sales"] or 1) * 100, 100.0), 1)
+        lines.append(f"推广：花费 {promo['spend']:.0f} 元，广告成交 {promo['sales']:.0f} 元，推广ROI {promo['roi']}，广告成交占该商品销售额 {share}%")
     if d["trend"]:
         lines.append("逐日销售额：" + "、".join(d["trend"]))
     return lines
@@ -1149,14 +1169,25 @@ def _build_product_prompt(d: dict) -> str:
 def _product_metrics(d: dict) -> list[dict]:
     cur = d["cur"]
     chg = d["chg"]
-    return [
+    metrics = [
         {"label": "销售额", "value": f"¥{cur['sales']:,.0f}", "change": chg["sales"], "unit": "%"},
         {"label": "订单", "value": f"{cur['orders']}", "change": chg["orders"], "unit": "%"},
         {"label": "转化率", "value": f"{cur['conversion_rate']}%", "change": chg["conversion"], "unit": "pp"},
         {"label": "加购", "value": f"{cur['add_cart']}", "change": chg["add_cart"], "unit": "%"},
         {"label": "退款", "value": f"¥{cur['refund_amount']:,.0f}", "change": None, "unit": "val"},
-        {"label": "店铺排名", "value": f"第{d['rank']}名", "change": None, "unit": "val"},
     ]
+    if d.get("promo"):
+        promo = d["promo"]
+        share = round(min(promo["sales"] / (cur["sales"] or 1) * 100, 100.0), 1)
+        metrics.extend(
+            [
+                {"label": "推广花费", "value": f"¥{promo['spend']:,.0f}", "change": None, "unit": "val"},
+                {"label": "推广ROI", "value": f"{promo['roi']}", "change": None, "unit": "val"},
+                {"label": "广告占比", "value": f"{share}%", "change": None, "unit": "val"},
+            ]
+        )
+    metrics.append({"label": "店铺排名", "value": f"第{d['rank']}名", "change": None, "unit": "val"})
+    return metrics
 
 
 class ProductMsgIn(BaseModel):
@@ -1336,6 +1367,29 @@ def set_alerts_config(
     return {"ok": True, **cfg}
 # ---------- 商品分析 ----------
 
+def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
+    """给商品列表附加推广数据（promo_spend/promo_sales/promo_roi/promo_share）。"""
+    rows = db.execute(
+        "SELECT item_id, spend, sales, roi FROM promo_item_stats WHERE mode = ?" + sf,
+        [promo_mode] + sp,
+    ).fetchall()
+    p_map = {r["item_id"]: r for r in rows}
+    for it in items:
+        p = p_map.get(it["item_id"])
+        if p:
+            spend = round(p["spend"] or 0, 2)
+            sales = round(p["sales"] or 0, 2)
+            it["promo_spend"] = spend
+            it["promo_sales"] = sales
+            it["promo_roi"] = round(p["roi"] or 0, 2)
+            it["promo_share"] = round(min(sales / (it["sales"] or 1) * 100, 100.0), 1)
+        else:
+            it["promo_spend"] = None
+            it["promo_sales"] = None
+            it["promo_roi"] = None
+            it["promo_share"] = None
+
+
 @router.get("/products")
 def analytics_products(
     days: int = 14,
@@ -1382,6 +1436,7 @@ def analytics_products(
         total_sales = sum(x["sales"] for x in items) or 1
         for item in items[:20]:
             item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+        _attach_promo(db, items, "realtime", sf, sp)
         fetched = db.execute(
             "SELECT MAX(updated_at) AS m FROM store_item_realtime" + (" WHERE 1=1" + sf),
             sp,
@@ -1427,6 +1482,7 @@ def analytics_products(
     total_sales = sum(x["sales"] for x in items) or 1
     for item in items[:20]:
         item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+    _attach_promo(db, items, str(days), sf, sp)
     return {"items": items[:50], "total": len(items), "days": days, "mode": "days"}
 
 

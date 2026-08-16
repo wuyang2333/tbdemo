@@ -149,9 +149,10 @@ export function AnalyticsProductsPage() {
       const itemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(itemsUrl);
       const promoMode = mode === "realtime" ? "realtime" : "7";
       const promoRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync?mode=${promoMode}`);
+      const promoItemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync-items?mode=${mode === "realtime" ? "realtime" : mode}`);
       const label = mode === "realtime" ? "实时商品" : `近 ${mode} 天商品`;
-      message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家，推广 ${promoRes.data.ok}/${promoRes.data.total} 家`);
-      [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok), ...promoRes.data.results.filter((r) => !r.ok)]
+      message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家，推广 ${promoRes.data.ok}/${promoRes.data.total} 家，商品推广 ${promoItemsRes.data.ok}/${promoItemsRes.data.total} 家`);
+      [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok), ...promoRes.data.results.filter((r) => !r.ok), ...promoItemsRes.data.results.filter((r) => !r.ok)]
         .slice(0, 3)
         .forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
       await load(mode, storeId);
@@ -266,6 +267,9 @@ export function AnalyticsProductsPage() {
           { title: "销售额", dataIndex: "sales", align: "right", width: 130, sorter: numSorter("sales"), render: (v: number, row) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle ?? 0} /> },
           { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 120, sorter: numSorter("conversion_rate"), render: (v: number, row) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle ?? 0} /> },
           { title: "加购", dataIndex: "add_cart", align: "right", width: 100, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
+          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
+          { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
+          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
           { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
@@ -276,6 +280,9 @@ export function AnalyticsProductsPage() {
           { title: "访客", dataIndex: "visitors", align: "right", width: 100, sorter: numSorter("visitors"), render: (v: number) => fmtInt(v) },
           { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 100, sorter: numSorter("conversion_rate"), render: (v: number) => fmtPct(v) },
           { title: "加购", dataIndex: "add_cart", align: "right", width: 90, sorter: numSorter("add_cart"), render: (v: number) => fmtInt(v) },
+          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
+          { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
+          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
           { title: "占比", dataIndex: "sales_share", align: "right", width: 90, sorter: numSorter("sales_share"), render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
           { title: "天数", dataIndex: "days", align: "right", width: 80, sorter: numSorter("days") },
         ] as TableColumnsType<AnalyticsProduct>)),
@@ -334,7 +341,7 @@ export function AnalyticsProductsPage() {
               onMouseLeave: () => setHoverKey((k) => (k === record.item_id ? null : k)),
             })}
             pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
-            scroll={{ x: 900 }}
+            scroll={{ x: 1400 }}
           />
         </Card>
       )}
