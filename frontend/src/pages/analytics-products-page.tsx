@@ -125,6 +125,7 @@ function MetricCell({ value, change }: { value: string; change: number | null | 
 
 export function AnalyticsProductsPage() {
   const [data, setData] = useState<AnalyticsProducts | null>(null);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [view, setView] = useState<"realtime" | "yesterday" | "range">("realtime");
   const [range, setRange] = useState<[string, string] | null>(null);
   const [filterItemId, setFilterItemId] = useState("");
@@ -161,6 +162,7 @@ export function AnalyticsProductsPage() {
       if (storeId) params.set("store_id", String(storeId));
       const { data: res } = await http.get<AnalyticsProducts>(`/analytics/products?${params.toString()}`);
       setData(res);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setData(null);
@@ -425,6 +427,7 @@ export function AnalyticsProductsPage() {
           onChange={(e) => setFilterItemId(e.target.value)}
           style={{ width: 180 }}
         />
+        <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序

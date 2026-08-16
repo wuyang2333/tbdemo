@@ -13,6 +13,7 @@ const { Text } = Typography;
 
 export function PromotionsDataPage() {
   const [data, setData] = useState<PromoData | null>(null);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [mode, setMode] = useState("realtime");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -22,6 +23,7 @@ export function PromotionsDataPage() {
     try {
       const { data: res } = await http.get<PromoData>(`/promotions/data?mode=${encodeURIComponent(m)}`);
       setData(res);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setData(null);
@@ -64,6 +66,7 @@ export function PromotionsDataPage() {
         title="推广数据"
         extra={
           <Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <Button icon={<ReloadOutlined />} onClick={() => load(mode)}>
               刷新
             </Button>

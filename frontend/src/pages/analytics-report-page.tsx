@@ -18,6 +18,7 @@ function fmt(v: number): string {
 
 export function AnalyticsReportPage() {
   const [data, setData] = useState<AnalyticsReport | null>(null);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [loading, setLoading] = useState(false);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
@@ -26,6 +27,7 @@ export function AnalyticsReportPage() {
     try {
       const { data: res } = await http.get<AnalyticsReport>(`/analytics/report${storeId ? `?store_id=${storeId}` : ""}`);
       setData(res);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setData(null);
@@ -99,6 +101,7 @@ export function AnalyticsReportPage() {
         title="经营日报"
         extra={
           <Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>
               复制日报

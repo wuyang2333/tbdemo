@@ -130,6 +130,7 @@ function HourChart({
 
 export function AnalyticsHoursPage() {
   const [data, setData] = useState<AnalyticsHours | null>(null);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [quick, setQuick] = useState("today");
   const [range, setRange] = useState<[string, string] | null>(null);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
@@ -171,6 +172,7 @@ export function AnalyticsHoursPage() {
         if (sid) params.set("store_id", String(sid));
         const { data: res } = await http.get<AnalyticsHours>(`/analytics/hours?${params.toString()}`);
         setData(res);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
       } catch (error) {
         message.error(getApiErrorMessage(error));
         setData(null);
@@ -316,6 +318,7 @@ export function AnalyticsHoursPage() {
           当前范围：{data?.label ?? "今日"}
           {data?.peak_hour && data.peak_sales > 0 ? ` · 销售高峰 ${data.peak_hour}（${fmtMoney(data.peak_sales)}）` : ""}
         </Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
       </Space>
 
       {loading && !data ? (

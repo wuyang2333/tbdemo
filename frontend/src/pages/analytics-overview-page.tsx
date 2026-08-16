@@ -15,6 +15,7 @@ const { Text } = Typography;
 export function AnalyticsOverviewPage() {
   const navigate = useNavigate();
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [loading, setLoading] = useState(false);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
@@ -23,6 +24,7 @@ export function AnalyticsOverviewPage() {
     try {
       const { data } = await http.get<AnalyticsSummary>(`/analytics/summary?days=14${storeId ? `&store_id=${storeId}` : ""}`);
       setSummary(data);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setSummary(null);
@@ -59,6 +61,7 @@ export function AnalyticsOverviewPage() {
         title="总览"
         extra={
           <Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<FullscreenOutlined />} onClick={() => navigate("/board")}>
               大屏模式

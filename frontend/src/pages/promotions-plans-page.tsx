@@ -1,6 +1,7 @@
 import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
+import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
@@ -13,6 +14,7 @@ const { Text } = Typography;
 
 export function PromotionsPlansPage() {
   const [plans, setPlans] = useState<PromoPlan[]>([]);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [scene, setScene] = useState("");
   const [mode, setMode] = useState("realtime");
   const [loading, setLoading] = useState(false);
@@ -23,6 +25,7 @@ export function PromotionsPlansPage() {
     try {
       const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}&mode=${encodeURIComponent(m)}`);
       setPlans(data.items);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setPlans([]);
@@ -75,6 +78,7 @@ export function PromotionsPlansPage() {
         title="推广计划"
         extra={
           <Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新
             </Button>

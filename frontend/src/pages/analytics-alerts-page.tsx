@@ -1,6 +1,7 @@
 import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, InputNumber, Modal, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
+import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
@@ -13,6 +14,7 @@ const { Text } = Typography;
 
 export function AnalyticsAlertsPage() {
   const [alerts, setAlerts] = useState<AnalyticsAlert[]>([]);
+  const [lastUpdated, setLastUpdated] = useState("");
   const [baselineDays, setBaselineDays] = useState(7);
   const [loading, setLoading] = useState(false);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
@@ -22,6 +24,7 @@ export function AnalyticsAlertsPage() {
     try {
       const { data } = await http.get<{ items: AnalyticsAlert[]; baseline_days: number }>(`/analytics/alerts${storeId ? `?store_id=${storeId}` : ""}`);
       setAlerts(data.items);
+      setLastUpdated(dayjs().format("HH:mm:ss"));
       setBaselineDays(data.baseline_days);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -98,6 +101,7 @@ export function AnalyticsAlertsPage() {
         title="异常提醒"
         extra={
           <Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
