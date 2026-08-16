@@ -1,14 +1,12 @@
 import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from "@ant-design/icons";
 import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useDailyRefreshAt } from "../lib/use-daily-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect } from "../components/analytics/analytics-ui";
-import html2canvas from "html2canvas";
-import { jsPDF } from "jspdf";
 import type { AnalyticsReport } from "../types";
 
 const { Text } = Typography;
@@ -33,7 +31,6 @@ export function AnalyticsReportPage() {
   const [pushCfg, setPushCfg] = useState({ enabled: false, webhook: "", hour: 9, minute: 0 });
   const [pushSaving, setPushSaving] = useState(false);
   const [pushTesting, setPushTesting] = useState(false);
-  const contentRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -147,34 +144,19 @@ export function AnalyticsReportPage() {
     }
   };
 
-  const exportPdf = async () => {
-    if (!contentRef.current) return;
-    const hide = message.loading("正在生成 PDF…", 0);
-    try {
-      const canvas = await html2canvas(contentRef.current, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-      const imgData = canvas.toDataURL("image/jpeg", 0.95);
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = pageWidth;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      let heightLeft = imgHeight;
-      let position = 0;
-      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-      pdf.save(`经营日报_${data?.date || dayjs().format("YYYY-MM-DD")}.pdf`);
-      message.success("已导出 PDF");
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    } finally {
-      hide();
-    }
+  const exportPdf = () => {
+    // 打印前临时切浅色，打印完恢复
+    const prevTheme = document.body.dataset.theme;
+    document.body.dataset.theme = "light";
+    const restore = () => {
+      if (prevTheme) document.body.dataset.theme = prevTheme;
+      else delete document.body.dataset.theme;
+      window.onafterprint = null;
+    };
+    window.onafterprint = restore;
+    setTimeout(restore, 30000);
+    message.info("请在打印窗口选择「另存为 PDF」");
+    window.print();
   };
 
   const topCard = (title: string, items: { item_id: string; item_title: string; image?: string; sales: number; orders: number }[]) => (
@@ -252,7 +234,7 @@ export function AnalyticsReportPage() {
       ) : !data ? (
         <Card variant="borderless"><Empty description="暂无数据，先同步店铺与推广数据" /></Card>
       ) : (
-        <div ref={contentRef}>
+        <>
           {data.report_alerts.length > 0 && (
             <Card variant="borderless" title="今日预警" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
               <div style={{ display: "grid", gap: 4 }}>
@@ -319,7 +301,7 @@ export function AnalyticsReportPage() {
             <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>月度目标：{data.goal ? `${data.month} 目标 ${fmt(data.goal)}，本月已达成 ${fmt(data.month_sales)}` : "未设置，可到「目标预测」页设置"}</Text>
             <Text style={{ whiteSpace: "pre-line" }}>{buildText()}</Text>
           </Card>
-        </div>
+        </>
       )}
 
       <Drawer title="AI 日报总结" width={520} open={aiOpen} onClose={() => setAiOpen(false)} destroyOnClose>
