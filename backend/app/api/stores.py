@@ -641,6 +641,37 @@ def sync_items(
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
 
+@router.post("/sync-items-realtime")
+def sync_items_realtime(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """同步今日实时商品排行到 store_item_realtime。"""
+    from backend.app.core.sycm import SycmError, fetch_item_realtime
+
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    results = []
+    for store in stores:
+        try:
+            items = fetch_item_realtime(store)
+            now = _fmt(_now())
+            for it in items:
+                db.execute(
+                    "INSERT INTO store_item_realtime (store_id, item_id, item_title, image, visitors, pv, buyers, orders, sales, conversion_rate, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(store_id, item_id) DO UPDATE SET "
+                    "item_title = excluded.item_title, image = excluded.image, visitors = excluded.visitors, "
+                    "pv = excluded.pv, buyers = excluded.buyers, orders = excluded.orders, "
+                    "sales = excluded.sales, conversion_rate = excluded.conversion_rate, updated_at = excluded.updated_at",
+                    (store["id"], it["item_id"], it["item_title"], it["image"], it["visitors"], it["pv"], it["buyers"], it["orders"], it["sales"], it["conversion_rate"], now),
+                )
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
+        except SycmError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+    _log(db, user, "同步实时商品", "", f"成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+
+
 @router.get("/current")
 def get_current_store(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
     row = db.execute(

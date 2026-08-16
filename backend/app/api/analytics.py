@@ -802,10 +802,40 @@ def set_alerts_config(
 @router.get("/products")
 def analytics_products(
     days: int = 14,
+    mode: str = "days",
     store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
+    if mode == "realtime":
+        sf, sp = _store_filter(store_id)
+        rows = db.execute(
+            "SELECT * FROM store_item_realtime WHERE 1=1" + sf,
+            sp,
+        ).fetchall()
+        items = []
+        for r in rows:
+            items.append(
+                {
+                    "item_id": r["item_id"],
+                    "item_title": r["item_title"],
+                    "image": r["image"],
+                    "visitors": r["visitors"] or 0,
+                    "pv": r["pv"] or 0,
+                    "buyers": r["buyers"] or 0,
+                    "orders": r["orders"] or 0,
+                    "sales": round(r["sales"] or 0, 2),
+                    "conversion_rate": round(r["conversion_rate"] or 0, 2),
+                    "days": 1,
+                    "latest_date": date_cls.today().isoformat(),
+                }
+            )
+        items.sort(key=lambda x: x["sales"], reverse=True)
+        total_sales = sum(x["sales"] for x in items) or 1
+        for item in items[:20]:
+            item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+        return {"items": items[:50], "total": len(items), "days": 0, "mode": "realtime"}
+
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
@@ -835,7 +865,7 @@ def analytics_products(
     total_sales = sum(x["sales"] for x in items) or 1
     for item in items[:20]:
         item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
-    return {"items": items[:50], "total": len(items), "days": days}
+    return {"items": items[:50], "total": len(items), "days": days, "mode": "days"}
 
 
 @router.get("/products/{item_id}")
@@ -863,6 +893,19 @@ def analytics_product_detail(
         item["sales"] += r["sales"] or 0
         item["orders"] += r["orders"] or 0
         item["buyers"] += r["buyers"] or 0
+    # 今天用实时快照补充
+    rsf, rsp = _store_filter(store_id)
+    rt = db.execute(
+        "SELECT * FROM store_item_realtime WHERE item_id = ?" + rsf,
+        [item_id] + rsp,
+    ).fetchone()
+    if rt:
+        today_key = date_cls.today().isoformat()
+        item = by_date.setdefault(today_key, {"date": today_key[5:], "sales": 0.0, "orders": 0, "buyers": 0})
+        item["sales"] = round(rt["sales"] or 0, 2)
+        item["orders"] = rt["orders"] or 0
+        item["buyers"] = rt["buyers"] or 0
+        title = title or rt["item_title"]
     series = []
     for i in range(days - 1, -1, -1):
         d = (today - timedelta(days=i)).isoformat()

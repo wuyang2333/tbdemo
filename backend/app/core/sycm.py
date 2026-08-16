@@ -359,3 +359,47 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
             }
         )
     return out
+def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120) -> list[dict]:
+    """拉取今日实时商品排行（实时榜单接口，index=排序指标 uv/payAmt 等）。"""
+    payload = _run_api_json(
+        [
+            "--store",
+            profile_name(store["id"]),
+            "api",
+            "/ipoll/live/rank/item.json",
+            "-p",
+            "device=0",
+            "-p",
+            f"index={index}",
+            "-p",
+            "page=1",
+            "-p",
+            "limit=100",
+        ],
+        timeout=timeout,
+    )
+    inner = (payload.get("data") or {}).get("data") or {}
+    rows = inner.get("list") or []
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        item = r.get("item") or {}
+        title = str(item.get("title") or "")
+        if not title:
+            continue
+        pic = str(item.get("pictUrl") or "")
+        out.append(
+            {
+                "item_id": str((r.get("itemId") or {}).get("value") if isinstance(r.get("itemId"), dict) else r.get("itemId") or ""),
+                "item_title": title,
+                "image": pic.replace("//", "https://") if pic else "",
+                "visitors": int(_to_num(_take(r, "uv"))),
+                "pv": int(_to_num(_take(r, "pv"))),
+                "buyers": int(_to_num(_take(r, "buyerCnt"))),
+                "orders": int(_to_num(_take(r, "payItemQty"))),
+                "sales": round(_to_num(_take(r, "payAmt")), 2),
+                "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
+            }
+        )
+    return out

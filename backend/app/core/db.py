@@ -207,6 +207,30 @@ def _migrate_logs(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _migrate_products_realtime(conn: sqlite3.Connection) -> None:
+    """商品分析：实时商品排行数据表（今日实时快照）。"""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS store_item_realtime (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            item_title TEXT NOT NULL DEFAULT '',
+            image TEXT NOT NULL DEFAULT '',
+            visitors INTEGER NOT NULL DEFAULT 0,
+            pv INTEGER NOT NULL DEFAULT 0,
+            buyers INTEGER NOT NULL DEFAULT 0,
+            orders INTEGER NOT NULL DEFAULT 0,
+            sales REAL NOT NULL DEFAULT 0,
+            conversion_rate REAL NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, item_id)
+        )
+        """
+    )
+    conn.commit()
+
+
 def _migrate_products(conn: sqlite3.Connection) -> None:
     """商品分析：单品每日销售数据表。"""
     conn.execute(
@@ -542,6 +566,7 @@ def init_db() -> None:
         _migrate_model_configs(conn)
         _migrate_sycm(conn)
         _migrate_products(conn)
+        _migrate_products_realtime(conn)
         _migrate_analytics(conn)
         _migrate_promo_realtime(conn)
         _seed_stores(conn)
