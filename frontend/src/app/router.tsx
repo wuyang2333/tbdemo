@@ -10,7 +10,6 @@ import { AnalyticsOverviewPage } from "../pages/analytics-overview-page";
 import { AnalyticsAlertsPage } from "../pages/analytics-alerts-page";
 import { AnalyticsLinkagePage } from "../pages/analytics-linkage-page";
 import { AnalyticsReportPage } from "../pages/analytics-report-page";
-import { AnalyticsHealthPage } from "../pages/analytics-health-page";
 import { AnalyticsInsightPage } from "../pages/analytics-insight-page";
 import { AnalyticsHoursPage } from "../pages/analytics-hours-page";
 import { BoardPage } from "../pages/board-page";
@@ -121,7 +120,6 @@ export function AppRouter() {
         <Route path="/analytics/alerts" element={<RequireModule id="analytics"><AnalyticsAlertsPage /></RequireModule>} />
         <Route path="/analytics/linkage" element={<RequireModule id="analytics"><AnalyticsLinkagePage /></RequireModule>} />
         <Route path="/analytics/report" element={<RequireModule id="analytics"><AnalyticsReportPage /></RequireModule>} />
-        <Route path="/analytics/health" element={<RequireModule id="analytics"><AnalyticsHealthPage /></RequireModule>} />
         <Route path="/analytics/insight" element={<RequireModule id="analytics"><AnalyticsInsightPage /></RequireModule>} />
         <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />
         <Route path="/analytics/products" element={<RequireModule id="analytics"><AnalyticsProductsPage /></RequireModule>} />

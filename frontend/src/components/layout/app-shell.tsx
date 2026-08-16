@@ -65,7 +65,6 @@ const ANALYTICS_CHILDREN = [
   { key: "/analytics/alerts", label: "异常提醒" },
   { key: "/analytics/linkage", label: "联动分析" },
   { key: "/analytics/report", label: "经营日报" },
-  { key: "/analytics/health", label: "经营健康" },
   { key: "/analytics/insight", label: "AI 解读" },
   { key: "/analytics/hours", label: "时段分析" },
   { key: "/analytics/products", label: "商品分析" },
