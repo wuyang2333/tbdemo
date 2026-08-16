@@ -391,6 +391,7 @@ export type AnalyticsHours = {
   label: string;
   items: AnalyticsHourPoint[];
   prev_items: { hour: string; visitors: number; sales: number }[];
+  prev_promo_items: { hour: string; spend: number; sales: number }[];
   summary: {
     visitors: number;
     pv: number;

@@ -1394,6 +1394,11 @@ def analytics_hours(
         {"hour": f"{h:02d}:00", "visitors": (prev_hour_map.get(f"{h:02d}:00") or {}).get("visitors", 0), "sales": (prev_hour_map.get(f"{h:02d}:00") or {}).get("sales", 0)}
         for h in range(24)
     ]
+    prev_promo_map = _promo_hours_agg(db, sf, sp, prev_start, prev_end)
+    prev_promo_items = [
+        {"hour": f"{h:02d}:00", "spend": (prev_promo_map.get(f"{h:02d}:00") or {}).get("spend", 0), "sales": (prev_promo_map.get(f"{h:02d}:00") or {}).get("sales", 0)}
+        for h in range(24)
+    ]
 
     segments: list[dict] = []
     for name, hrs in HOUR_SEGMENTS:
@@ -1425,6 +1430,7 @@ def analytics_hours(
         "label": label,
         "items": items,
         "prev_items": prev_items,
+        "prev_promo_items": prev_promo_items,
         "summary": summary,
         "segments": segments,
         "peak_hour": peak["hour"],

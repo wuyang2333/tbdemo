@@ -124,6 +124,7 @@ export function AnalyticsHoursPage() {
   const [range, setRange] = useState<[string, string] | null>(null);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [compare, setCompare] = useState(true);
+  const [comparePromo, setComparePromo] = useState(true);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -188,6 +189,7 @@ export function AnalyticsHoursPage() {
   const maxSales = Math.max(1, ...items.map((p) => p.sales));
   const maxPrev = Math.max(1, ...(data?.prev_items ?? []).map((p) => p.sales));
   const maxPromo = Math.max(1, ...items.map((p) => p.promo_spend));
+  const maxPrevPromo = Math.max(1, ...(data?.prev_promo_items ?? []).map((p) => p.spend));
   const maxRoi = Math.max(0, ...items.map((p) => p.promo_roi));
 
   return (
@@ -314,30 +316,47 @@ export function AnalyticsHoursPage() {
             </Space>
           </Card>
 
-          <Card variant="borderless" title="24 小时 推广花费 / ROI" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+          <Card
+            variant="borderless"
+            title="24 小时 推广花费 / ROI"
+            style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+            extra={
+              <Switch checked={comparePromo} onChange={setComparePromo} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
+            }
+          >
             <HourChart
               items={items}
               height={170}
               peakHour={items.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
-              barSlots={(it) => (
-                <div style={{ height: "100%", width: "70%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
-                  <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
-                    {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
+              barSlots={(it, idx) => {
+                const prevSpend = data?.prev_promo_items?.[idx]?.spend ?? 0;
+                return (
+                  <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+                    <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
+                      {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "70%" }}>
+                      {comparePromo && (
+                        <div style={{ width: "45%", height: `${(prevSpend / maxPrevPromo) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevSpend ? 2 : 0 }} />
+                      )}
+                      <div style={{ width: "45%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
+                    </div>
                   </div>
-                  <div style={{ width: "100%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
-                </div>
-              )}
-              tooltipFor={(it) => (
+                );
+              }}
+              tooltipFor={(it, idx) => (
                 <>
                   <b>{it.hour}</b>
                   <div>花费 {fmtMoney(it.promo_spend)}</div>
                   <div>成交 {fmtMoney(it.promo_sales)}</div>
+                  {comparePromo && <div>上期花费 {fmtMoney(data?.prev_promo_items?.[idx]?.spend ?? 0)}</div>}
                   <div>ROI {it.promo_roi.toFixed(2)}</div>
                 </>
               )}
             />
             <Space style={{ marginTop: 8 }}>
               <Tag color="#1677ff">推广花费</Tag>
+              {comparePromo && <Tag>上期推广花费</Tag>}
               <Tag color="#fa8c16">★ ROI 最高时段</Tag>
               <Tag color="#52c41a">ROI≥2</Tag>
               <Tag color="#ff4d4f">ROI&lt;1</Tag>
