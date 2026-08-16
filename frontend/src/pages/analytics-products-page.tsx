@@ -126,6 +126,7 @@ export function AnalyticsProductsPage() {
   const [data, setData] = useState<AnalyticsProducts | null>(null);
   const [view, setView] = useState<"realtime" | "yesterday" | "range">("realtime");
   const [range, setRange] = useState<[string, string] | null>(null);
+  const [filterItemId, setFilterItemId] = useState("");
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -255,8 +256,13 @@ export function AnalyticsProductsPage() {
   };
 
   const isRealtime = view === "realtime";
+  const filteredItems = (data?.items ?? [])
+    .map((item, index) => ({ ...item, rank: index + 1 }))
+    .filter((item) => !filterItemId.trim() || item.item_id.includes(filterItemId.trim()));
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
+  const realRoiValue = (row: AnalyticsProduct) => (row.promo_spend ? row.sales / row.promo_spend : -1);
+  const realRoiSorter = (a: AnalyticsProduct, b: AnalyticsProduct) => realRoiValue(a) - realRoiValue(b);
   const copyItemId = async (id: string) => {
     try {
       await navigator.clipboard.writeText(id);
@@ -305,24 +311,25 @@ export function AnalyticsProductsPage() {
             dataIndex: "rank",
             width: 70,
             align: "center",
+            sorter: numSorter("rank"),
             render: (v: number) => (
               <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span>
             ),
           },
-          { title: "商品", key: "item", width: 200, render: renderItem },
+          { title: "商品", key: "item", width: 200, sorter: (a: AnalyticsProduct, b: AnalyticsProduct) => (a.item_title || "").localeCompare(b.item_title || "", "zh"), render: renderItem },
           { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 110, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
           { title: "买家", dataIndex: "buyers", align: "right", width: 100, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
           { title: "销售额", dataIndex: "sales", align: "right", width: 130, sorter: numSorter("sales"), render: (v: number, row) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle ?? 0} /> },
           { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 120, sorter: numSorter("conversion_rate"), render: (v: number, row) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle ?? 0} /> },
           { title: "加购", dataIndex: "add_cart", align: "right", width: 100, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
-          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
-          { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
-          { title: "真实ROI", align: "right", width: 90, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
-          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, sorter: numSorter("promo_spend"), render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
+          { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, sorter: numSorter("promo_roi"), render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
+          { title: "真实ROI", align: "right", width: 90, sorter: realRoiSorter, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
+          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, sorter: numSorter("promo_share"), render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
+          { title: "排名", dataIndex: "rank", width: 70, align: "center", sorter: numSorter("rank"), render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
           { title: "商品", key: "item", width: 200, render: renderItem },
           { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle} /> },
           { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.orders_cycle} /> },
@@ -379,6 +386,13 @@ export function AnalyticsProductsPage() {
           placeholder={["开始日期", "结束日期"]}
           allowClear
         />
+        <Input
+          allowClear
+          placeholder="按商品ID筛选"
+          value={filterItemId}
+          onChange={(e) => setFilterItemId(e.target.value)}
+          style={{ width: 180 }}
+        />
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序
@@ -406,12 +420,12 @@ export function AnalyticsProductsPage() {
             rowKey="item_id"
             size="small"
             columns={columns}
-            dataSource={data.items.map((item, index) => ({ ...item, rank: index + 1 }))}
+            dataSource={filteredItems}
             onRow={(record) => ({
               onMouseEnter: () => setHoverKey(record.item_id),
               onMouseLeave: () => setHoverKey((k) => (k === record.item_id ? null : k)),
             })}
-            pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
+            pagination={{ pageSize: 20, showTotal: () => (filterItemId.trim() ? `匹配 ${filteredItems.length} 个商品` : `共 ${data.total} 个商品`) }}
             tableLayout="fixed"
             scroll={{ x: isRealtime ? 1310 : 1320 }}
           />

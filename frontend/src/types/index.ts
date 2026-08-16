@@ -397,6 +397,7 @@ export type AnalyticsAlertsConfig = {
 };
 
 export type AnalyticsProduct = {
+  rank?: number;
   item_id: string;
   item_title: string;
   image?: string;
