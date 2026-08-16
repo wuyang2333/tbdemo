@@ -69,6 +69,19 @@ export function AnalyticsProductsPage() {
   };
 
   const isRealtime = mode === "realtime";
+  const renderItem = (_: unknown, row: AnalyticsProduct) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {row.image ? (
+        <img src={row.image} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+      ) : (
+        <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
+      )}
+      <div style={{ minWidth: 0 }}>
+        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
+        <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>ID {row.item_id}</div>
+      </div>
+    </div>
+  );
   const columns: TableColumnsType<AnalyticsProduct> = [
     ...(isRealtime
       ? ([
@@ -79,7 +92,7 @@ export function AnalyticsProductsPage() {
             render: (v: string, row) =>
               row.live ? <Tag color="green">今日实时</Tag> : <Tag>{String(v)}</Tag>,
           },
-          { title: "商品", dataIndex: "item_title", width: 260, ellipsis: true },
+          { title: "商品", key: "item", width: 320, render: renderItem },
           { title: "访客", dataIndex: "visitors", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
@@ -88,7 +101,7 @@ export function AnalyticsProductsPage() {
           { title: "加购", dataIndex: "add_cart", align: "right", width: 70, render: (v: number) => fmtInt(v) },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "商品", dataIndex: "item_title", width: 300, ellipsis: true },
+          { title: "商品", key: "item", width: 340, render: renderItem },
           { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
           { title: "销量", dataIndex: "orders", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "买家", dataIndex: "buyers", align: "right", width: 80, render: (v: number) => fmtInt(v) },

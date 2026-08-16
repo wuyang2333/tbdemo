@@ -399,6 +399,7 @@ export type AnalyticsAlertsConfig = {
 export type AnalyticsProduct = {
   item_id: string;
   item_title: string;
+  image?: string;
   sales: number;
   orders: number;
   buyers: number;
@@ -423,5 +424,6 @@ export type AnalyticsProducts = {
 export type AnalyticsProductDetail = {
   item_id: string;
   item_title: string;
+  image?: string;
   series: { date: string; sales: number; orders: number; buyers: number }[];
 };
