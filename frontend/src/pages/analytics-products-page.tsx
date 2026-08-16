@@ -1,4 +1,4 @@
-import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
+import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, HolderOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Card, Checkbox, DatePicker, Drawer, Empty, Input, Popover, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
@@ -16,6 +16,11 @@ const SEG_OPTIONS = [
   { label: "实时", value: "realtime" },
   { label: "昨日", value: "yesterday" },
 ];
+
+const BUILTIN_COL_ORDER: Record<string, string[]> = {
+  realtime: ["rank", "item", "visitors", "pv", "buyers", "sales", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share"],
+  days: ["rank", "item", "sales", "orders", "buyers", "visitors", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share", "sales_share"],
+};
 
 const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
   { label: "今日", value: [dayjs().startOf("day"), dayjs().endOf("day")] },
@@ -130,6 +135,8 @@ export function AnalyticsProductsPage() {
   const [range, setRange] = useState<[string, string] | null>(null);
   const [filterItemId, setFilterItemId] = useState("");
   const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const [colOrders, setColOrders] = useState<Record<string, string[]>>({});
+  const [dragCol, setDragCol] = useState<string | null>(null);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -351,16 +358,44 @@ export function AnalyticsProductsPage() {
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
-  const visibleColumns = columns.filter((col) => {
-    const k = (col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string);
-    return !k || !hiddenCols.includes(k);
-  });
+  const viewKey = isRealtime ? "realtime" : "days";
+  const effectiveOrder = colOrders[viewKey] ?? BUILTIN_COL_ORDER[viewKey] ?? [];
+  const reorderCols = (from: string, to: string) => {
+    if (!from || from === to) return;
+    setColOrders((prev) => {
+      const base = prev[viewKey] ?? BUILTIN_COL_ORDER[viewKey] ?? [];
+      const next = base.filter((k) => k !== from);
+      const idx = next.indexOf(to);
+      next.splice(idx >= 0 ? idx : next.length, 0, from);
+      return { ...prev, [viewKey]: next };
+    });
+  };
+  const toggleCol = (key: string, checked: boolean) => {
+    setHiddenCols((prev) => (checked ? prev.filter((k) => k !== key) : [...prev, key]));
+  };
+  const visibleColumns = columns
+    .filter((col) => {
+      const k = (col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string);
+      return !k || !hiddenCols.includes(k);
+    })
+    .sort((a, b) => {
+      const ka = (a.key as string) ?? ((a as { dataIndex?: string }).dataIndex as string) ?? "";
+      const kb = (b.key as string) ?? ((b as { dataIndex?: string }).dataIndex as string) ?? "";
+      const ia = effectiveOrder.indexOf(ka);
+      const ib = effectiveOrder.indexOf(kb);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
   const settingsOptions = columns
     .map((col) => ({
       label: col.title as string,
       value: String((col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string) ?? ""),
     }))
     .filter((o) => o.value);
+  const orderedSettings = [...settingsOptions].sort((a, b) => {
+    const ia = effectiveOrder.indexOf(a.value);
+    const ib = effectiveOrder.indexOf(b.value);
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+  });
   const tableX = visibleColumns.reduce((sum, col) => sum + ((col.width as number) || 90), 0);
 
   return (
@@ -376,14 +411,34 @@ export function AnalyticsProductsPage() {
               trigger="click"
               placement="bottomRight"
               content={
-                <Checkbox.Group
-                  style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", width: 230 }}
-                  value={settingsOptions.map((o) => o.value).filter((k) => !hiddenCols.includes(k))}
-                  onChange={(vals) =>
-                    setHiddenCols(settingsOptions.map((o) => o.value).filter((k) => !vals.map(String).includes(k)))
-                  }
-                  options={settingsOptions}
-                />
+                <div style={{ width: 240 }}>
+                  {orderedSettings.map((o) => (
+                    <div
+                      key={o.value}
+                      draggable
+                      onDragStart={() => setDragCol(o.value)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={() => reorderCols(dragCol ?? "", o.value)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "4px 6px",
+                        borderRadius: 6,
+                        cursor: "grab",
+                        background: dragCol === o.value ? "var(--ops-accent-soft)" : "transparent",
+                      }}
+                    >
+                      <HolderOutlined style={{ color: "rgba(128,128,128,0.6)", fontSize: 12 }} />
+                      <Checkbox checked={!hiddenCols.includes(o.value)} onChange={(e) => toggleCol(o.value, e.target.checked)}>
+                        {o.label}
+                      </Checkbox>
+                    </div>
+                  ))}
+                  <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 6, paddingLeft: 6 }}>
+                    拖动调整列顺序 · 勾选控制显示
+                  </Text>
+                </div>
               }
             >
               <Button icon={<SettingOutlined />}>字段设置</Button>
