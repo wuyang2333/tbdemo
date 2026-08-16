@@ -24,11 +24,14 @@ _ENV["SYCM_BYPASS_CURFEW"] = "1"
 _ENV["PYTHONIOENCODING"] = "utf-8"
 _ENV["PYTHONUTF8"] = "1"
 
-SCENE_NAMES = {
-    "wholesite": "货品全站推广",
-    "keyword": "关键词推广",
-    "crowd": "人群推广",
-}
+SCENES = [
+    ("wholesite", "onebpSite", "货品全站推广"),
+    ("keyword", "onebpSearch", "关键词推广"),
+    ("crowd", "onebpDisplay", "人群推广"),
+    ("content", "onebpShortVideo", "内容营销"),
+]
+
+SCENE_NAMES = {key: name for key, _, name in SCENES}
 
 
 class AlimamaError(Exception):
@@ -102,23 +105,48 @@ def check_access(store: dict) -> dict:
     return {"ok": True, "store_id": store["id"], "store_name": store["name"]}
 
 
+_SCENE_DAILY_FIELDS = [
+    "adPv", "charge", "click", "ctr", "alipayInshopAmt", "alipayInshopNum",
+    "cvr", "roi", "cartInshopNum",
+]
+
+
 def fetch_scene_daily(store: dict, start: str, end: str) -> list[dict]:
-    """拉取各推广场景按天的数据（展现/点击/花费/成交/ROI 等）。"""
-    payload = _run_json(
-        store, ["scene-daily", "--date", start, "--end-date", end, "--raw"]
-    )
-    scenes = payload.get("scenes") or {}
+    """拉取各推广场景按天的数据（展现/点击/花费/成交/ROI 等），逐场景调用接口。"""
+    body = {
+        "bizCode": "universalBP",
+        "fromRealTime": False,
+        "source": "baseReport",
+        "from": "pcBaseReport",
+        "byPage": True,
+        "totalTag": True,
+        "needCountAccelerate": True,
+        "rptType": "account",
+        "queryDomains": ["date"],
+        "queryFieldIn": _SCENE_DAILY_FIELDS,
+        "startTime": start,
+        "endTime": end,
+        "splitType": "day",
+        "effectEqual": 15,
+        "havingList": [],
+        "pageSize": 100,
+        "pageNo": 1,
+        "unifyType": "zhai",
+    }
+    body_json = json.dumps(body, ensure_ascii=False)
     out: list[dict] = []
-    for key, wrapper in scenes.items():
-        if not isinstance(wrapper, dict):
-            continue
-        for row in wrapper.get("list") or []:
+    for key, biz, name in SCENES:
+        payload = _run_json(
+            store,
+            ["api", f"/report/query.json?bizCode={biz}", "--body", body_json],
+        )
+        for row in (payload.get("data") or {}).get("list") or []:
             if not isinstance(row, dict):
                 continue
             out.append(
                 {
                     "scene": key,
-                    "scene_name": SCENE_NAMES.get(key, key),
+                    "scene_name": name,
                     "date": row.get("thedate") or row.get("startTime") or "",
                     "impressions": int(_num(row.get("adPv"))),
                     "clicks": int(_num(row.get("click"))),
@@ -139,23 +167,45 @@ def fetch_plan_snapshots(store: dict) -> list[dict]:
     plans: list[dict] = []
     for key in ("crowd", "keyword", "wholesite"):
         payload = _run_json(store, [f"promo-{key}", "--limit", "100", "--raw"])
-        for c in (payload.get("data") or {}).get("list") or []:
-            if not isinstance(c, dict):
-                continue
-            plans.append(
-                {
-                    "scene": key,
-                    "scene_name": SCENE_NAMES.get(key, key),
-                    "campaign_id": str(c.get("campaignId") or ""),
-                    "plan_name": c.get("campaignName") or "",
-                    "day_budget": round(_num(c.get("dayBudget")), 2),
-                    "bid_type": c.get("bidType") or c.get("constraintType") or "",
-                    "bid_value": round(_num(c.get("constraintValue")), 2),
-                    "status": "在投" if c.get("onlineStatus") == 1 else "暂停",
-                    "gmt_create": c.get("gmtCreate") or "",
-                }
-            )
+        plans.extend(_parse_campaigns(payload, key, SCENE_NAMES.get(key, key)))
+    # 内容营销（onebpShortVideo）走 findPage 接口
+    body = json.dumps(
+        {
+            "bizCode": "onebpShortVideo",
+            "adgroupRequired": True,
+            "offset": 0,
+            "pageSize": 100,
+            "statusList": ["start", "pause"],
+        },
+        ensure_ascii=False,
+    )
+    payload = _run_json(
+        store,
+        ["api", "/campaign/horizontal/findPage.json?bizCode=onebpShortVideo", "--body", body],
+    )
+    plans.extend(_parse_campaigns(payload, "content", "内容营销"))
     return plans
+
+
+def _parse_campaigns(payload: dict, key: str, name: str) -> list[dict]:
+    out: list[dict] = []
+    for c in (payload.get("data") or {}).get("list") or []:
+        if not isinstance(c, dict):
+            continue
+        out.append(
+            {
+                "scene": key,
+                "scene_name": name,
+                "campaign_id": str(c.get("campaignId") or ""),
+                "plan_name": c.get("campaignName") or "",
+                "day_budget": round(_num(c.get("dayBudget")), 2),
+                "bid_type": c.get("bidType") or c.get("constraintType") or "",
+                "bid_value": round(_num(c.get("constraintValue")), 2),
+                "status": "在投" if c.get("onlineStatus") == 1 else "暂停",
+                "gmt_create": c.get("gmtCreate") or "",
+            }
+        )
+    return out
 
 
 def fetch_plan_reports(store: dict, start: str, end: str) -> list[dict]:
@@ -178,11 +228,7 @@ def fetch_plan_reports(store: dict, start: str, end: str) -> list[dict]:
             }
         )
     return out
-REALTIME_SCENES = [
-    ("wholesite", "onebpSite", "货品全站推广"),
-    ("keyword", "onebpSearch", "关键词推广"),
-    ("crowd", "onebpDisplay", "人群推广"),
-]
+REALTIME_SCENES = SCENES
 
 
 def fetch_realtime(store: dict) -> list[dict]:

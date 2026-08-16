@@ -16,6 +16,7 @@ export const SCENE_OPTIONS = [
   { value: "wholesite", label: "货品全站推广" },
   { value: "keyword", label: "关键词推广" },
   { value: "crowd", label: "人群推广" },
+  { value: "content", label: "内容营销" },
 ];
 
 export const TAG_OPTIONS = [
