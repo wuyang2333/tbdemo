@@ -1,9 +1,9 @@
-import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Col, Empty, Row, Segmented, Space, Spin, Statistic, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
-import http, { getApiErrorMessage } from "../lib/api";
+import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { LineChart, MODE_OPTIONS, SceneTable, fmtMoney } from "../components/promotions/promotions-ui";
@@ -37,6 +37,26 @@ export function PromotionsDataPage() {
   }, [mode, load]);
   useAutoRefresh(() => load(mode));
 
+  const exportData = async () => {
+    try {
+      const token = localStorage.getItem(TOKEN_KEY);
+      const response = await fetch(`/api/promotions/export?mode=${encodeURIComponent(mode)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error("导出失败");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `推广数据_${mode}_${dayjs().format("YYYYMMDD")}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success("已导出 Excel");
+    } catch {
+      message.error("导出失败，请重试");
+    }
+  };
+
   const sync = async () => {
     setSyncing(true);
     try {
@@ -67,6 +87,9 @@ export function PromotionsDataPage() {
         extra={
           <Space>
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
+            <Button icon={<DownloadOutlined />} onClick={exportData}>
+              导出
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => load(mode)}>
               刷新
             </Button>

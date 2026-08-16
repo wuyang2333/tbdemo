@@ -1,10 +1,10 @@
-import { BarChartOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, DownloadOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Drawer, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
-import http, { getApiErrorMessage } from "../lib/api";
+import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { MODE_OPTIONS, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
@@ -20,6 +20,7 @@ export function PromotionsPlansPage() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [alerts, setAlerts] = useState<{ level: string; type: string; message: string }[]>([]);
+  const [planItems, setPlanItems] = useState<Record<string, { item_id: string; item_title: string }>>({});
   const [diagFilter, setDiagFilter] = useState("");
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -53,6 +54,33 @@ export function PromotionsPlansPage() {
     load(scene, mode);
   }, [scene, mode, load]);
   useAutoRefresh(() => load(scene, mode));
+
+  useEffect(() => {
+    http
+      .get<{ items: Record<string, { item_id: string; item_title: string }> }>("/promotions/plan-items")
+      .then(({ data }) => setPlanItems(data.items))
+      .catch(() => {});
+  }, []);
+
+  const exportPlans = async () => {
+    try {
+      const token = localStorage.getItem(TOKEN_KEY);
+      const response = await fetch(`/api/promotions/plans/export?mode=${encodeURIComponent(mode)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error("导出失败");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `推广计划_${mode}_${dayjs().format("YYYYMMDD")}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success("已导出 Excel");
+    } catch {
+      message.error("导出失败，请重试");
+    }
+  };
 
   const periodTitle = mode === "realtime" ? "实时" : mode === "yesterday" ? "昨天" : "近七天";
   const diag = (p: PromoPlan) => {
@@ -99,6 +127,7 @@ export function PromotionsPlansPage() {
   const columns: TableColumnsType<PromoPlan> = [
     { title: "场景", dataIndex: "scene_name", width: 120 },
     { title: "计划名", dataIndex: "plan_name", width: 200, ellipsis: true },
+    { title: "商品", key: "item", width: 200, ellipsis: true, render: (_, row: PromoPlan) => planItems[row.campaign_id]?.item_title || "—" },
     { title: "状态", dataIndex: "status", width: 80, render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
     { title: "日预算", dataIndex: "day_budget", align: "right", width: 90, render: (v: number) => (v ? fmtMoney(v) : "—") },
     { title: "出价", key: "bid", width: 110, render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
@@ -140,6 +169,9 @@ export function PromotionsPlansPage() {
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <Button icon={<RobotOutlined />} onClick={runAI}>
               AI 推广解读
+            </Button>
+            <Button icon={<DownloadOutlined />} onClick={exportPlans}>
+              导出
             </Button>
             <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新

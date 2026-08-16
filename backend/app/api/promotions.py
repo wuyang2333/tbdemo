@@ -769,6 +769,133 @@ def promo_alerts(
     return {"items": alerts[:20], "count": len(alerts)}
 
 
+@router.get("/export")
+def export_promo(
+    mode: str = "7d",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """导出推广数据 Excel（实时/昨天=场景明细；近7天=逐日分场景）。"""
+    from io import BytesIO
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+
+    mode = _mode(mode)
+    today = date_cls.today()
+    wb = Workbook()
+    ws = wb.active
+    if mode in ("realtime", "yesterday"):
+        d = today if mode == "realtime" else today - timedelta(days=1)
+        table = "promo_realtime" if mode == "realtime" else "promo_daily_data"
+        rows = db.execute(
+            f"SELECT scene, scene_name, SUM(impressions) AS imp, SUM(clicks) AS clicks, SUM(spend) AS spend, SUM(sales) AS sales, SUM(orders) AS orders FROM {table} WHERE data_date=? GROUP BY scene ORDER BY spend DESC",
+            (d.isoformat(),),
+        ).fetchall()
+        ws.append(["场景", "展现", "点击", "花费", "成交", "订单", "ROI"])
+        for r in rows:
+            spend = r["spend"] or 0
+            sales = r["sales"] or 0
+            ws.append([r["scene_name"] or r["scene"], r["imp"] or 0, r["clicks"] or 0, round(spend, 2), round(sales, 2), r["orders"] or 0, round(sales / spend, 2) if spend else 0])
+        title = "推广数据_实时" if mode == "realtime" else "推广数据_昨天"
+    else:
+        start = today - timedelta(days=6)
+        rows = db.execute(
+            "SELECT data_date, scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales, SUM(orders) AS orders "
+            "FROM promo_daily_data WHERE data_date>=? AND data_date<=? GROUP BY data_date, scene ORDER BY data_date, spend DESC",
+            (start.isoformat(), today.isoformat()),
+        ).fetchall()
+        scene_names = {}
+        by_date = {}
+        for r in rows:
+            scene_names[r["scene"]] = r["scene_name"] or r["scene"]
+            by_date.setdefault(r["data_date"], {})[r["scene"]] = {"spend": r["spend"] or 0, "sales": r["sales"] or 0}
+        dates = [(today - timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+        scenes = list(scene_names.keys())
+        ws.append(["日期"] + [f"{scene_names[s]}花费" for s in scenes] + [f"{scene_names[s]}成交" for s in scenes] + ["合计花费", "合计成交", "合计ROI"])
+        for d in dates:
+            dd = by_date.get(d, {})
+            spend_row = [round(dd.get(s, {}).get("spend", 0), 2) for s in scenes]
+            sales_row = [round(dd.get(s, {}).get("sales", 0), 2) for s in scenes]
+            ts = sum(spend_row)
+            tsa = sum(sales_row)
+            ws.append([d] + spend_row + sales_row + [round(ts, 2), round(tsa, 2), round(tsa / ts, 2) if ts else 0])
+        title = "推广数据_近七天"
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"推广数据_{mode}_{today.strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/plans/export")
+def export_plans(
+    mode: str = "realtime",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """导出推广计划 Excel。"""
+    from io import BytesIO
+    from urllib.parse import quote
+
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+
+    mode = _mode(mode)
+    rows = db.execute(
+        "SELECT p.scene_name, p.plan_name, p.status, p.day_budget, p.bid_type, p.bid_value, "
+        "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks, "
+        "p.note, p.tag "
+        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id=p.store_id AND s.campaign_id=p.campaign_id AND s.mode=? "
+        "ORDER BY COALESCE(s.spend,0) DESC",
+        (mode,),
+    ).fetchall()
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["场景", "计划名", "状态", "日预算", "出价", "花费", "成交", "ROI", "点击", "备注", "标记"])
+    for r in rows:
+        spend = r["spend"] or 0
+        sales = r["sales"] or 0
+        bid = f"{r['bid_value']} {r['bid_type']}" if r["bid_value"] else (r["bid_type"] or "")
+        ws.append([r["scene_name"] or r["scene"], r["plan_name"], r["status"], r["day_budget"] or 0, bid.strip(), round(spend, 2), round(sales, 2), round(sales / spend, 2) if spend else 0, r["clicks"] or 0, r["note"] or "", r["tag"] or ""])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"推广计划_{mode}_{date_cls.today().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/plan-items")
+def plan_items(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """计划 ↔ 商品映射（货品全站/关键词/人群，取每个计划第一个商品）。"""
+    from backend.app.core.alimama import _promo_item_map
+    from backend.app.core.sycm import has_profile
+
+    result: dict[str, dict] = {}
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    for store in stores:
+        try:
+            m = _promo_item_map(store)
+        except Exception:  # noqa: BLE001
+            continue
+        for cid, items in m.items():
+            if cid not in result and items:
+                result[cid] = {"item_id": items[0]["item_id"], "item_title": items[0]["item_title"]}
+    return {"items": result}
+
+
 @router.put("/plans/{plan_id}")
 def update_plan(
     plan_id: int,
