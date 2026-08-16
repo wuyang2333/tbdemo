@@ -6,7 +6,12 @@ import { useAuth } from "../lib/auth";
 import { canAccessModule } from "../lib/modules";
 import { AccountsPage } from "../pages/accounts-page";
 import { AiPage } from "../pages/ai-page";
-import { AnalyticsPage } from "../pages/analytics-page";
+import { AnalyticsOverviewPage } from "../pages/analytics-overview-page";
+import { AnalyticsTrendPage } from "../pages/analytics-trend-page";
+import { AnalyticsComparePage } from "../pages/analytics-compare-page";
+import { AnalyticsConversionPage } from "../pages/analytics-conversion-page";
+import { AnalyticsYoyPage } from "../pages/analytics-yoy-page";
+import { AnalyticsAlertsPage } from "../pages/analytics-alerts-page";
 import { ContentPage } from "../pages/content-page";
 import { CustomersPage } from "../pages/customers-page";
 import { DashboardPage } from "../pages/dashboard-page";
@@ -17,7 +22,8 @@ import { MonitoringPage } from "../pages/monitoring-page";
 import { GiftsPage } from "../pages/gifts-page";
 import { ProfilePage } from "../pages/profile-page";
 import { ProductsPage } from "../pages/products-page";
-import { PromotionsPage } from "../pages/promotions-page";
+import { PromotionsDataPage } from "../pages/promotions-data-page";
+import { PromotionsPlansPage } from "../pages/promotions-plans-page";
 import { RegisterPage } from "../pages/register-page";
 import { SettingsPage } from "../pages/settings-page";
 import { StoresPage } from "../pages/stores-page";
@@ -100,23 +106,15 @@ export function AppRouter() {
           }
         />
         <Route path="/analytics" element={<Navigate to="/analytics/overview" replace />} />
-        <Route
-          path="/analytics/:tab"
-          element={
-            <RequireModule id="analytics">
-              <AnalyticsPage />
-            </RequireModule>
-          }
-        />
+        <Route path="/analytics/overview" element={<RequireModule id="analytics"><AnalyticsOverviewPage /></RequireModule>} />
+        <Route path="/analytics/trend" element={<RequireModule id="analytics"><AnalyticsTrendPage /></RequireModule>} />
+        <Route path="/analytics/compare" element={<RequireModule id="analytics"><AnalyticsComparePage /></RequireModule>} />
+        <Route path="/analytics/conversion" element={<RequireModule id="analytics"><AnalyticsConversionPage /></RequireModule>} />
+        <Route path="/analytics/yoy" element={<RequireModule id="analytics"><AnalyticsYoyPage /></RequireModule>} />
+        <Route path="/analytics/alerts" element={<RequireModule id="analytics"><AnalyticsAlertsPage /></RequireModule>} />
         <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
-        <Route
-          path="/promotions/:tab"
-          element={
-            <RequireModule id="promotions">
-              <PromotionsPage />
-            </RequireModule>
-          }
-        />
+        <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
+        <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />
         <Route
           path="/content"
           element={

@@ -1,0 +1,119 @@
+import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, Col, Empty, Row, Space, Spin, Statistic, Tag, Typography, message } from "antd";
+import dayjs from "dayjs";
+import { useCallback, useEffect, useState } from "react";
+
+import http, { getApiErrorMessage } from "../lib/api";
+import { PageHeader } from "../components/ui/page-header";
+import { BucketCard, StoreBars, TrendChart, useSyncStores } from "../components/analytics/analytics-ui";
+import type { AnalyticsSummary } from "../types";
+
+const { Text } = Typography;
+
+export function AnalyticsOverviewPage() {
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await http.get<AnalyticsSummary>("/analytics/summary?days=14");
+      setSummary(data);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+      setSummary(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const { syncing, syncAll } = useSyncStores(load);
+
+  return (
+    <div>
+      <PageHeader
+        icon={<BarChartOutlined />}
+        eyebrow="数据洞察"
+        title="总览"
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} onClick={load}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
+              同步店铺数据
+            </Button>
+          </Space>
+        }
+      />
+
+      {summary?.last_sync && (
+        <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+          最近同步：{dayjs(summary.last_sync).format("YYYY-MM-DD HH:mm:ss")} · 已配置 {summary.store_count} 家店铺
+        </Text>
+      )}
+
+      {loading && !summary ? (
+        <div style={{ textAlign: "center", padding: 60 }}>
+          <Spin />
+        </div>
+      ) : summary ? (
+        <>
+          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col xs={12} sm={6}>
+              <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <Statistic title="今日访客" value={summary.today.visitors} />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6}>
+              <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <Statistic title="今日销售额" value={summary.today.sales} precision={2} prefix="¥" />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6}>
+              <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <Statistic title="今日订单" value={summary.today.orders} />
+              </Card>
+            </Col>
+            <Col xs={12} sm={6}>
+              <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <Statistic title="今日转化率" value={summary.today.conversion_rate} precision={2} suffix="%" valueStyle={{ color: "#1677ff" }} />
+              </Card>
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col xs={24} md={8}><BucketCard title="本周（近 7 天）" data={summary.week} /></Col>
+            <Col xs={24} md={8}><BucketCard title="本月" data={summary.month} /></Col>
+            <Col xs={24} md={8}><BucketCard title="累计" data={summary.total} /></Col>
+          </Row>
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={15}>
+              <Card variant="borderless" title="销售额 / 订单数趋势" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <Space style={{ marginBottom: 8 }}>
+                  <Tag color="#ff5000">销售额</Tag>
+                  <Tag color="#1677ff">订单数</Tag>
+                </Space>
+                <TrendChart trend={summary.trend} />
+              </Card>
+            </Col>
+            <Col xs={24} lg={9}>
+              <Card variant="borderless" title="按店铺汇总（累计）" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%" }}>
+                <StoreBars items={summary.by_store} />
+              </Card>
+            </Col>
+          </Row>
+        </>
+      ) : (
+        <Card variant="borderless">
+          <Empty description="还没有数据，点击右上角「同步店铺数据」抓取生意参谋数据" />
+        </Card>
+      )}
+    </div>
+  );
+}
