@@ -1,7 +1,7 @@
 import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from "@ant-design/icons";
 import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useDailyRefreshAt } from "../lib/use-daily-refresh";
@@ -9,6 +9,8 @@ import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect } from "../components/analytics/analytics-ui";
 import type { AnalyticsReport } from "../types";
 import { buildReportHtml } from "../lib/report-html";
+
+const ANALYSIS_KEY = "report_analysis_cache_v1";
 
 const { Text } = Typography;
 
@@ -32,9 +34,22 @@ export function AnalyticsReportPage() {
   const [pushCfg, setPushCfg] = useState({ enabled: false, webhook: "", hour: 9, minute: 0 });
   const [pushSaving, setPushSaving] = useState(false);
   const [pushTesting, setPushTesting] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string } } | null>(null);
+  const [analysisByDate, setAnalysisByDate] = useState<Record<string, { sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string }; date: string }>>(() => {
+    try {
+      const raw = localStorage.getItem(ANALYSIS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const analysisMounted = useRef(false);
+  const analysisKey = `${date || ""}|${storeId || ""}`;
+  const currentAnalysis = analysisByDate[analysisKey] || null;
+  useEffect(() => {
+    try {
+      localStorage.setItem(ANALYSIS_KEY, JSON.stringify(analysisByDate));
+    } catch {}
+  }, [analysisByDate]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -146,18 +161,19 @@ export function AnalyticsReportPage() {
     }
   };
 
-  const runAnalysis = async () => {
+  const runAnalysis = async (force = false) => {
+    if (!force && analysisByDate[analysisKey]) return;
     setAnalysisLoading(true);
     try {
       const params = new URLSearchParams();
       if (date) params.set("date", date);
       if (storeId) params.set("store_id", String(storeId));
-      const { data: res } = await http.post<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string } }>(
+      const { data: res } = await http.post<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string }; date: string }>(
         `/analytics/report/analysis?${params.toString()}`,
         undefined,
         { timeout: 180000 }
       );
-      setAnalysisResult(res);
+      setAnalysisByDate((prev) => ({ ...prev, [analysisKey]: res }));
       message.success("分析已生成");
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -167,13 +183,10 @@ export function AnalyticsReportPage() {
   };
 
   useEffect(() => {
-    if (!analysisMounted.current) {
-      analysisMounted.current = true;
-      return;
+    // 日期/店铺变化：有缓存直接显示，没有则自动生成一次并保存
+    if (!analysisByDate[analysisKey]) {
+      runAnalysis();
     }
-    // 日期/店铺变化：清掉旧分析并重新生成该日期的分析
-    setAnalysisResult(null);
-    runAnalysis();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, storeId]);
 
@@ -323,14 +336,14 @@ export function AnalyticsReportPage() {
             title="AI 经营分析"
             style={{ boxShadow: "var(--ops-shadow-sm)", marginTop: 16 }}
             extra={
-              !analysisLoading && !analysisResult ? (
-                <Button type="primary" icon={<RobotOutlined />} onClick={runAnalysis}>生成分析</Button>
+              !analysisLoading ? (
+                <Button type="primary" icon={<RobotOutlined />} onClick={() => runAnalysis(true)}>{currentAnalysis ? "重新生成" : "生成分析"}</Button>
               ) : undefined
             }
           >
             {analysisLoading ? (
               <div style={{ textAlign: "center", padding: 40 }}><Spin tip="AI 正在结合昨日数据生成经营分析…" /></div>
-            ) : analysisResult ? (
+            ) : currentAnalysis ? (
               <div style={{ display: "grid", gap: 10 }}>
                 {[
                   { key: "经营分析" as const, color: "var(--ops-accent-light)", bg: "var(--ops-accent-soft)" },
@@ -339,18 +352,18 @@ export function AnalyticsReportPage() {
                   { key: "总结" as const, color: "#52c41a", bg: "rgba(82,196,26,0.08)" },
                   { key: "今日行动建议" as const, color: "#fa8c16", bg: "rgba(250,140,22,0.08)" },
                 ].map((sec) =>
-                  analysisResult.sections[sec.key] ? (
+                  currentAnalysis.sections[sec.key] ? (
                     <div key={sec.key} style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "12px 14px", background: sec.bg }}>
                       <Text strong style={{ color: sec.color }}>{sec.key}</Text>
                       <div style={{ fontSize: 13, lineHeight: 1.9, marginTop: 6, color: "var(--ops-text)", whiteSpace: "pre-wrap" }}>
-                        {analysisResult.sections[sec.key]}
+                        {currentAnalysis.sections[sec.key]}
                       </div>
                     </div>
                   ) : null
                 )}
                 <div style={{ marginTop: 4 }}>
                   <Button icon={<CopyOutlined />} onClick={() => {
-                    const txt = `【经营日报 ${data?.date} AI分析】\n` + Object.entries(analysisResult.sections).map(([k, v]) => (v ? `【${k}】\n${v}` : "")).filter(Boolean).join("\n\n");
+                    const txt = `【经营日报 ${data?.date} AI分析】\n` + Object.entries(currentAnalysis.sections).map(([k, v]) => (v ? `【${k}】\n${v}` : "")).filter(Boolean).join("\n\n");
                     navigator.clipboard.writeText(txt);
                     message.success("分析已复制");
                   }}>复制分析</Button>
@@ -358,7 +371,7 @@ export function AnalyticsReportPage() {
               </div>
             ) : (
               <Text type="secondary" style={{ fontSize: 13 }}>
-                基于昨日真实数据（生意参谋 + 万相台），AI 生成经营分析、推广分析、异常分析、总结和今日行动建议。点右上角「生成分析」。
+                基于所选日期的真实数据（生意参谋 + 万相台），AI 生成经营分析、推广分析、异常分析、总结和今日行动建议。每个日期只生成一次并自动保存，点「重新生成」可覆盖。
               </Text>
             )}
           </Card>
