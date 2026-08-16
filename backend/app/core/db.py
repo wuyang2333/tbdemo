@@ -404,6 +404,23 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_promo_daily ON promo_daily_data(store_id, data_date)
             """
         )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_plan_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                campaign_id TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, campaign_id, mode)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS promo_plans (

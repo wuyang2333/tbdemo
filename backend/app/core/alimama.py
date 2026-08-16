@@ -202,3 +202,24 @@ def fetch_realtime(store: dict) -> list[dict]:
             }
         )
     return out
+def fetch_plan_realtime(store: dict) -> list[dict]:
+    """拉取今天的计划维度实时数据（各计划今日花费/成交/ROI/点击）。"""
+    today = date.today().isoformat()
+    payload = _run_json(
+        store,
+        ["report-realtime", "--dim", "campaign", "--date", today, "--limit", "100", "--raw"],
+    )
+    out: list[dict] = []
+    for r in (payload.get("data") or {}).get("list") or []:
+        if not isinstance(r, dict):
+            continue
+        out.append(
+            {
+                "campaign_id": str(r.get("campaignId") or ""),
+                "spend": round(_num(r.get("charge")), 2),
+                "sales": round(_num(r.get("alipayInshopAmt")), 2),
+                "roi": round(_num(r.get("roi")), 2),
+                "clicks": int(_num(r.get("click"))),
+            }
+        )
+    return out

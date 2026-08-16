@@ -15,6 +15,7 @@ from backend.app.api.auth import get_current_user
 from backend.app.core.alimama import (
     AlimamaError,
     check_access,
+    fetch_plan_realtime,
     fetch_plan_reports,
     fetch_plan_snapshots,
     fetch_realtime,
@@ -316,44 +317,66 @@ def sync_promo(
 @router.get("/plans")
 def list_plans(
     scene: str = "",
+    mode: str = "realtime",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    query = "SELECT * FROM promo_plans"
-    params: list = []
+    mode = _mode(mode)
+    query = (
+        "SELECT p.*, COALESCE(s.spend, 0) AS stat_spend, COALESCE(s.sales, 0) AS stat_sales, "
+        "COALESCE(s.roi, 0) AS stat_roi, COALESCE(s.clicks, 0) AS stat_clicks "
+        "FROM promo_plans p "
+        "LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
+    )
+    params: list = [mode]
     if scene:
-        query += " WHERE scene = ?"
+        query += " WHERE p.scene = ?"
         params.append(scene)
-    query += " ORDER BY CASE status WHEN '在投' THEN 0 ELSE 1 END, spend DESC, id ASC"
+    query += " ORDER BY CASE p.status WHEN '在投' THEN 0 ELSE 1 END, stat_spend DESC, p.id ASC"
     rows = db.execute(query, params).fetchall()
-    return {"items": [dict(r) for r in rows]}
+    items = []
+    for r in rows:
+        d = dict(r)
+        d["spend"] = d.pop("stat_spend", 0) or 0
+        d["sales"] = d.pop("stat_sales", 0) or 0
+        d["roi"] = d.pop("stat_roi", 0) or 0
+        d["clicks"] = d.pop("stat_clicks", 0) or 0
+        d["mode"] = mode
+        items.append(d)
+    return {"items": items, "mode": mode}
 
 
 @router.post("/sync-plans")
 def sync_plans(
+    mode: str = "realtime",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
+    mode = _mode(mode)
     today = date_cls.today()
-    start = today - timedelta(days=6)
-    end = today - timedelta(days=1)
     results = []
     for store in _bound_stores(db):
         try:
             snapshots = fetch_plan_snapshots(store)
-            reports = fetch_plan_reports(store, start.isoformat(), end.isoformat())
-            report_map = {r["campaign_id"]: r for r in reports}
+            if mode == "realtime":
+                stats_list = fetch_plan_realtime(store)
+            elif mode == "yesterday":
+                d = today - timedelta(days=1)
+                stats_list = fetch_plan_reports(store, d.isoformat(), d.isoformat())
+            else:
+                start = today - timedelta(days=6)
+                end = today - timedelta(days=1)
+                stats_list = fetch_plan_reports(store, start.isoformat(), end.isoformat())
+            stats_map = {r["campaign_id"]: r for r in stats_list}
             now = _now()
             for p in snapshots:
-                rep = report_map.get(p["campaign_id"], {})
                 db.execute(
                     "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, bid_type, bid_value, status, gmt_create, spend, sales, roi, clicks, note, tag, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, '', '', ?) "
                     "ON CONFLICT(store_id, campaign_id) DO UPDATE SET "
                     "scene = excluded.scene, scene_name = excluded.scene_name, plan_name = excluded.plan_name, "
                     "day_budget = excluded.day_budget, bid_type = excluded.bid_type, bid_value = excluded.bid_value, "
-                    "status = excluded.status, gmt_create = excluded.gmt_create, spend = excluded.spend, "
-                    "sales = excluded.sales, roi = excluded.roi, clicks = excluded.clicks, updated_at = excluded.updated_at",
+                    "status = excluded.status, gmt_create = excluded.gmt_create, updated_at = excluded.updated_at",
                     (
                         store["id"],
                         p["scene"],
@@ -365,19 +388,34 @@ def sync_plans(
                         p["bid_value"],
                         p["status"],
                         p["gmt_create"],
-                        rep.get("spend", 0),
-                        rep.get("sales", 0),
-                        rep.get("roi", 0),
-                        rep.get("clicks", 0),
                         now,
                     ),
                 )
+                st = stats_map.get(p["campaign_id"])
+                if st:
+                    db.execute(
+                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(store_id, campaign_id, mode) DO UPDATE SET "
+                        "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
+                        "clicks = excluded.clicks, updated_at = excluded.updated_at",
+                        (
+                            store["id"],
+                            p["campaign_id"],
+                            mode,
+                            st["spend"],
+                            st["sales"],
+                            st["roi"],
+                            st["clicks"],
+                            now,
+                        ),
+                    )
             results.append(
                 {"store_id": store["id"], "store_name": store["name"], "ok": True, "plans": len(snapshots)}
             )
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    _log(db, user, "同步推广计划", "", f"成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    _log(db, user, "同步推广计划", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 

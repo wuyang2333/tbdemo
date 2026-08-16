@@ -1,11 +1,11 @@
 import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
+import { MODE_OPTIONS, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoPlan } from "../types";
 
 const { Text } = Typography;
@@ -13,13 +13,14 @@ const { Text } = Typography;
 export function PromotionsPlansPage() {
   const [plans, setPlans] = useState<PromoPlan[]>([]);
   const [scene, setScene] = useState("");
+  const [mode, setMode] = useState("realtime");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
-  const load = useCallback(async (sc: string) => {
+  const load = useCallback(async (sc: string, m: string) => {
     setLoading(true);
     try {
-      const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}`);
+      const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}&mode=${encodeURIComponent(m)}`);
       setPlans(data.items);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -30,16 +31,19 @@ export function PromotionsPlansPage() {
   }, []);
 
   useEffect(() => {
-    load(scene);
-  }, [scene, load]);
+    load(scene, mode);
+  }, [scene, mode, load]);
 
+  const periodTitle = mode === "realtime" ? "实时" : mode === "yesterday" ? "昨天" : "近七天";
   const sync = async () => {
     setSyncing(true);
     try {
-      const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>("/promotions/sync-plans");
+      const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
+        `/promotions/sync-plans?mode=${encodeURIComponent(mode)}`
+      );
       message.success(`计划同步完成：成功 ${data.ok} / 共 ${data.total} 家`);
       data.results.filter((r) => !r.ok).slice(0, 3).forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
-      await load(scene);
+      await load(scene, mode);
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -57,8 +61,8 @@ export function PromotionsPlansPage() {
     { title: "成交", dataIndex: "sales", align: "right", width: 120, render: (v: number) => (v ? fmtMoney(v) : "—") },
     { title: "ROI", dataIndex: "roi", align: "right", width: 80, render: (v: number) => (v ? v.toFixed(2) : "—") },
     { title: "点击", dataIndex: "clicks", align: "right", width: 90, render: (v: number) => (v ? fmtInt(v) : "—") },
-    { title: "标记", key: "tag", width: 130, render: (_, row) => <PlanTagCell plan={row} onSaved={() => load(scene)} /> },
-    { title: "备注", key: "note", width: 200, render: (_, row) => <PlanNoteCell plan={row} onSaved={() => load(scene)} /> },
+    { title: "标记", key: "tag", width: 130, render: (_, row) => <PlanTagCell plan={row} onSaved={() => load(scene, mode)} /> },
+    { title: "备注", key: "note", width: 200, render: (_, row) => <PlanNoteCell plan={row} onSaved={() => load(scene, mode)} /> },
   ];
 
   return (
@@ -69,19 +73,20 @@ export function PromotionsPlansPage() {
         title="推广计划"
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => load(scene)}>
+            <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新
             </Button>
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={sync}>
-              同步推广计划
+              同步{periodTitle}计划
             </Button>
           </Space>
         }
       />
 
-      <Space style={{ marginBottom: 12 }}>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Segmented options={MODE_OPTIONS} value={mode} onChange={(value) => setMode(String(value))} />
         <Select style={{ width: 150 }} value={scene} onChange={setScene} options={SCENE_OPTIONS} />
-        <Text type="secondary" style={{ fontSize: 12 }}>共 {plans.length} 个计划（数据来自万相台）</Text>
+        <Text type="secondary" style={{ fontSize: 12 }}>共 {plans.length} 个计划 · 显示{periodTitle}数据（来自万相台）</Text>
       </Space>
 
       {loading && plans.length === 0 ? (
