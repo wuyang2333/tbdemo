@@ -353,7 +353,9 @@ def list_plans(
     mode = _mode(mode)
     query = (
         "SELECT p.*, COALESCE(s.spend, 0) AS stat_spend, COALESCE(s.sales, 0) AS stat_sales, "
-        "COALESCE(s.roi, 0) AS stat_roi, COALESCE(s.clicks, 0) AS stat_clicks "
+        "COALESCE(s.roi, 0) AS stat_roi, COALESCE(s.clicks, 0) AS stat_clicks, "
+        "COALESCE(s.prev_spend, 0) AS prev_spend, COALESCE(s.prev_sales, 0) AS prev_sales, "
+        "COALESCE(s.prev_roi, 0) AS prev_roi, COALESCE(s.prev_clicks, 0) AS prev_clicks "
         "FROM promo_plans p "
         "LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
     )
@@ -364,12 +366,24 @@ def list_plans(
     query += " ORDER BY CASE p.status WHEN '在投' THEN 0 ELSE 1 END, stat_spend DESC, p.id ASC"
     rows = db.execute(query, params).fetchall()
     items = []
+    def _cycle(cur, prev):
+        if prev:
+            return round((cur - prev) / prev * 100, 2)
+        return None
+
     for r in rows:
         d = dict(r)
         d["spend"] = d.pop("stat_spend", 0) or 0
         d["sales"] = d.pop("stat_sales", 0) or 0
         d["roi"] = d.pop("stat_roi", 0) or 0
         d["clicks"] = d.pop("stat_clicks", 0) or 0
+        d["prev_spend"] = d.pop("prev_spend", 0) or 0
+        d["prev_sales"] = d.pop("prev_sales", 0) or 0
+        d["prev_roi"] = d.pop("prev_roi", 0) or 0
+        d["prev_clicks"] = d.pop("prev_clicks", 0) or 0
+        d["spend_cycle"] = _cycle(d["spend"], d["prev_spend"])
+        d["sales_cycle"] = _cycle(d["sales"], d["prev_sales"])
+        d["roi_cycle"] = _cycle(d["roi"], d["prev_roi"])
         d["mode"] = mode
         items.append(d)
     return {"items": items, "mode": mode}
@@ -389,14 +403,22 @@ def sync_plans(
             snapshots = fetch_plan_snapshots(store)
             if mode == "realtime":
                 stats_list = fetch_plan_realtime(store)
+                _pd = today - timedelta(days=1)
+                prev_list = fetch_plan_reports(store, _pd.isoformat(), _pd.isoformat())
             elif mode == "yesterday":
                 d = today - timedelta(days=1)
                 stats_list = fetch_plan_reports(store, d.isoformat(), d.isoformat())
+                _pd = today - timedelta(days=2)
+                prev_list = fetch_plan_reports(store, _pd.isoformat(), _pd.isoformat())
             else:
                 start = today - timedelta(days=6)
                 end = today - timedelta(days=1)
                 stats_list = fetch_plan_reports(store, start.isoformat(), end.isoformat())
+                _ps = today - timedelta(days=13)
+                _pe = today - timedelta(days=7)
+                prev_list = fetch_plan_reports(store, _ps.isoformat(), _pe.isoformat())
             stats_map = {r["campaign_id"]: r for r in stats_list}
+            prev_map = {r["campaign_id"]: r for r in prev_list}
             now = _now()
             for p in snapshots:
                 db.execute(
@@ -422,12 +444,14 @@ def sync_plans(
                 )
                 st = stats_map.get(p["campaign_id"])
                 if st:
+                    _pv = prev_map.get(p["campaign_id"]) or {}
                     db.execute(
-                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, prev_spend, prev_sales, prev_roi, prev_clicks, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(store_id, campaign_id, mode) DO UPDATE SET "
                         "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-                        "clicks = excluded.clicks, updated_at = excluded.updated_at",
+                        "clicks = excluded.clicks, prev_spend = excluded.prev_spend, prev_sales = excluded.prev_sales, "
+                        "prev_roi = excluded.prev_roi, prev_clicks = excluded.prev_clicks, updated_at = excluded.updated_at",
                         (
                             store["id"],
                             p["campaign_id"],
@@ -436,6 +460,10 @@ def sync_plans(
                             st["sales"],
                             st["roi"],
                             st["clicks"],
+                            _pv.get("spend") or 0,
+                            _pv.get("sales") or 0,
+                            _pv.get("roi") or 0,
+                            _pv.get("clicks") or 0,
                             now,
                         ),
                     )
@@ -892,7 +920,23 @@ def plan_items(
             continue
         for cid, items in m.items():
             if cid not in result and items:
-                result[cid] = {"item_id": items[0]["item_id"], "item_title": items[0]["item_title"]}
+                first = items[0]
+                img = ""
+                if first.get("item_id"):
+                    _r = db.execute(
+                        "SELECT image FROM store_item_realtime WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
+                        (store["id"], first["item_id"]),
+                    ).fetchone()
+                    if _r:
+                        img = _r["image"]
+                    else:
+                        _r = db.execute(
+                            "SELECT image FROM store_item_daily WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
+                            (store["id"], first["item_id"]),
+                        ).fetchone()
+                        if _r:
+                            img = _r["image"]
+                result[cid] = {"item_id": first["item_id"], "item_title": first["item_title"], "image": img}
     return {"items": result}
 
 
@@ -1020,3 +1064,220 @@ def set_plan_status(
     )
     _log(db, user, "计划操作", label, f"{target}（万相台已执行，命中 {count} 个单元）")
     return {"ok": True, "execute": True, "count": count, "response": str(resp)[:300]}
+
+
+
+class PlanChatIn(BaseModel):
+    role: str
+    content: str
+
+
+class PlanChatBody(BaseModel):
+    messages: list[PlanChatIn] = []
+
+
+def _ensure_plan_daily(db, store: dict, start, end) -> None:
+    """懒加载：把 [start,end] 区间内缺失的按天计划报表补齐到 promo_plan_daily。"""
+    from backend.app.core.alimama import AlimamaError
+
+    cur = start
+    while cur <= end:
+        d = cur.isoformat()
+        exists = db.execute(
+            "SELECT COUNT(*) AS c FROM promo_plan_daily WHERE store_id = ? AND data_date = ?",
+            (store["id"], d),
+        ).fetchone()["c"]
+        if not exists:
+            try:
+                rows = fetch_plan_reports(store, d, d)
+            except AlimamaError:
+                rows = []
+            now = _now()
+            if not rows:
+                rows = [{"campaign_id": "", "spend": 0.0, "sales": 0.0, "roi": 0.0, "clicks": 0}]
+            for r in rows:
+                db.execute(
+                    "INSERT INTO promo_plan_daily (store_id, campaign_id, data_date, spend, sales, roi, clicks, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(store_id, campaign_id, data_date) DO UPDATE SET "
+                    "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
+                    "clicks = excluded.clicks, updated_at = excluded.updated_at",
+                    (store["id"], r["campaign_id"], d, r["spend"], r["sales"], r["roi"], r["clicks"], now),
+                )
+        cur += timedelta(days=1)
+
+
+@router.get("/plans/{plan_id}/trend")
+def plan_trend(
+    plan_id: int,
+    days: int = 7,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """单个计划的每日趋势（花费/成交/ROI/点击），懒加载按天缓存。"""
+    days = max(1, min(int(days), 30))
+    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="推广计划不存在")
+    store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
+    if not store or not has_profile(store["id"]):
+        raise HTTPException(status_code=400, detail="该店铺未绑定万相台登录")
+    store = dict(store)
+    today = date_cls.today()
+    start = today - timedelta(days=days - 1)
+    try:
+        _ensure_plan_daily(db, store, start, today)
+    except Exception:  # noqa: BLE001
+        pass
+    rows = db.execute(
+        "SELECT data_date, spend, sales, roi, clicks FROM promo_plan_daily "
+        "WHERE store_id = ? AND campaign_id = ? AND data_date >= ? AND data_date <= ? ORDER BY data_date ASC",
+        (store["id"], row["campaign_id"], start.isoformat(), today.isoformat()),
+    ).fetchall()
+    by_date = {r["data_date"]: dict(r) for r in rows}
+    out = []
+    for i in range(days):
+        d = (start + timedelta(days=i)).isoformat()
+        v = by_date.get(d) or {}
+        out.append(
+            {
+                "date": d,
+                "spend": round(v.get("spend") or 0, 2),
+                "sales": round(v.get("sales") or 0, 2),
+                "roi": round(v.get("roi") or 0, 2),
+                "clicks": int(v.get("clicks") or 0),
+            }
+        )
+    return {
+        "plan": {"id": row["id"], "plan_name": row["plan_name"], "campaign_id": row["campaign_id"], "scene_name": row["scene_name"]},
+        "items": out,
+        "days": days,
+    }
+
+
+def _collect_plan_data(db, store: dict, plan: dict) -> dict:
+    """汇总单个计划的静态信息 + 三个模式统计 + 环比 + 最近趋势。"""
+    modes: dict[str, dict] = {}
+    for r in db.execute(
+        "SELECT * FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ?",
+        (store["id"], plan["campaign_id"]),
+    ).fetchall():
+        modes[r["mode"]] = dict(r)
+
+    def _line(mode: str, label: str) -> str:
+        st = modes.get(mode)
+        if not st:
+            return label + "：暂无数据"
+        cyc = ""
+        if st.get("prev_spend"):
+            chg = (st["spend"] - st["prev_spend"]) / st["prev_spend"] * 100
+            cyc = "（花费较上期 %+.1f%%）" % chg
+        return "%s：花费 ¥%.2f，成交 ¥%.2f，ROI %.2f，点击 %d%s" % (
+            label, st["spend"], st["sales"], st["roi"], int(st["clicks"]), cyc)
+
+    trend = []
+    for r in db.execute(
+        "SELECT data_date, spend, sales, roi FROM promo_plan_daily "
+        "WHERE store_id = ? AND campaign_id = ? AND data_date >= ? ORDER BY data_date ASC",
+        (store["id"], plan["campaign_id"], (date_cls.today() - timedelta(days=6)).isoformat()),
+    ).fetchall():
+        trend.append("%s:花费%.0f/成交%.0f/ROI%.2f" % (r["data_date"][5:], r["spend"], r["sales"], r["roi"]))
+
+    return {
+        "plan": plan,
+        "store_name": store["name"],
+        "lines": [_line("realtime", "实时"), _line("yesterday", "昨天"), _line("7d", "近7天")],
+        "trend": trend,
+    }
+
+
+def _build_plan_prompt(data: dict) -> str:
+    p = data["plan"]
+    parts = [
+        "你是淘宝万相台推广运营专家。请针对下面这一个推广计划做深入分析，输出结构化解读，严格按格式，每部分独占一段，条目用“- ”开头：",
+        "计划：%s（ID %s）｜店铺：%s" % (p["plan_name"], p["campaign_id"], data["store_name"]),
+        "场景：%s｜状态：%s｜日预算：¥%.2f｜出价：%s" % (
+            p["scene_name"], p["status"], round(p["day_budget"] or 0, 2), p["bid_type"] or "—"),
+    ]
+    parts.extend(data["lines"])
+    if data["trend"]:
+        parts.append("近7天逐日：" + "；".join(data["trend"]))
+    parts.extend(
+        [
+            "【整体表现】2-3句话评价该计划（含花费/成交/ROI关键数字）",
+            "【亮点】\n- 投放亮点（2-3条，确实没有就写“本期暂无突出亮点”）",
+            "【风险】\n- 风险点（如ROI偏低、花费超预算、环比下滑等，2-3条，没有就写“暂无重大风险”）",
+            "【建议】\n- 下一步优化建议（加/减预算、调出价、暂停等，3-4条，要具体可执行）",
+        ]
+    )
+    return "\n".join(parts)
+
+
+@router.post("/plans/{plan_id}/insight")
+def plan_ai_insight(
+    plan_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """单个推广计划的 AI 分析。"""
+    from backend.app.api.analytics import _parse_insight_sections
+    from backend.app.api.model_configs import get_default_config
+    from backend.app.core.ai_client import AIError, chat_completion
+
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="推广计划不存在")
+    store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
+    if not store:
+        raise HTTPException(status_code=400, detail="店铺不存在")
+    data = _collect_plan_data(db, dict(store), dict(row))
+    try:
+        reply = chat_completion(cfg, [{"role": "user", "content": _build_plan_prompt(data)}], timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "sections": _parse_insight_sections(reply),
+        "reply": reply,
+        "plan": {"id": row["id"], "plan_name": row["plan_name"], "campaign_id": row["campaign_id"], "scene_name": row["scene_name"]},
+        "date": date_cls.today().isoformat(),
+    }
+
+
+@router.post("/plans/{plan_id}/insight/chat")
+def plan_ai_insight_chat(
+    plan_id: int,
+    body: PlanChatBody,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """围绕单个计划的 AI 追问。"""
+    from backend.app.api.model_configs import get_default_config
+    from backend.app.core.ai_client import AIError, chat_completion
+
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="推广计划不存在")
+    store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
+    if not store:
+        raise HTTPException(status_code=400, detail="店铺不存在")
+    data = _collect_plan_data(db, dict(store), dict(row))
+    context = (
+        "你是淘宝万相台推广运营专家。以下是这个推广计划的数据上下文：\n"
+        + "计划：%s（ID %s）\n" % (row["plan_name"], row["campaign_id"])
+        + "\n".join(data["lines"])
+        + "\n用户会围绕这个计划追问，请结合数据回答，简洁务实，不要编造；数据里没有的信息要如实说明。"
+    )
+    msgs = [{"role": "system", "content": context}]
+    for m in body.messages:
+        msgs.append({"role": m.role, "content": m.content})
+    try:
+        reply = chat_completion(cfg, msgs, timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"reply": reply}

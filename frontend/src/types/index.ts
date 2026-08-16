@@ -276,6 +276,13 @@ export type PromoPlan = {
   sales: number;
   roi: number;
   clicks: number;
+  spend_cycle?: number | null;
+  sales_cycle?: number | null;
+  roi_cycle?: number | null;
+  prev_spend?: number;
+  prev_sales?: number;
+  prev_roi?: number;
+  prev_clicks?: number;
   note: string;
   tag: string;
   updated_at: string;

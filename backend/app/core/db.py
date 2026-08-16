@@ -563,6 +563,30 @@ def init_db() -> None:
             )
             """
         )
+        _plan_stats_cols = [r[1] for r in conn.execute("PRAGMA table_info(promo_plan_stats)").fetchall()]
+        for _pc, _pt in (
+            ("prev_spend", "REAL NOT NULL DEFAULT 0"),
+            ("prev_sales", "REAL NOT NULL DEFAULT 0"),
+            ("prev_roi", "REAL NOT NULL DEFAULT 0"),
+            ("prev_clicks", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if _pc not in _plan_stats_cols:
+                conn.execute(f"ALTER TABLE promo_plan_stats ADD COLUMN {_pc} {_pt}")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_plan_daily (
+                store_id INTEGER NOT NULL,
+                campaign_id TEXT NOT NULL,
+                data_date TEXT NOT NULL,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, campaign_id, data_date)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS promo_item_stats (
