@@ -1974,3 +1974,143 @@ def alerts_summary(
     result = analytics_alerts(days=days, user=user, db=db)
     items = result["items"]
     return {"count": len(items), "items": items[:10], "checked_at": date_cls.today().isoformat()}
+
+
+
+@router.get("/products/{item_id}/trend")
+def product_trend(
+    item_id: str,
+    days: int = 7,
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """单个商品每日趋势（销售额/订单/访客/转化），从 store_item_daily 读取，缺日期补 0。"""
+    if not (1 <= days <= 90):
+        days = 7
+    sf, sp = _store_filter(store_id)
+    today = date_cls.today()
+    start = today - timedelta(days=days - 1)
+    rows = db.execute(
+        "SELECT data_date, sales, orders, visitors, pv, buyers, conversion_rate, add_cart, item_title, image "
+        "FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+        [item_id, start.isoformat(), today.isoformat()] + sp,
+    ).fetchall()
+    by_date = {r["data_date"]: dict(r) for r in rows}
+    title = ""
+    image = ""
+    if rows:
+        title = rows[-1]["item_title"] or ""
+        image = rows[-1]["image"] or ""
+    out = []
+    for i in range(days):
+        d = (start + timedelta(days=i)).isoformat()
+        v = by_date.get(d) or {}
+        out.append(
+            {
+                "date": d,
+                "sales": round(v.get("sales") or 0, 2),
+                "orders": int(v.get("orders") or 0),
+                "visitors": int(v.get("visitors") or 0),
+                "pv": int(v.get("pv") or 0),
+                "buyers": int(v.get("buyers") or 0),
+                "conversion_rate": round(v.get("conversion_rate") or 0, 2),
+                "add_cart": int(v.get("add_cart") or 0),
+            }
+        )
+    return {"item": {"item_id": item_id, "item_title": title, "image": image}, "items": out, "days": days}
+
+
+@router.get("/products/{item_id}/promo")
+def product_promo(
+    item_id: str,
+    mode: str = "realtime",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """商品 ↔ 推广联动：这个商品挂在哪些推广计划（含计划表现）+ 这些计划的关键词表现。"""
+    mode = mode if mode in ("realtime", "yesterday", "7d") else "realtime"
+    sf, sp = _store_filter(store_id)
+    plan_rows = db.execute(
+        "SELECT pi.store_id, pi.campaign_id, p.scene_name, p.plan_name, p.status, p.day_budget, p.bid_type, p.bid_value "
+        "FROM promo_plan_items pi "
+        "LEFT JOIN promo_plans p ON p.store_id = pi.store_id AND p.campaign_id = pi.campaign_id "
+        "WHERE pi.item_id = ?" + sf,
+        [item_id] + sp,
+    ).fetchall()
+    plans: list[dict] = []
+    cids: list[str] = []
+    for r in plan_rows:
+        d = dict(r)
+        cids.append(d["campaign_id"])
+        d["spend"] = 0.0
+        d["sales"] = 0.0
+        d["roi"] = 0.0
+        d["clicks"] = 0
+        plans.append(d)
+    if cids:
+        ph = ",".join("?" for _ in cids)
+        s_map = {
+            r["campaign_id"]: r
+            for r in db.execute(
+                "SELECT campaign_id, spend, sales, roi, clicks FROM promo_plan_stats "
+                "WHERE mode = ? AND campaign_id IN (" + ph + ")",
+                [mode] + cids,
+            ).fetchall()
+        }
+        for p in plans:
+            s = s_map.get(p["campaign_id"])
+            if s:
+                p["spend"] = round(s["spend"] or 0, 2)
+                p["sales"] = round(s["sales"] or 0, 2)
+                p["roi"] = round(s["roi"] or 0, 2)
+                p["clicks"] = int(s["clicks"] or 0)
+    # 关键词（best-effort：抓全量关键词报表，按该商品的计划名过滤）
+    keywords: list[dict] = []
+    names = {p["plan_name"] for p in plans if p["plan_name"]}
+    store_ids = {p["store_id"] for p in plans}
+    if names:
+        try:
+            from backend.app.core.alimama import AlimamaError, _num, _run_json
+            from backend.app.core.sycm import has_profile as _has_profile
+
+            today = date_cls.today()
+            if mode == "realtime":
+                start = end = today.isoformat()
+            elif mode == "yesterday":
+                d = today - timedelta(days=1)
+                start = end = d.isoformat()
+            else:
+                start = (today - timedelta(days=6)).isoformat()
+                end = today.isoformat()
+            for st in [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if _has_profile(r["id"])]:
+                if st["id"] not in store_ids:
+                    continue
+                try:
+                    payload = _run_json(st, ["report-keyword", "--date", start, "--end-date", end, "--limit", "100", "--raw"])
+                except AlimamaError:
+                    continue
+                for r in (payload.get("data") or {}).get("list") or []:
+                    if not isinstance(r, dict):
+                        continue
+                    if (r.get("promotionName") or "") not in names:
+                        continue
+                    word = r.get("originalWord") or r.get("word") or r.get("bidword") or "（智能匹配）"
+                    spend = _num(r.get("charge"))
+                    sales = _num(r.get("alipayInshopAmt"))
+                    keywords.append(
+                        {
+                            "word": word,
+                            "promotion": r.get("promotionName") or "",
+                            "spend": round(spend, 2),
+                            "sales": round(sales, 2),
+                            "roi": round(sales / spend, 2) if spend else 0.0,
+                            "clicks": int(_num(r.get("click"))),
+                            "orders": int(_num(r.get("alipayInshopNum"))),
+                        }
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+    keywords.sort(key=lambda x: -x["spend"])
+    return {"item_id": item_id, "mode": mode, "plans": plans, "keywords": keywords[:50]}

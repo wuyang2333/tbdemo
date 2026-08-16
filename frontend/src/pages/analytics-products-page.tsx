@@ -1,5 +1,5 @@
-import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, HolderOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, DatePicker, Drawer, Empty, Input, Popover, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, HolderOutlined, LineChartOutlined, RocketOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
+import { Button, Card, Checkbox, DatePicker, Drawer, Empty, Input, Popover, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -8,6 +8,7 @@ import http, { getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
+import { LineChart } from "../components/promotions/promotions-ui";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
@@ -18,8 +19,8 @@ const SEG_OPTIONS = [
 ];
 
 const BUILTIN_COL_ORDER: Record<string, string[]> = {
-  realtime: ["rank", "item", "visitors", "pv", "buyers", "sales", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share"],
-  days: ["rank", "item", "sales", "orders", "buyers", "visitors", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share", "sales_share"],
+  realtime: ["rank", "item", "diag", "visitors", "pv", "buyers", "sales", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share"],
+  days: ["rank", "item", "diag", "sales", "orders", "buyers", "visitors", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share", "sales_share"],
 };
 
 const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
@@ -148,6 +149,20 @@ export function AnalyticsProductsPage() {
   const [detailChat, setDetailChat] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [detailChatInput, setDetailChatInput] = useState("");
   const [detailChatLoading, setDetailChatLoading] = useState(false);
+  const [diagFilter, setDiagFilter] = useState("");
+  const [trendOpen, setTrendOpen] = useState(false);
+  const [trendItem, setTrendItem] = useState<AnalyticsProduct | null>(null);
+  const [trendDays, setTrendDays] = useState(7);
+  const [trendData, setTrendData] = useState<{ date: string; sales: number; orders: number; visitors: number; conversion_rate: number }[]>([]);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [promoOpen, setPromoOpen] = useState(false);
+  const [promoItem, setPromoItem] = useState<AnalyticsProduct | null>(null);
+  const [promoMode, setPromoMode] = useState("realtime");
+  const [promoData, setPromoData] = useState<{
+    plans: { campaign_id: string; plan_name: string; scene_name: string; status: string; day_budget: number; spend: number; sales: number; roi: number; clicks: number }[];
+    keywords: { word: string; promotion: string; spend: number; sales: number; roi: number; clicks: number; orders: number }[];
+  } | null>(null);
+  const [promoLoading, setPromoLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (view === "range" && !range) {
@@ -270,9 +285,45 @@ export function AnalyticsProductsPage() {
   };
 
   const isRealtime = view === "realtime";
+  const productDiag = (item: AnalyticsProduct) => {
+    const sales = item.sales || 0;
+    const cyc = item.sales_cycle;
+    const conv = item.conversion_rate;
+    const roi = item.promo_roi;
+    const share = item.sales_share;
+    if (!sales) return { label: "无销量", color: "default" as const };
+    if (cyc == null) return { label: "新品", color: "blue" as const };
+    if (cyc < -50) return { label: "骤降", color: "red" as const };
+    if (cyc < -10) return { label: "下滑", color: "orange" as const };
+    if ((conv != null && conv < 0.5) || (roi != null && roi < 1 && (item.promo_spend ?? 0) > 0)) return { label: "需关注", color: "volcano" as const };
+    if (share != null && share >= 5) return { label: "爆款", color: "gold" as const };
+    return { label: "稳定", color: "green" as const };
+  };
+  const productAlerts = (data?.items ?? [])
+    .map((item) => {
+      const cyc = item.sales_cycle;
+      const vcyc = item.visitors_cycle;
+      const conv = item.conversion_rate;
+      const roi = item.promo_roi;
+      const spend = item.promo_spend ?? 0;
+      const out: { level: string; type: string; message: string }[] = [];
+      const name = `${item.item_title}（${item.item_id}）`;
+      if (cyc != null && cyc < -50) out.push({ level: "error", type: "销售额骤降", message: `${name}销售额环比 ${cyc.toFixed(1)}%` });
+      if (vcyc != null && vcyc < -50) out.push({ level: "warning", type: "访客骤降", message: `${name}访客环比 ${vcyc.toFixed(1)}%` });
+      if (conv != null && conv < 0.5 && (item.visitors ?? 0) > 50) out.push({ level: "warning", type: "转化异常", message: `${name}转化率仅 ${conv.toFixed(2)}%` });
+      if (roi != null && roi < 1 && spend > 0) out.push({ level: "error", type: "推广ROI偏低", message: `${name}推广ROI ${roi.toFixed(2)}` });
+      return out;
+    })
+    .flat()
+    .slice(0, 8);
   const filteredItems = (data?.items ?? [])
     .map((item, index) => ({ ...item, rank: index + 1 }))
-    .filter((item) => !filterItemId.trim() || item.item_id.includes(filterItemId.trim()));
+    .filter((item) => {
+      const q = filterItemId.trim().toLowerCase();
+      if (q && !item.item_id.toLowerCase().includes(q) && !(item.item_title || "").toLowerCase().includes(q)) return false;
+      if (diagFilter && productDiag(item).label !== diagFilter) return false;
+      return true;
+    });
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
   const realRoiValue = (row: AnalyticsProduct) => (row.promo_spend ? row.sales / row.promo_spend : -1);
@@ -289,6 +340,58 @@ export function AnalyticsProductsPage() {
       document.body.removeChild(ta);
     }
     message.success(`已复制商品ID：${id}`);
+  };
+  const loadTrend = async (itemId: string, days: number) => {
+    setTrendLoading(true);
+    try {
+      const params = new URLSearchParams({ days: String(days) });
+      if (storeId) params.set("store_id", String(storeId));
+      const { data } = await http.get<{ items: { date: string; sales: number; orders: number; visitors: number; conversion_rate: number }[] }>(
+        `/analytics/products/${encodeURIComponent(itemId)}/trend?${params.toString()}`,
+        { timeout: 30000 }
+      );
+      setTrendData(data.items);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setTrendLoading(false);
+    }
+  };
+  const openTrend = (row: AnalyticsProduct) => {
+    setTrendItem(row);
+    setTrendOpen(true);
+    setTrendData([]);
+    loadTrend(row.item_id, trendDays);
+  };
+  const changeTrendDays = (d: number) => {
+    setTrendDays(d);
+    if (trendItem) loadTrend(trendItem.item_id, d);
+  };
+  const loadPromo = async (itemId: string, mode: string) => {
+    setPromoLoading(true);
+    try {
+      const params = new URLSearchParams({ mode });
+      if (storeId) params.set("store_id", String(storeId));
+      const { data } = await http.get<{ plans: unknown[]; keywords: unknown[] }>(
+        `/analytics/products/${encodeURIComponent(itemId)}/promo?${params.toString()}`,
+        { timeout: 60000 }
+      );
+      setPromoData(data as typeof promoData);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setPromoLoading(false);
+    }
+  };
+  const openPromo = (row: AnalyticsProduct) => {
+    setPromoItem(row);
+    setPromoOpen(true);
+    setPromoData(null);
+    loadPromo(row.item_id, promoMode);
+  };
+  const changePromoMode = (m: string) => {
+    setPromoMode(m);
+    if (promoItem) loadPromo(promoItem.item_id, m);
   };
 
   const renderItem = (_: unknown, row: AnalyticsProduct) => {
@@ -307,6 +410,12 @@ export function AnalyticsProductsPage() {
             </button>
             <button type="button" className="phb-btn" onClick={() => openProductAI(row)}>
               <RobotOutlined /> AI分析
+            </button>
+            <button type="button" className="phb-btn" onClick={() => openTrend(row)}>
+              <LineChartOutlined /> 趋势
+            </button>
+            <button type="button" className="phb-btn" onClick={() => openPromo(row)}>
+              <RocketOutlined /> 推广
             </button>
           </div>
           <Tooltip title={row.item_title}>
@@ -330,6 +439,15 @@ export function AnalyticsProductsPage() {
             ),
           },
           { title: "商品", key: "item", width: 200, render: renderItem },
+          {
+            title: "诊断",
+            key: "diag",
+            width: 90,
+            render: (_, row: AnalyticsProduct) => {
+              const d = productDiag(row);
+              return <Tag color={d.color}>{d.label}</Tag>;
+            },
+          },
           { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 110, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
           { title: "买家", dataIndex: "buyers", align: "right", width: 100, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
@@ -344,6 +462,15 @@ export function AnalyticsProductsPage() {
       : ([
           { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
           { title: "商品", key: "item", width: 200, render: renderItem },
+          {
+            title: "诊断",
+            key: "diag",
+            width: 90,
+            render: (_, row: AnalyticsProduct) => {
+              const d = productDiag(row);
+              return <Tag color={d.color}>{d.label}</Tag>;
+            },
+          },
           { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle} /> },
           { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.orders_cycle} /> },
           { title: "买家", dataIndex: "buyers", align: "right", width: 90, sorter: numSorter("buyers"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle} /> },
@@ -477,10 +604,25 @@ export function AnalyticsProductsPage() {
         />
         <Input
           allowClear
-          placeholder="按商品ID筛选"
+          placeholder="搜商品名 / ID"
           value={filterItemId}
           onChange={(e) => setFilterItemId(e.target.value)}
           style={{ width: 180 }}
+        />
+        <Select
+          style={{ width: 120 }}
+          value={diagFilter}
+          onChange={setDiagFilter}
+          options={[
+            { value: "", label: "全部诊断" },
+            { value: "爆款", label: "爆款" },
+            { value: "稳定", label: "稳定" },
+            { value: "新品", label: "新品" },
+            { value: "下滑", label: "下滑" },
+            { value: "骤降", label: "骤降" },
+            { value: "需关注", label: "需关注" },
+            { value: "无销量", label: "无销量" },
+          ]}
         />
         <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
         {isRealtime && (
@@ -489,6 +631,21 @@ export function AnalyticsProductsPage() {
         </Text>
       )}
       </Space>
+
+      {productAlerts.length > 0 && (
+        <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}>
+          <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
+            <div style={{ display: "grid", gap: 4 }}>
+              {productAlerts.map((a, i) => (
+                <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
+                  {a.level === "error" ? "⚠️ " : "❗ "}
+                  [{a.type}] {a.message}
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {loading && !data ? (
         <div style={{ textAlign: "center", padding: 60 }}>
@@ -637,6 +794,119 @@ export function AnalyticsProductsPage() {
           </div>
         ) : (
           <Empty description="生成失败或暂无数据，请重试" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
+        )}
+      </Drawer>
+      <Drawer
+        title={trendItem ? `趋势：${trendItem.item_title}` : "商品趋势"}
+        width={620}
+        open={trendOpen}
+        onClose={() => setTrendOpen(false)}
+        destroyOnClose
+      >
+        {trendItem && (
+          <div style={{ marginBottom: 12 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>ID {trendItem.item_id}</Text>
+          </div>
+        )}
+        <Segmented
+          options={[7, 14, 30].map((d) => ({ label: `近${d}天`, value: d }))}
+          value={trendDays}
+          onChange={(v) => changeTrendDays(Number(v))}
+          style={{ marginBottom: 12 }}
+        />
+        {trendLoading ? (
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <Spin tip="加载趋势数据…" />
+          </div>
+        ) : trendData.length ? (
+          <div>
+            <LineChart
+              labels={trendData.map((d) => d.date.slice(5))}
+              series={[
+                { name: "销售额", color: "#fa8c16", values: trendData.map((d) => d.sales), format: (v: number) => fmtMoney(v) },
+                { name: "访客", color: "#1677ff", values: trendData.map((d) => d.visitors), format: (v: number) => fmtInt(v) },
+              ]}
+            />
+            <Table
+              rowKey="date"
+              size="small"
+              style={{ marginTop: 12 }}
+              columns={[
+                { title: "日期", dataIndex: "date", width: 110 },
+                { title: "销售额", dataIndex: "sales", align: "right", render: (v: number) => (v ? fmtMoney(v) : "—") },
+                { title: "订单", dataIndex: "orders", align: "right", render: (v: number) => (v ? fmtInt(v) : "—") },
+                { title: "访客", dataIndex: "visitors", align: "right", render: (v: number) => (v ? fmtInt(v) : "—") },
+                { title: "转化率", dataIndex: "conversion_rate", align: "right", render: (v: number) => (v ? `${v.toFixed(2)}%` : "—") },
+              ]}
+              dataSource={trendData}
+              pagination={false}
+            />
+          </div>
+        ) : (
+          <Empty description="暂无趋势数据，请先同步" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
+        )}
+      </Drawer>
+      <Drawer
+        title={promoItem ? `推广联动：${promoItem.item_title}` : "推广联动"}
+        width={700}
+        open={promoOpen}
+        onClose={() => setPromoOpen(false)}
+        destroyOnClose
+      >
+        <Segmented
+          options={[
+            { label: "实时", value: "realtime" },
+            { label: "昨天", value: "yesterday" },
+            { label: "近7天", value: "7d" },
+          ]}
+          value={promoMode}
+          onChange={(v) => changePromoMode(String(v))}
+          style={{ marginBottom: 12 }}
+        />
+        {promoLoading ? (
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <Spin tip="加载推广数据…" />
+          </div>
+        ) : (
+          <div>
+            <Text strong>推广计划（{promoData?.plans?.length ?? 0}）</Text>
+            <Table
+              rowKey="campaign_id"
+              size="small"
+              style={{ margin: "8px 0 18px" }}
+              columns={[
+                { title: "计划", dataIndex: "plan_name", ellipsis: true },
+                { title: "场景", dataIndex: "scene_name", width: 110 },
+                { title: "状态", dataIndex: "status", width: 70, render: (v: string) => (v === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
+                { title: "日预算", dataIndex: "day_budget", align: "right", width: 90, render: (v: number) => (v ? fmtMoney(v) : "—") },
+                { title: "花费", dataIndex: "spend", align: "right", width: 90, render: (v: number) => (v ? fmtMoney(v) : "—") },
+                { title: "成交", dataIndex: "sales", align: "right", width: 100, render: (v: number) => (v ? fmtMoney(v) : "—") },
+                { title: "ROI", dataIndex: "roi", align: "right", width: 70, render: (v: number) => (v ? v.toFixed(2) : "—") },
+              ]}
+              dataSource={promoData?.plans ?? []}
+              pagination={false}
+            />
+            <Text strong>关键词表现（{promoData?.keywords?.length ?? 0}）</Text>
+            {promoData?.keywords?.length ? (
+              <Table
+                rowKey="word"
+                size="small"
+                style={{ marginTop: 8 }}
+                columns={[
+                  { title: "关键词", dataIndex: "word", ellipsis: true },
+                  { title: "所属计划", dataIndex: "promotion", ellipsis: true, width: 180 },
+                  { title: "花费", dataIndex: "spend", align: "right", width: 90, render: (v: number) => (v ? fmtMoney(v) : "—") },
+                  { title: "成交", dataIndex: "sales", align: "right", width: 100, render: (v: number) => (v ? fmtMoney(v) : "—") },
+                  { title: "ROI", dataIndex: "roi", align: "right", width: 70, render: (v: number) => (v ? v.toFixed(2) : "—") },
+                  { title: "点击", dataIndex: "clicks", align: "right", width: 70, render: (v: number) => (v ? fmtInt(v) : "—") },
+                ]}
+                dataSource={promoData.keywords}
+                pagination={{ pageSize: 10 }}
+              />
+            ) : (
+              <Empty description="暂无该商品计划的关键词数据（先同步关键词/推广数据）" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 20 }} />
+            )}
+          </div>
         )}
       </Drawer>
     </div>
