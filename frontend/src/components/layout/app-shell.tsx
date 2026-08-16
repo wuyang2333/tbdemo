@@ -59,12 +59,31 @@ const ICONS: Record<string, ReactNode> = {
   logs: <HistoryOutlined />,
 };
 
+const ANALYTICS_CHILDREN = [
+  { key: "/analytics/overview", label: "总览" },
+  { key: "/analytics/trend", label: "趋势分析" },
+  { key: "/analytics/compare", label: "店铺对比" },
+  { key: "/analytics/conversion", label: "转化分析" },
+  { key: "/analytics/yoy", label: "同比环比" },
+  { key: "/analytics/alerts", label: "异常提醒" },
+];
+
 function toItems(modules: ModuleMeta[]): MenuProps["items"] {
-  return modules.map((module) => ({
-    key: `/${module.id}`,
-    icon: ICONS[module.icon],
-    label: module.name,
-  }));
+  return modules.map((module) => {
+    if (module.id === "analytics") {
+      return {
+        key: "/analytics",
+        icon: ICONS[module.icon],
+        label: module.name,
+        children: ANALYTICS_CHILDREN,
+      };
+    }
+    return {
+      key: `/${module.id}`,
+      icon: ICONS[module.icon],
+      label: module.name,
+    };
+  });
 }
 
 function useBackendStatus(): boolean | null {
@@ -94,10 +113,18 @@ export function AppShell() {
   const { stores, currentStore, setCurrent } = useStores();
   const [collapsed, setCollapsed] = useState(false);
   const [keyword, setKeyword] = useState("");
+  const [openKeys, setOpenKeys] = useState<string[]>(() =>
+    location.pathname.startsWith("/analytics") ? ["analytics"] : []
+  );
   const backendOk = useBackendStatus();
 
-  const current = getModule(location.pathname.replace(/^\//, ""));
+  const current = getModule(location.pathname.split("/")[1] || "");
   const selectedKeys = [location.pathname];
+  useEffect(() => {
+    if (location.pathname.startsWith("/analytics")) {
+      setOpenKeys((keys) => (keys.includes("analytics") ? keys : [...keys, "analytics"]));
+    }
+  }, [location.pathname]);
   const siderWidth = collapsed ? 72 : 236;
   const displayName = user?.nickname || user?.username || "运营者";
 
@@ -255,6 +282,8 @@ export function AppShell() {
               theme={darkSider ? "dark" : "light"}
               mode="inline"
               selectedKeys={selectedKeys}
+              openKeys={collapsed ? undefined : openKeys}
+              onOpenChange={(keys) => setOpenKeys(keys as string[])}
               onClick={handleMenuClick}
               items={mainItems}
               className="ops-sider-menu"

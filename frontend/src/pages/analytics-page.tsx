@@ -17,6 +17,7 @@ import {
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
@@ -529,8 +530,13 @@ function daySwitch(days: number, onDays: (d: number) => void) {
   );
 }
 
+const VALID_TABS = ["overview", "trend", "compare", "conversion", "yoy", "alerts"];
+
 export function AnalyticsPage() {
-  const [active, setActive] = useState("overview");
+  const navigate = useNavigate();
+  const { tab } = useParams<{ tab?: string }>();
+  const validTab = tab && VALID_TABS.includes(tab) ? tab : "overview";
+  const [active, setActive] = useState(validTab);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [daily, setDaily] = useState<AnalyticsDailyPoint[]>([]);
   const [stores, setStores] = useState<AnalyticsStoreAgg[]>([]);
@@ -541,6 +547,10 @@ export function AnalyticsPage() {
   const [compareDays, setCompareDays] = useState(14);
   const [loading, setLoading] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    setActive(validTab);
+  }, [validTab]);
   const [syncing, setSyncing] = useState(false);
 
   const loadSummary = useCallback(async () => {
@@ -639,7 +649,10 @@ export function AnalyticsPage() {
       <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
         <Tabs
           activeKey={active}
-          onChange={setActive}
+          onChange={(key) => {
+            setActive(String(key));
+            navigate(`/analytics/${key}`, { replace: true });
+          }}
           items={[
             { key: "overview", label: "总览", children: <OverviewTab summary={summary} /> },
             { key: "trend", label: "趋势分析", children: <TrendTab daily={daily} days={trendDays} onDays={setTrendDays} /> },

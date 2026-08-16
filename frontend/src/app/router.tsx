@@ -99,8 +99,9 @@ export function AppRouter() {
             </RequireModule>
           }
         />
+        <Route path="/analytics" element={<Navigate to="/analytics/overview" replace />} />
         <Route
-          path="/analytics"
+          path="/analytics/:tab"
           element={
             <RequireModule id="analytics">
               <AnalyticsPage />
