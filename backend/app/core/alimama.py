@@ -216,7 +216,9 @@ def fetch_realtime(store: dict) -> list[dict]:
         "offset": 0,
     }
     body_json = json.dumps(body, ensure_ascii=False)
-    out: list[dict] = []
+    # 按 (场景, 小时) 先聚合再返回：部分场景（如关键词）实时接口会把多行时间戳都标成 00:00，
+    # 不聚合直接入库会被唯一键去重、丢掉总额。
+    agg: dict[tuple[str, str], dict] = {}
     for key, biz, name in REALTIME_SCENES:
         payload = _run_json(
             store,
@@ -227,21 +229,38 @@ def fetch_realtime(store: dict) -> list[dict]:
             if not isinstance(row, dict):
                 continue
             thedate = row.get("thedate") or ""
-            out.append(
+            hour = thedate[-5:] if len(thedate) >= 5 else thedate
+            k = (key, hour)
+            item = agg.setdefault(
+                k,
                 {
                     "scene": key,
                     "scene_name": name,
-                    "hour": thedate[-5:] if len(thedate) >= 5 else thedate,
-                    "impressions": int(_num(row.get("adPv"))),
-                    "clicks": int(_num(row.get("click"))),
-                    "ctr": round(_num(row.get("ctr")) * 100, 2),
-                    "spend": round(_num(row.get("charge")), 2),
-                    "sales": round(_num(row.get("alipayInshopAmt")), 2),
-                    "roi": round(_num(row.get("roi")), 2),
-                    "orders": int(_num(row.get("alipayInshopNum"))),
-                    "conversion_rate": round(_num(row.get("cvr")) * 100, 2),
-                }
+                    "hour": hour,
+                    "impressions": 0,
+                    "clicks": 0,
+                    "spend": 0.0,
+                    "sales": 0.0,
+                    "orders": 0,
+                },
             )
+            item["impressions"] += int(_num(row.get("adPv")))
+            item["clicks"] += int(_num(row.get("click")))
+            item["spend"] += _num(row.get("charge"))
+            item["sales"] += _num(row.get("alipayInshopAmt"))
+            item["orders"] += int(_num(row.get("alipayInshopNum")))
+    out: list[dict] = []
+    for item in agg.values():
+        imp = item["impressions"]
+        clicks = item["clicks"]
+        spend = item["spend"]
+        sales = item["sales"]
+        item["ctr"] = round(clicks / imp * 100, 2) if imp else 0.0
+        item["roi"] = round(sales / spend, 2) if spend else 0.0
+        item["conversion_rate"] = 0.0
+        item["spend"] = round(spend, 2)
+        item["sales"] = round(sales, 2)
+        out.append(item)
     return out
 def fetch_plan_realtime(store: dict) -> list[dict]:
     """拉取今天的计划维度实时数据（各计划今日花费/成交/ROI/点击）。"""
