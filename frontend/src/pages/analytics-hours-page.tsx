@@ -67,7 +67,7 @@ function HourChart({
           <div key={i} style={{ borderTop: "1px solid var(--ops-border)" }} />
         ))}
       </div>
-      <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 2, height }}>
+      <div style={{ position: "relative", display: "flex", alignItems: "stretch", gap: 2, height }}>
         {items.map((it, idx) => (
           <div
             key={it.hour}
@@ -320,12 +320,12 @@ export function AnalyticsHoursPage() {
               height={170}
               peakHour={items.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
               barSlots={(it) => (
-                <>
+                <div style={{ height: "100%", width: "70%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
                   <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
                     {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
                   </div>
-                  <div style={{ width: "70%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
-                </>
+                  <div style={{ width: "100%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
+                </div>
               )}
               tooltipFor={(it) => (
                 <>
