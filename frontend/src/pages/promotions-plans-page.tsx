@@ -6,6 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
+import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
+import { useAlertConfig } from "../lib/use-alert-config";
 import { PageHeader } from "../components/ui/page-header";
 import { MODE_OPTIONS, LineChart, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoPlan } from "../types";
@@ -51,6 +53,9 @@ export function PromotionsPlansPage() {
   const [opPlan, setOpPlan] = useState<PromoPlan | null>(null);
   const [opStatus, setOpStatus] = useState<"pause" | "start">("pause");
   const [opLoading, setOpLoading] = useState(false);
+  const { config: alertConfig, saveConfig: saveAlertConfig } = useAlertConfig();
+  const [alertCfgOpen, setAlertCfgOpen] = useState(false);
+  const [alertSaving, setAlertSaving] = useState(false);
   const [hiddenByMode, setHiddenByMode] = useState<Record<string, string[]>>({});
   const [colOrders, setColOrders] = useState<Record<string, string[]>>({});
   const [dragCol, setDragCol] = useState<string | null>(null);
@@ -264,6 +269,19 @@ export function PromotionsPlansPage() {
       message.error(getApiErrorMessage(error));
     } finally {
       setPlanAiChatLoading(false);
+    }
+  };
+  const saveAlertCfg = async (patch: Parameters<typeof saveAlertConfig>[0]) => {
+    setAlertSaving(true);
+    try {
+      await saveAlertConfig(patch);
+      message.success("预警条件已保存");
+      setAlertCfgOpen(false);
+      await load(scene, mode);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAlertSaving(false);
     }
   };
   const askPlanStatus = (plan: PromoPlan, status: "pause" | "start") => {
@@ -546,7 +564,14 @@ export function PromotionsPlansPage() {
       </Text>
 
       {alerts.length > 0 && (
-        <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}>
+        <Card
+          variant="borderless"
+          title="推广预警"
+          style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}
+          extra={
+            <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
+          }
+        >
           <div style={{ maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
             <Space direction="vertical" style={{ width: "100%" }} size={4}>
               {alerts.map((a, i) => (
@@ -793,6 +818,19 @@ export function PromotionsPlansPage() {
           <Empty description="生成失败或暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
         )}
       </Drawer>
+      <AlertSettingsModal
+        open={alertCfgOpen}
+        title="推广预警条件设置"
+        config={alertConfig}
+        onCancel={() => setAlertCfgOpen(false)}
+        onSave={saveAlertCfg}
+        saving={alertSaving}
+        fields={[
+          { group: "plan", key: "budget_over", label: "预算超限比例", hint: "花费/日预算 ≥ 该比例时红色提醒（1=刚好超预算）", min: 0.5, max: 3, step: 0.05 },
+          { group: "plan", key: "budget_warn", label: "接近预算比例", hint: "花费/日预算 ≥ 该比例时橙色提醒", min: 0.1, max: 1, step: 0.05 },
+          { group: "plan", key: "roi_drop_ratio", label: "ROI 下滑提醒比例", hint: "今日ROI < 昨日ROI × 该比例时提醒（0.6=下滑40%）", min: 0.1, max: 1, step: 0.05 },
+        ]}
+      />
       <Modal
         title={opStatus === "pause" ? "暂停推广计划" : "开启推广计划"}
         open={!!opPlan}

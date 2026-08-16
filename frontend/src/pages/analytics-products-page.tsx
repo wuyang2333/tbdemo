@@ -9,6 +9,8 @@ import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
 import { LineChart } from "../components/promotions/promotions-ui";
+import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
+import { useAlertConfig } from "../lib/use-alert-config";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
@@ -149,6 +151,9 @@ export function AnalyticsProductsPage() {
   const [detailChat, setDetailChat] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [detailChatInput, setDetailChatInput] = useState("");
   const [detailChatLoading, setDetailChatLoading] = useState(false);
+  const { config: alertConfig, saveConfig: saveAlertConfig } = useAlertConfig();
+  const [alertCfgOpen, setAlertCfgOpen] = useState(false);
+  const [alertSaving, setAlertSaving] = useState(false);
   const [diagFilter, setDiagFilter] = useState("");
   const [trendOpen, setTrendOpen] = useState(false);
   const [trendItem, setTrendItem] = useState<AnalyticsProduct | null>(null);
@@ -308,14 +313,26 @@ export function AnalyticsProductsPage() {
       const spend = item.promo_spend ?? 0;
       const out: { level: string; type: string; message: string }[] = [];
       const name = `${item.item_title}（${item.item_id}）`;
-      if (cyc != null && cyc < -50) out.push({ level: "error", type: "销售额骤降", message: `${name}销售额环比 ${cyc.toFixed(1)}%` });
-      if (vcyc != null && vcyc < -50) out.push({ level: "warning", type: "访客骤降", message: `${name}访客环比 ${vcyc.toFixed(1)}%` });
-      if (conv != null && conv < 0.5 && (item.visitors ?? 0) > 50) out.push({ level: "warning", type: "转化异常", message: `${name}转化率仅 ${conv.toFixed(2)}%` });
-      if (roi != null && roi < 1 && spend > 0) out.push({ level: "error", type: "推广ROI偏低", message: `${name}推广ROI ${roi.toFixed(2)}` });
+      if (cyc != null && cyc < -alertConfig.product.sales_drop_pct) out.push({ level: "error", type: "销售额骤降", message: `${name}销售额环比 ${cyc.toFixed(1)}%` });
+      if (vcyc != null && vcyc < -alertConfig.product.visitors_drop_pct) out.push({ level: "warning", type: "访客骤降", message: `${name}访客环比 ${vcyc.toFixed(1)}%` });
+      if (conv != null && conv < alertConfig.product.conversion_low && (item.visitors ?? 0) > alertConfig.product.min_visitors) out.push({ level: "warning", type: "转化异常", message: `${name}转化率仅 ${conv.toFixed(2)}%` });
+      if (roi != null && roi < alertConfig.product.promo_roi_low && spend > 0) out.push({ level: "error", type: "推广ROI偏低", message: `${name}推广ROI ${roi.toFixed(2)}` });
       return out;
     })
     .flat()
     .slice(0, 8);
+  const saveAlertCfg = async (patch: Parameters<typeof saveAlertConfig>[0]) => {
+    setAlertSaving(true);
+    try {
+      await saveAlertConfig(patch);
+      message.success("预警条件已保存");
+      setAlertCfgOpen(false);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAlertSaving(false);
+    }
+  };
   const filteredItems = (data?.items ?? [])
     .map((item, index) => ({ ...item, rank: index + 1 }))
     .filter((item) => {
@@ -633,7 +650,14 @@ export function AnalyticsProductsPage() {
       </Space>
 
       {productAlerts.length > 0 && (
-        <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}>
+        <Card
+          variant="borderless"
+          title="商品预警"
+          style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}
+          extra={
+            <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
+          }
+        >
           <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
             <div style={{ display: "grid", gap: 4 }}>
               {productAlerts.map((a, i) => (
@@ -909,6 +933,21 @@ export function AnalyticsProductsPage() {
           </div>
         )}
       </Drawer>
+      <AlertSettingsModal
+        open={alertCfgOpen}
+        title="商品预警条件设置"
+        config={alertConfig}
+        onCancel={() => setAlertCfgOpen(false)}
+        onSave={saveAlertCfg}
+        saving={alertSaving}
+        fields={[
+          { group: "product", key: "sales_drop_pct", label: "销售额骤降阈值 %", hint: "销售额环比下跌超过该百分比提醒", min: 1, max: 500, step: 5 },
+          { group: "product", key: "visitors_drop_pct", label: "访客骤降阈值 %", hint: "访客环比下跌超过该百分比提醒", min: 1, max: 500, step: 5 },
+          { group: "product", key: "conversion_low", label: "转化率下限 %", hint: "转化率低于该值且有流量时提醒", min: 0.01, max: 10, step: 0.1 },
+          { group: "product", key: "promo_roi_low", label: "推广 ROI 下限", hint: "推广ROI低于该值提醒", min: 0.1, max: 10, step: 0.1 },
+          { group: "product", key: "min_visitors", label: "最低访客数", hint: "转化提醒的访客门槛（避免低流量误报）", min: 1, max: 1000, step: 10 },
+        ]}
+      />
     </div>
   );
 }

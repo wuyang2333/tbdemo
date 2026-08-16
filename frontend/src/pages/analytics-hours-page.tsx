@@ -1,4 +1,4 @@
-import { BarChartOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, ReloadOutlined, RobotOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, DatePicker, Drawer, Empty, Segmented, Space, Spin, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -8,6 +8,8 @@ import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
 import { LineChart } from "../components/promotions/promotions-ui";
+import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
+import { useAlertConfig } from "../lib/use-alert-config";
 import type { AnalyticsHourPoint, AnalyticsHours } from "../types";
 
 const { Text } = Typography;
@@ -192,6 +194,9 @@ export function AnalyticsHoursPage() {
     range: string;
     recommended_hours: string[];
   } | null>(null);
+  const { config: alertConfig, saveConfig: saveAlertConfig } = useAlertConfig();
+  const [alertCfgOpen, setAlertCfgOpen] = useState(false);
+  const [alertSaving, setAlertSaving] = useState(false);
 
   const load = useCallback(
     async (sid?: number) => {
@@ -320,15 +325,28 @@ export function AnalyticsHoursPage() {
     metric === "sales" ? it.sales_cycle : metric === "visitors" ? it.visitors_cycle : metric === "orders" ? it.orders_cycle : it.conversion_cycle;
   const metricLabel = ({ sales: "销售额", visitors: "访客", orders: "订单", conversion_rate: "转化率" } as Record<MetricKey, string>)[metric];
   const fmtMetric = (v: number) => (metric === "sales" ? fmtMoney(v) : metric === "conversion_rate" ? `${v.toFixed(2)}%` : fmtInt(v));
+  const saveAlertCfg = async (patch: Parameters<typeof saveAlertConfig>[0]) => {
+    setAlertSaving(true);
+    try {
+      await saveAlertConfig(patch);
+      message.success("预警条件已保存");
+      setAlertCfgOpen(false);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAlertSaving(false);
+    }
+  };
   const topMetricHours = [...items].sort((a, b) => metricValue(b) - metricValue(a)).slice(0, 3).map((p) => p.hour);
   const topRoiHours = [...promoItems].filter((p) => p.promo_roi > 0).sort((a, b) => b.promo_roi - a.promo_roi).slice(0, 3).map((p) => p.hour);
-  const badHours = items.filter((p) => p.promo_spend > 0 && p.promo_roi < 1).map((p) => p.hour);
+  const badHours = items.filter((p) => p.promo_spend > 0 && p.promo_roi < alertConfig.hour.roi_low).map((p) => p.hour);
   const hourAlerts: { level: string; type: string; message: string }[] = [];
-  groupHours(data?.recommended_hours ?? []).forEach((r) => {
-    hourAlerts.push({ level: "success", type: "建议投放", message: `${r} 推广ROI≥2，值得加大投放` });
+  const recHours = items.filter((p) => p.promo_spend > 0 && p.promo_roi >= alertConfig.hour.roi_high).map((p) => p.hour);
+  groupHours(recHours).forEach((r) => {
+    hourAlerts.push({ level: "success", type: "建议投放", message: `${r} 推广ROI≥${alertConfig.hour.roi_high}，值得加大投放` });
   });
   groupHours(badHours).forEach((r) => {
-    hourAlerts.push({ level: "error", type: "ROI 偏低", message: `${r} 推广ROI<1，建议停投` });
+    hourAlerts.push({ level: "error", type: "ROI 偏低", message: `${r} 推广ROI<${alertConfig.hour.roi_low}，建议停投` });
   });
 
   return (
@@ -417,7 +435,14 @@ export function AnalyticsHoursPage() {
           </div>
 
           {items.length > 0 && hourAlerts.length > 0 && (
-            <Card variant="borderless" title="时段预警" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+            <Card
+              variant="borderless"
+              title="时段预警"
+              style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+              extra={
+                <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
+              }
+            >
               <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
                 <div style={{ display: "grid", gap: 4 }}>
                   {hourAlerts.map((a, i) => (
@@ -431,9 +456,16 @@ export function AnalyticsHoursPage() {
             </Card>
           )}
 {items.length > 0 && hourAlerts.length === 0 && (
-            <Card variant="borderless" title="时段预警" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+            <Card
+              variant="borderless"
+              title="时段预警"
+              style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+              extra={
+                <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
+              }
+            >
               <div style={{ fontSize: 13, color: "rgba(128,128,128,0.6)" }}>
-                暂无时段预警（推广数据未同步或本期 ROI 均在 1~2 之间）
+                暂无时段预警（未达到 建议投放ROI≥{alertConfig.hour.roi_high}、或 ROI低于{alertConfig.hour.roi_low} 的条件）
               </div>
             </Card>
           )}
@@ -471,8 +503,8 @@ export function AnalyticsHoursPage() {
               anomaly={(it) => {
                 const c = it.sales_cycle;
                 if (c == null) return null;
-                if (c <= -50) return <div title={`销售额环比 ${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff4d4f", marginBottom: 1 }} />;
-                if (c >= 100) return <div title={`销售额环比 +${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#fa8c16", marginBottom: 1 }} />;
+                if (c <= -alertConfig.hour.drop_pct) return <div title={`销售额环比 ${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff4d4f", marginBottom: 1 }} />;
+                if (c >= alertConfig.hour.surge_pct) return <div title={`销售额环比 +${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#fa8c16", marginBottom: 1 }} />;
                 return null;
               }}
               barSlots={(it, idx) => {
@@ -679,6 +711,20 @@ export function AnalyticsHoursPage() {
           <Empty description="生成失败或暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
         )}
       </Drawer>
+      <AlertSettingsModal
+        open={alertCfgOpen}
+        title="时段预警条件设置"
+        config={alertConfig}
+        onCancel={() => setAlertCfgOpen(false)}
+        onSave={saveAlertCfg}
+        saving={alertSaving}
+        fields={[
+          { group: "hour", key: "roi_high", label: "建议投放 ROI 门槛", hint: "达到该 ROI 的小时提示建议投放", min: 0.1, max: 100, step: 0.1 },
+          { group: "hour", key: "roi_low", label: "建议停投 ROI 门槛", hint: "低于该 ROI 且在投的小时提示停投", min: 0.1, max: 100, step: 0.1 },
+          { group: "hour", key: "drop_pct", label: "异常骤降阈值 %", hint: "销售额环比下跌超过该百分比标红", min: 1, max: 500, step: 5 },
+          { group: "hour", key: "surge_pct", label: "异常暴涨阈值 %", hint: "销售额环比上涨超过该百分比标橙", min: 1, max: 500, step: 5 },
+        ]}
+      />
     </div>
   );
 }

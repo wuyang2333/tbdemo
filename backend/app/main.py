@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.api import (
     accounts,
     ai,
+    alerts,
     analytics,
     auth,
     content,
@@ -140,6 +141,12 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+    app.include_router(
+        alerts.router,
+        prefix="/api/alerts",
+        tags=["alerts"],
+        dependencies=[Depends(get_current_user)],
+    )
     app.include_router(
         profile.router,
         prefix="/api/profile",

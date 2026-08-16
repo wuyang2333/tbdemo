@@ -772,7 +772,13 @@ def promo_alerts(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """推广预警：预算超限/接近预算、ROI较昨日明显下滑。"""
+    """推广预警：预算超限/接近预算、ROI较昨日明显下滑（阈值取统一预警配置）。"""
+    from backend.app.api.alerts import get_alert_config
+
+    pcfg = (get_alert_config(db) or {}).get("plan") or {}
+    budget_over = float(pcfg.get("budget_over") or 1.0)
+    budget_warn = float(pcfg.get("budget_warn") or 0.8)
+    roi_drop_ratio = float(pcfg.get("roi_drop_ratio") or 0.6)
     alerts = []
     rows = db.execute(
         "SELECT p.plan_name, p.scene_name, p.status, p.day_budget, "
@@ -791,11 +797,11 @@ def promo_alerts(
         ye_roi = r["ye_roi"] or 0
         if budget > 0 and rt_spend > 0:
             ratio = rt_spend / budget
-            if ratio >= 1:
+            if ratio >= budget_over:
                 alerts.append({"level": "error", "type": "预算超限", "message": f"「{name}」今日花费 {rt_spend:.0f} 元已超日预算 {budget:.0f} 元，建议调整"})
-            elif ratio >= 0.8:
+            elif ratio >= budget_warn:
                 alerts.append({"level": "warn", "type": "接近预算", "message": f"「{name}」今日花费已达日预算 {ratio * 100:.0f}%（{rt_spend:.0f}/{budget:.0f} 元）"})
-        if rt_spend > 0 and ye_roi > 0 and 0 < rt_roi < ye_roi * 0.6:
+        if rt_spend > 0 and ye_roi > 0 and 0 < rt_roi < ye_roi * roi_drop_ratio:
             alerts.append({"level": "warn", "type": "ROI下滑", "message": f"「{name}」今日ROI {rt_roi:.2f} 较昨日 {ye_roi:.2f} 明显下滑"})
     alerts.sort(key=lambda a: 0 if a["level"] == "error" else 1)
     return {"items": alerts[:50], "count": len(alerts)}
