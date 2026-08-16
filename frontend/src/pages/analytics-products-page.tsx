@@ -1,4 +1,4 @@
-import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { StoreScopeSelect, daySwitch, fmtInt, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
+import { StoreScopeSelect, daySwitch, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
@@ -64,16 +64,17 @@ export function AnalyticsProductsPage() {
     load(mode, storeId);
   }, [mode, storeId, load]);
 
-  const { syncing: syncStores, syncAll } = useSyncStores(() => load(mode, storeId));
-
-  const syncProducts = async () => {
+  const syncAll = async () => {
     setSyncing(true);
     try {
-      const url = mode === "realtime" ? "/stores/sync-items-realtime" : `/stores/sync-items?days=${mode}`;
-      const { data: res } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(url);
+      const storeRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>("/stores/sync-all");
+      const itemsUrl = mode === "realtime" ? "/stores/sync-items-realtime" : `/stores/sync-items?days=${mode}`;
+      const itemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(itemsUrl);
       const label = mode === "realtime" ? "实时商品" : `近 ${mode} 天商品`;
-      message.success(`${label}同步完成：成功 ${res.ok} / 共 ${res.total} 家`);
-      res.results.filter((r) => !r.ok).slice(0, 3).forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
+      message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家`);
+      [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok)]
+        .slice(0, 3)
+        .forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
       await load(mode, storeId);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -141,13 +142,7 @@ export function AnalyticsProductsPage() {
         extra={
           <Space>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
-            <Button icon={<ReloadOutlined />} onClick={() => load(mode, storeId)}>
-              刷新
-            </Button>
-            <Button icon={<SyncOutlined />} loading={syncing} onClick={syncProducts}>
-              {isRealtime ? "同步实时商品" : "同步商品数据"}
-            </Button>
-            <Button type="primary" icon={<SyncOutlined />} loading={syncStores} onClick={syncAll}>
+            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
               同步店铺数据
             </Button>
           </Space>
@@ -172,7 +167,7 @@ export function AnalyticsProductsPage() {
         </div>
       ) : !data ? (
         <Card variant="borderless">
-          <Empty description={`暂无${isRealtime ? "实时" : ""}商品数据，点「${isRealtime ? "同步实时商品" : "同步商品数据"}」抓取`} />
+          <Empty description={`暂无${isRealtime ? "实时" : ""}商品数据，点右上角「同步店铺数据」同步`} />
         </Card>
       ) : (
         <Card
