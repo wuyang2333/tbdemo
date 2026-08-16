@@ -10,6 +10,7 @@ import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/anal
 import { LineChart } from "../components/promotions/promotions-ui";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
+import { HourlyPushButton } from "../components/ui/hourly-push";
 import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import type { AnalyticsHourPoint, AnalyticsHours } from "../types";
 
@@ -371,6 +372,7 @@ export function AnalyticsHoursPage() {
             <Button icon={<RobotOutlined />} onClick={runAI}>
               AI 时段解读
             </Button>
+            <HourlyPushButton />
             <Button icon={<ReloadOutlined />} onClick={() => load(storeId)}>
               刷新
             </Button>
