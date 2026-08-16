@@ -619,12 +619,14 @@ def daily_report(
 ) -> dict:
     """经营日报：支持查看历史日期（date=YYYY-MM-DD），含完整指标/TOP商品/推广分场景/上周同期/预警。"""
     real_today = date_cls.today()
-    today = real_today
+    # 经营日报默认分析昨天（前一天数据完整后再看），date 参数可指定任意日期
     if date:
         try:
             today = date_cls.fromisoformat(date)
         except ValueError:
-            today = real_today
+            today = real_today - timedelta(days=1)
+    else:
+        today = real_today - timedelta(days=1)
     yesterday = today - timedelta(days=1)
     last_week = today - timedelta(days=7)
     ts, ys, ws = today.isoformat(), yesterday.isoformat(), last_week.isoformat()
@@ -731,7 +733,7 @@ def report_ai(
     report = daily_report(date=date, store_id=store_id, user=user, db=db)
     context = "\n".join(_report_text_lines(report))
     prompt = (
-        "你是淘宝店铺的运营分析师。根据下面这份经营日报，写一段120字以内的今日总结，口语化、适合直接发到工作群。"
+        "你是淘宝店铺的运营分析师。根据下面这份经营日报（默认是昨日数据），写一段120字以内的日报总结，口语化、适合直接发到工作群。"
         "包含：整体表现一句话、今天最值得注意的亮点或问题、一句明天建议。不要编造数据。\n\n" + context
     )
     try:
@@ -742,7 +744,7 @@ def report_ai(
 
 
 def _report_push_config(db) -> dict:
-    default = {"enabled": False, "webhook": "", "hour": 21, "minute": 0}
+    default = {"enabled": False, "webhook": "", "hour": 9, "minute": 0}
     row = db.execute("SELECT value FROM meta WHERE key = 'daily_report_push'").fetchone()
     if row and row["value"]:
         try:

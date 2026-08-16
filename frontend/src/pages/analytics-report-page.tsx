@@ -4,7 +4,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage, TOKEN_KEY } from "../lib/api";
-import { useAutoRefresh } from "../lib/use-auto-refresh";
+import { useDailyRefreshAt } from "../lib/use-daily-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsReport } from "../types";
@@ -23,12 +23,12 @@ export function AnalyticsReportPage() {
   const [lastUpdated, setLastUpdated] = useState("");
   const [loading, setLoading] = useState(false);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
-  const [date, setDate] = useState<string | null>(null);
+  const [date, setDate] = useState<string | null>(dayjs().subtract(1, "day").format("YYYY-MM-DD"));
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiReply, setAiReply] = useState("");
   const [pushOpen, setPushOpen] = useState(false);
-  const [pushCfg, setPushCfg] = useState({ enabled: false, webhook: "", hour: 21, minute: 0 });
+  const [pushCfg, setPushCfg] = useState({ enabled: false, webhook: "", hour: 9, minute: 0 });
   const [pushSaving, setPushSaving] = useState(false);
   const [pushTesting, setPushTesting] = useState(false);
 
@@ -52,9 +52,11 @@ export function AnalyticsReportPage() {
   useEffect(() => {
     load();
   }, [load]);
-  useAutoRefresh(load);
+  useDailyRefreshAt(load, 9);
 
   const { syncing, syncAll } = useSyncStores(load);
+
+  const dayLabel = data?.date === dayjs().format("YYYY-MM-DD") ? "今日" : data?.date === dayjs().subtract(1, "day").format("YYYY-MM-DD") ? "昨日" : (data?.date || "").slice(5) || "";
 
   const pct = (cur: number, prev: number): string => {
     if (!prev) return "—";
@@ -221,7 +223,7 @@ export function AnalyticsReportPage() {
               value={date ? dayjs(date) : null}
               onChange={(d) => setDate(d ? d.format("YYYY-MM-DD") : null)}
             />
-            {date && (<Button size="small" onClick={() => setDate(null)}>回到今天</Button>)}
+            {date && dayLabel !== "今日" && (<Button size="small" onClick={() => setDate(dayjs().subtract(1, "day").format("YYYY-MM-DD"))}>回到昨日</Button>)}
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
@@ -253,11 +255,11 @@ export function AnalyticsReportPage() {
           )}
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="访客" value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="销售额" value={data.today.sales} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.sales, data.yesterday.sales)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="订单" value={data.today.orders} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.orders, data.yesterday.orders)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="转化率" value={data.today.conversion_rate} precision={2} suffix="%" valueStyle={{ color: "#1677ff" }} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="客单价" value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}销售额`} value={data.today.sales} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.sales, data.yesterday.sales)}</Text>} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}订单`} value={data.today.orders} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.orders, data.yesterday.orders)}</Text>} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" valueStyle={{ color: "#1677ff" }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="复购率" value={data.today.repeat_rate ?? 0} precision={1} suffix="%" valueStyle={{ color: "#52c41a" }} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="加购" value={data.add_cart} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{data.add_cart ? "次" : "—"}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" valueStyle={{ color: "#ff4d4f" }} /></Card></Col>
@@ -265,7 +267,7 @@ export function AnalyticsReportPage() {
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={24} md={12}>
-              <Card variant="borderless" title={`推广${data.is_today ? "（实时）" : ""}`} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+              <Card variant="borderless" title={`推广（${dayLabel}）`} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
                 <Descriptions size="small" column={3}
                   items={[
                     { key: "s", label: "花费", children: fmt(data.promo_today.spend) },
@@ -277,7 +279,7 @@ export function AnalyticsReportPage() {
               </Card>
             </Col>
             <Col xs={24} md={12}>
-              <Card variant="borderless" title="昨日推广" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+              <Card variant="borderless" title="前一日推广" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
                 <Descriptions size="small" column={3}
                   items={[
                     { key: "s", label: "花费", children: fmt(data.promo_yesterday.spend) },
@@ -291,8 +293,8 @@ export function AnalyticsReportPage() {
           </Row>
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={24} md={12}>{topCard("今日 TOP 商品", data.top_today)}</Col>
-            <Col xs={24} md={12}>{topCard("昨日 TOP 商品", data.top_yesterday)}</Col>
+            <Col xs={24} md={12}>{topCard(`${dayLabel} TOP 商品`, data.top_today)}</Col>
+            <Col xs={24} md={12}>{topCard("前一日 TOP 商品", data.top_yesterday)}</Col>
           </Row>
 
           <Card variant="borderless" title="较上周同期" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
@@ -309,7 +311,7 @@ export function AnalyticsReportPage() {
         </>
       )}
 
-      <Drawer title="AI 今日总结" width={520} open={aiOpen} onClose={() => setAiOpen(false)} destroyOnClose>
+      <Drawer title="AI 日报总结" width={520} open={aiOpen} onClose={() => setAiOpen(false)} destroyOnClose>
         {aiLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}><Spin tip="AI 正在生成总结…" /></div>
         ) : aiReply ? (
