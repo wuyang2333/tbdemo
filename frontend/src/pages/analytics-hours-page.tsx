@@ -10,6 +10,7 @@ import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/anal
 import { LineChart } from "../components/promotions/promotions-ui";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
+import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import type { AnalyticsHourPoint, AnalyticsHours } from "../types";
 
 const { Text } = Typography;
@@ -348,6 +349,15 @@ export function AnalyticsHoursPage() {
   groupHours(badHours).forEach((r) => {
     hourAlerts.push({ level: "error", type: "ROI 偏低", message: `${r} 推广ROI<${alertConfig.hour.roi_low}，建议停投` });
   });
+  for (const rule of alertConfig.rules.filter((r) => r.module === "hour")) {
+    for (const hp of items) {
+      if (evalRule(rule, hp as unknown as Record<string, unknown>)) {
+        hourAlerts.push({ level: "warning", type: `自定义·${ruleText(rule)}`, message: buildRuleMessage(rule, hp as unknown as Record<string, unknown>, hp.hour) });
+        if (hourAlerts.length >= 20) break;
+      }
+    }
+    if (hourAlerts.length >= 20) break;
+  }
 
   return (
     <div>
@@ -714,7 +724,9 @@ export function AnalyticsHoursPage() {
       <AlertSettingsModal
         open={alertCfgOpen}
         title="时段预警条件设置"
+        module="hour"
         config={alertConfig}
+        rules={alertConfig.rules}
         onCancel={() => setAlertCfgOpen(false)}
         onSave={saveAlertCfg}
         saving={alertSaving}

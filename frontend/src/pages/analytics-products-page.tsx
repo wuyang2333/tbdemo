@@ -11,6 +11,7 @@ import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analyt
 import { LineChart } from "../components/promotions/promotions-ui";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
+import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
@@ -334,6 +335,17 @@ export function AnalyticsProductsPage() {
       setAlertSaving(false);
     }
   };
+  const ruleAlerts: { level: string; type: string; message: string }[] = [];
+  for (const rule of alertConfig.rules.filter((r) => r.module === "product")) {
+    for (const item of data?.items ?? []) {
+      if (evalRule(rule, item as unknown as Record<string, unknown>)) {
+        ruleAlerts.push({ level: "warning", type: `自定义·${ruleText(rule)}`, message: buildRuleMessage(rule, item as unknown as Record<string, unknown>, item.item_title) });
+        if (ruleAlerts.length >= 20) break;
+      }
+    }
+    if (ruleAlerts.length >= 20) break;
+  }
+  const allProductAlerts = [...ruleAlerts, ...productAlerts];
   const filteredItems = (data?.items ?? [])
     .map((item, index) => ({ ...item, rank: index + 1 }))
     .filter((item) => {
@@ -650,7 +662,7 @@ export function AnalyticsProductsPage() {
       )}
       </Space>
 
-      {productAlerts.length > 0 && (
+      {allProductAlerts.length > 0 && (
         <Card
           variant="borderless"
           title="商品预警"
@@ -661,7 +673,7 @@ export function AnalyticsProductsPage() {
         >
           <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
             <div style={{ display: "grid", gap: 4 }}>
-              {productAlerts.map((a, i) => (
+              {allProductAlerts.map((a, i) => (
                 <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
                   {a.level === "error" ? "⚠️ " : "❗ "}
                   [{a.type}] {a.message}
@@ -937,7 +949,9 @@ export function AnalyticsProductsPage() {
       <AlertSettingsModal
         open={alertCfgOpen}
         title="商品预警条件设置"
+        module="product"
         config={alertConfig}
+        rules={alertConfig.rules}
         onCancel={() => setAlertCfgOpen(false)}
         onSave={saveAlertCfg}
         saving={alertSaving}

@@ -8,6 +8,7 @@ import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
+import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import { PageHeader } from "../components/ui/page-header";
 import { MODE_OPTIONS, LineChart, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoPlan } from "../types";
@@ -166,6 +167,17 @@ export function PromotionsPlansPage() {
     mid: plans.filter((p) => diag(p).label === "关注").length,
     low: plans.filter((p) => diag(p).label === "建议暂停").length,
   };
+  const ruleAlerts: { level: string; type: string; message: string }[] = [];
+  for (const rule of alertConfig.rules.filter((r) => r.module === "plan")) {
+    for (const p of plans) {
+      if (evalRule(rule, p as unknown as Record<string, unknown>)) {
+        ruleAlerts.push({ level: "warning", type: `自定义·${ruleText(rule)}`, message: buildRuleMessage(rule, p as unknown as Record<string, unknown>, p.plan_name) });
+        if (ruleAlerts.length >= 20) break;
+      }
+    }
+    if (ruleAlerts.length >= 20) break;
+  }
+  const allPlanAlerts = [...alerts, ...ruleAlerts];
   const runAI = async () => {
     setAiOpen(true);
     setAiLoading(true);
@@ -563,7 +575,7 @@ export function PromotionsPlansPage() {
         环比口径：实时较昨日全天 · 昨天较前天 · 近7天较上一周（涨红跌绿，红色=上涨）
       </Text>
 
-      {alerts.length > 0 && (
+      {allPlanAlerts.length > 0 && (
         <Card
           variant="borderless"
           title="推广预警"
@@ -574,7 +586,7 @@ export function PromotionsPlansPage() {
         >
           <div style={{ maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
             <Space direction="vertical" style={{ width: "100%" }} size={4}>
-              {alerts.map((a, i) => (
+              {allPlanAlerts.map((a, i) => (
                 <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
                   {a.level === "error" ? "⚠️ " : "❗ "}
                   [{a.type}] {a.message}
@@ -821,7 +833,9 @@ export function PromotionsPlansPage() {
       <AlertSettingsModal
         open={alertCfgOpen}
         title="推广预警条件设置"
+        module="plan"
         config={alertConfig}
+        rules={alertConfig.rules}
         onCancel={() => setAlertCfgOpen(false)}
         onSave={saveAlertCfg}
         saving={alertSaving}

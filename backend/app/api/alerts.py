@@ -26,7 +26,32 @@ DEFAULT_ALERT_CONFIG = {
         "min_visitors": 50,
     },
     "plan": {"budget_over": 1.0, "budget_warn": 0.8, "roi_low": 1.0, "roi_drop_ratio": 0.6},
+    "rules": [],
 }
+
+
+RULE_MODULES = {"product", "plan", "hour"}
+RULE_OPERATORS = {"cycle_drop_pct", "cycle_up_pct", "lt", "gt"}
+
+
+def _norm_rule(r) -> dict | None:
+    """规范化一条自定义规则，非法则丢弃。"""
+    if not isinstance(r, dict):
+        return None
+    if r.get("module") not in RULE_MODULES or r.get("operator") not in RULE_OPERATORS:
+        return None
+    try:
+        threshold = float(r.get("threshold") or 0)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "id": str(r.get("id") or ""),
+        "module": r["module"],
+        "field": str(r.get("field") or ""),
+        "operator": r["operator"],
+        "threshold": threshold,
+        "enabled": bool(r.get("enabled", True)),
+    }
 
 
 def get_alert_config(db) -> dict:
@@ -38,10 +63,14 @@ def get_alert_config(db) -> dict:
     try:
         data = json.loads(row["value"])
         for group, fields in base.items():
+            if group == "rules":
+                continue
             src = data.get(group) or {}
             for k in fields:
                 if k in src and isinstance(src[k], (int, float)):
                     fields[k] = float(src[k])
+        if isinstance(data.get("rules"), list):
+            base["rules"] = [_norm_rule(r) for r in data["rules"]]
     except (ValueError, TypeError):
         pass
     return base
@@ -59,6 +88,7 @@ class AlertConfigIn(BaseModel):
     hour: dict | None = None
     product: dict | None = None
     plan: dict | None = None
+    rules: list | None = None
 
 
 @router.get("/config")
@@ -88,6 +118,8 @@ def set_config(
         for k, v in body.plan.items():
             if k in cur["plan"]:
                 cur["plan"][k] = _clamp(v, 0.01, 10)
+    if body.rules is not None:
+        cur["rules"] = [r for r in (_norm_rule(x) for x in body.rules) if r]
     db.execute(
         "INSERT INTO meta (key, value) VALUES ('alert_config', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
