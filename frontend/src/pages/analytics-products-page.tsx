@@ -37,6 +37,7 @@ export function AnalyticsProductsPage() {
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
 
   const load = useCallback(async (m: string, sid?: number) => {
     setLoading(true);
@@ -88,19 +89,74 @@ export function AnalyticsProductsPage() {
   const isRealtime = mode === "realtime";
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
-  const renderItem = (_: unknown, row: AnalyticsProduct) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      {row.image ? (
-        <img src={row.image} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
-      ) : (
-        <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
-      )}
-      <div style={{ minWidth: 0 }}>
-        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
-        <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>ID {row.item_id}</div>
+  const copyItemId = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = id;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    message.success(`已复制商品ID：${id}`);
+  };
+
+  const renderItem = (_: unknown, row: AnalyticsProduct) => {
+    const hovered = hoverKey === row.item_id;
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {row.image ? (
+          <img src={row.image} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+        ) : (
+          <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
+        )}
+        <div style={{ minWidth: 0, position: "relative", paddingTop: hovered ? 26 : 0, transition: "padding-top 0.15s" }}>
+          {hovered && (
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                display: "flex",
+                background: "#1677ff",
+                borderRadius: 4,
+                overflow: "hidden",
+                zIndex: 2,
+              }}
+            >
+              <Button
+                size="small"
+                type="text"
+                style={{ color: "#fff", height: 22, lineHeight: "22px", padding: "0 10px", fontSize: 12 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyItemId(row.item_id);
+                }}
+              >
+                复制
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                style={{ color: "#fff", height: 22, lineHeight: "22px", padding: "0 10px", fontSize: 12 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  message.info("AI分析功能开发中");
+                }}
+              >
+                AI分析
+              </Button>
+            </div>
+          )}
+          <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
+          <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>ID {row.item_id}</div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
   const columns: TableColumnsType<AnalyticsProduct> = [
     ...(isRealtime
       ? ([
@@ -183,6 +239,10 @@ export function AnalyticsProductsPage() {
             size="small"
             columns={columns}
             dataSource={data.items.map((item, index) => ({ ...item, rank: index + 1 }))}
+            onRow={(record) => ({
+              onMouseEnter: () => setHoverKey(record.item_id),
+              onMouseLeave: () => setHoverKey((k) => (k === record.item_id ? null : k)),
+            })}
             pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
             scroll={{ x: 900 }}
           />
