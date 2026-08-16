@@ -946,6 +946,283 @@ def ai_insight_chat(
     return {"reply": reply}
 
 
+def _sum_product_rows(rows) -> dict:
+    """商品每日明细汇总（销售额/订单/买家/访客/浏览/转化/加购/退款）。"""
+    sales = 0.0
+    orders = 0
+    buyers = 0
+    visitors = 0
+    pv = 0
+    add_cart = 0
+    refund = 0.0
+    for r in rows:
+        sales += r["sales"] or 0
+        orders += r["orders"] or 0
+        buyers += r["buyers"] or 0
+        visitors += r["visitors"] or 0
+        pv += r["pv"] or 0
+        add_cart += r["add_cart"] or 0
+        refund += r["refund_amount"] or 0
+    return {
+        "sales": round(sales, 2),
+        "orders": orders,
+        "buyers": buyers,
+        "visitors": visitors,
+        "pv": pv,
+        "conversion_rate": round(buyers / visitors * 100, 2) if visitors else 0.0,
+        "add_cart": add_cart,
+        "refund_amount": round(refund, 2),
+    }
+
+
+def _product_rank_realtime(item_id: str, store_id: int | None, db) -> tuple[int, float, float]:
+    """商品在店铺实时榜中的排名、销售占比与全店实时销售额。"""
+    sf, sp = _store_filter(store_id)
+    rows = db.execute("SELECT item_id, sales FROM store_item_realtime WHERE 1=1" + sf, sp).fetchall()
+    items = sorted(rows, key=lambda r: r["sales"] or 0, reverse=True)
+    store_total = sum(r["sales"] or 0 for r in items)
+    rank = None
+    sales = 0.0
+    for i, r in enumerate(items):
+        if r["item_id"] == item_id:
+            rank = i + 1
+            sales = r["sales"] or 0
+            break
+    share = round(sales / store_total * 100, 1) if store_total else 0.0
+    return (rank or len(items) + 1), share, round(store_total, 2)
+
+
+def _product_rank_days(item_id: str, store_id: int | None, days: int, db) -> tuple[int, float, float]:
+    """商品在店铺区间销售榜中的排名、占比与全店区间销售额。"""
+    sf, sp = _store_filter(store_id)
+    today = date_cls.today()
+    start = today - timedelta(days=days - 1)
+    rows = db.execute(
+        "SELECT item_id, SUM(sales) AS sales FROM store_item_daily "
+        "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY item_id",
+        [start.isoformat(), today.isoformat()] + sp,
+    ).fetchall()
+    items = sorted(rows, key=lambda r: r["sales"] or 0, reverse=True)
+    store_total = sum(r["sales"] or 0 for r in items)
+    rank = None
+    sales = 0.0
+    for i, r in enumerate(items):
+        if r["item_id"] == item_id:
+            rank = i + 1
+            sales = r["sales"] or 0
+            break
+    share = round(sales / store_total * 100, 1) if store_total else 0.0
+    return (rank or len(items) + 1), share, round(store_total, 2)
+
+
+def _product_trend_daily(item_id: str, store_id: int | None, days: int, db) -> list[str]:
+    """商品近 N 天逐日销售额（最多 7 个点）。"""
+    sf, sp = _store_filter(store_id)
+    today = date_cls.today()
+    start = today - timedelta(days=days - 1)
+    rows = db.execute(
+        "SELECT data_date, sales FROM store_item_daily WHERE item_id = ? AND data_date >= ?" + sf + " ORDER BY data_date",
+        [item_id, start.isoformat()] + sp,
+    ).fetchall()
+    return [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
+
+
+def _collect_product_data(item_id: str, store_id: int | None, mode: str, db) -> dict:
+    """按模式汇总单个商品的诊断数据。"""
+    today = date_cls.today()
+    ts = today.isoformat()
+    sf, sp = _store_filter(store_id)
+    rt = db.execute("SELECT * FROM store_item_realtime WHERE item_id = ?" + sf, [item_id] + sp).fetchone()
+    title = (rt["item_title"] or "") if rt else ""
+    image = (rt["image"] or "") if rt else ""
+
+    if mode == "realtime":
+        if rt:
+            cur = {
+                "sales": round(rt["sales"] or 0, 2),
+                "orders": rt["orders"] or 0,
+                "buyers": rt["buyers"] or 0,
+                "visitors": rt["visitors"] or 0,
+                "pv": rt["pv"] or 0,
+                "conversion_rate": round(rt["conversion_rate"] or 0, 2),
+                "add_cart": rt["add_cart"] or 0,
+                "refund_amount": round(rt["refund_amount"] or 0, 2),
+            }
+            chg = {
+                "sales": round(rt["sales_cycle"] or 0, 1) if rt["sales_cycle"] is not None else None,
+                "orders": round(rt["orders_cycle"] or 0, 1) if rt["orders_cycle"] is not None else None,
+                "visitors": round(rt["visitors_cycle"] or 0, 1) if rt["visitors_cycle"] is not None else None,
+                "conversion": round(rt["conversion_cycle"] or 0, 2) if rt["conversion_cycle"] is not None else None,
+                "add_cart": round(rt["add_cart_cycle"] or 0, 1) if rt["add_cart_cycle"] is not None else None,
+            }
+        else:
+            cur = {"sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0, "conversion_rate": 0.0, "add_cart": 0, "refund_amount": 0.0}
+            chg = {"sales": None, "orders": None, "visitors": None, "conversion": None, "add_cart": None}
+        rank, share, store_total = _product_rank_realtime(item_id, store_id, db)
+        range_label = f"今日实时（{ts[5:]}）"
+        trend = _product_trend_daily(item_id, store_id, 7, db)
+    else:
+        try:
+            days = int(mode)
+        except (TypeError, ValueError):
+            days = 14
+        if not (1 <= days <= 90):
+            days = 14
+        start = today - timedelta(days=days - 1)
+        prev_end = start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=days - 1)
+        rows = db.execute(
+            "SELECT * FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+            [item_id, start.isoformat(), today.isoformat()] + sp,
+        ).fetchall()
+        prev_rows = db.execute(
+            "SELECT * FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf,
+            [item_id, prev_start.isoformat(), prev_end.isoformat()] + sp,
+        ).fetchall()
+        cur = _sum_product_rows(rows)
+        prev = _sum_product_rows(prev_rows)
+        if rows and not title:
+            title = rows[-1]["item_title"] or ""
+        prev_active_days = sum(1 for r in prev_rows if (r["sales"] or 0) > 0)
+        if prev_active_days < 2:
+            chg = {"sales": None, "orders": None, "visitors": None, "conversion": None, "add_cart": None}
+        else:
+            chg = {
+                "sales": _pct_chg(cur["sales"], prev["sales"]),
+                "orders": _pct_chg(cur["orders"], prev["orders"]),
+                "visitors": _pct_chg(cur["visitors"], prev["visitors"]),
+                "conversion": round(cur["conversion_rate"] - prev["conversion_rate"], 2) if prev["visitors"] else None,
+                "add_cart": _pct_chg(cur["add_cart"], prev["add_cart"]),
+            }
+        rank, share, store_total = _product_rank_days(item_id, store_id, days, db)
+        range_label = f"近 {days} 天（{start.strftime('%m-%d')}~{today.strftime('%m-%d')}）"
+        trend = [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
+
+    return {
+        "item_id": item_id,
+        "title": title or item_id,
+        "image": image,
+        "range_label": range_label,
+        "cur": cur,
+        "chg": chg,
+        "trend": trend,
+        "rank": rank,
+        "share": share,
+        "store_total_sales": store_total,
+    }
+
+
+def _product_data_lines(d: dict) -> list[str]:
+    """单品诊断数据行（解读与追问共用）。"""
+    cur = d["cur"]
+    chg = d["chg"]
+    fmt_pct = lambda x: f"{x:+.1f}%" if x is not None else "—"
+    fmt_pp = lambda x: f"{x:+.2f} 个百分点" if x is not None else "—"
+    lines = [
+        f"商品：{d['title']}（ID {d['item_id']}）",
+        f"数据范围：{d['range_label']}",
+        (
+            f"销售额 {cur['sales']:.0f} 元（环比 {fmt_pct(chg['sales'])}），订单 {cur['orders']}（环比 {fmt_pct(chg['orders'])}），"
+            f"访客 {cur['visitors']}（环比 {fmt_pct(chg['visitors'])}），转化率 {cur['conversion_rate']}%（较上期 {fmt_pp(chg['conversion'])}），"
+            f"加购 {cur['add_cart']}（环比 {fmt_pct(chg['add_cart'])}），退款 {cur['refund_amount']:.0f} 元"
+        ),
+        f"店铺内排名第 {d['rank']} 名，占全店销售额 {d['share']}%（全店同期销售额 {d['store_total_sales']:.0f} 元）",
+    ]
+    if d["trend"]:
+        lines.append("逐日销售额：" + "、".join(d["trend"]))
+    return lines
+
+
+def _build_product_prompt(d: dict) -> str:
+    prompt = (
+        "你是淘宝店铺的运营数据分析师。请针对下面这个单品输出诊断，要求严格按以下格式：\n"
+        "【整体表现】一句话概括该商品本期表现并给出关键数字（销售额、订单、转化率）。\n"
+        "【亮点】\n- 亮点1\n- 亮点2\n- 亮点3（最多3条，确实没有就写“本期暂无突出亮点”）\n"
+        "【风险】\n- 风险1\n- 风险2（最多2条，没有就写“暂无明显风险”）\n"
+        "【建议】\n- 建议1\n- 建议2\n- 建议3（最多3条，具体可执行，可从标题/主图/价格/加购催付/退款处理等方向给）\n"
+        "简体中文、语气务实，不客套；金额≥1万用“X.X万”简化；只依据给定数据，不要编造。\n\n"
+        + "\n".join(_product_data_lines(d))
+    )
+    return prompt
+
+
+def _product_metrics(d: dict) -> list[dict]:
+    cur = d["cur"]
+    chg = d["chg"]
+    return [
+        {"label": "销售额", "value": f"¥{cur['sales']:,.0f}", "change": chg["sales"], "unit": "%"},
+        {"label": "订单", "value": f"{cur['orders']}", "change": chg["orders"], "unit": "%"},
+        {"label": "转化率", "value": f"{cur['conversion_rate']}%", "change": chg["conversion"], "unit": "pp"},
+        {"label": "加购", "value": f"{cur['add_cart']}", "change": chg["add_cart"], "unit": "%"},
+        {"label": "退款", "value": f"¥{cur['refund_amount']:,.0f}", "change": None, "unit": "val"},
+        {"label": "店铺排名", "value": f"第{d['rank']}名", "change": None, "unit": "val"},
+    ]
+
+
+class ProductMsgIn(BaseModel):
+    role: str
+    content: str
+
+
+class ProductChatIn(BaseModel):
+    mode: str = "realtime"
+    store_id: int | None = None
+    messages: list[ProductMsgIn] = []
+
+
+@router.post("/products/{item_id}/insight")
+def product_ai_insight(
+    item_id: str,
+    mode: str = "realtime",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    data = _collect_product_data(item_id, store_id, mode, db)
+    try:
+        reply = chat_completion(cfg, [{"role": "user", "content": _build_product_prompt(data)}], timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "sections": _parse_insight_sections(reply),
+        "reply": reply,
+        "metrics": _product_metrics(data),
+        "range": data["range_label"],
+        "product": {"item_id": data["item_id"], "item_title": data["title"], "image": data["image"]},
+        "date": date_cls.today().isoformat(),
+    }
+
+
+@router.post("/products/{item_id}/insight/chat")
+def product_ai_insight_chat(
+    item_id: str,
+    body: ProductChatIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    data = _collect_product_data(item_id, body.store_id, body.mode, db)
+    context = (
+        "你是淘宝店铺的运营数据分析师。以下是该商品的数据上下文：\n"
+        + "\n".join(_product_data_lines(data))
+        + "\n用户会围绕这个商品追问，请结合数据回答，简洁务实，不要编造；数据里没有的信息要如实说明。"
+    )
+    msgs: list[dict] = [{"role": "system", "content": context}]
+    for m in body.messages[-12:]:
+        if m.role in ("user", "assistant") and (m.content or "").strip():
+            msgs.append({"role": m.role, "content": m.content})
+    try:
+        reply = chat_completion(cfg, msgs, timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"reply": reply}
+
+
 # ---------- 通用：单店筛选 ----------
 
 def _store_filter(store_id: int | None) -> tuple[str, list]:

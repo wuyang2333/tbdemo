@@ -1,5 +1,5 @@
-import { BarChartOutlined, CopyOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, RobotOutlined, SendOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
+import { Button, Card, Drawer, Empty, Input, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -17,6 +17,75 @@ const MODE_OPTIONS = [
   { label: "近 14 天", value: "14" },
   { label: "近 30 天", value: "30" },
 ];
+
+interface ProductInsightSections {
+  overall: string;
+  highlights: string[];
+  risks: string[];
+  suggestions: string[];
+}
+interface ProductInsightMetric {
+  label: string;
+  value: string;
+  change: number | null;
+  unit: string;
+}
+interface ProductInsightResult {
+  sections: ProductInsightSections;
+  metrics: ProductInsightMetric[];
+  range: string;
+  reply: string;
+  product: { item_id: string; item_title: string; image?: string };
+}
+
+function ProductChangeBadge({ change, unit }: { change: number | null; unit: string }) {
+  if (change == null) return <span style={{ color: "rgba(128,128,128,0.55)", fontSize: 12 }}>—</span>;
+  const up = change >= 0;
+  const color = up ? "#ff4d4f" : "#52c41a";
+  const suffix = unit === "%" ? "%" : unit === "pp" ? "pp" : "";
+  return (
+    <span style={{ color, fontSize: 12, fontWeight: 600 }}>
+      {up ? "+" : "-"}
+      {Math.abs(change).toFixed(unit === "val" ? 0 : 1)}
+      {suffix}
+    </span>
+  );
+}
+
+function ProductSection({
+  icon,
+  color,
+  title,
+  items,
+}: {
+  icon: React.ReactNode;
+  color: string;
+  title: string;
+  items: string[];
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 10,
+        padding: "10px 12px",
+        borderRadius: 10,
+        background: "var(--ops-card-bg-2)",
+        border: "1px solid var(--ops-border)",
+      }}
+    >
+      <span style={{ color, fontSize: 15, marginTop: 2, flexShrink: 0 }}>{icon}</span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
+        {items.map((it, idx) => (
+          <div key={idx} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>
+            {it}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function MetricCell({ value, change }: { value: string; change: number }) {
   const up = change >= 0;
@@ -38,6 +107,13 @@ export function AnalyticsProductsPage() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detail, setDetail] = useState<{ item_id: string; item_title: string; image?: string } | null>(null);
+  const [detailResult, setDetailResult] = useState<ProductInsightResult | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailChat, setDetailChat] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [detailChatInput, setDetailChatInput] = useState("");
+  const [detailChatLoading, setDetailChatLoading] = useState(false);
 
   const load = useCallback(async (m: string, sid?: number) => {
     setLoading(true);
@@ -86,6 +162,50 @@ export function AnalyticsProductsPage() {
     }
   };
 
+  const openProductAI = async (row: AnalyticsProduct) => {
+    setDetail({ item_id: row.item_id, item_title: row.item_title, image: row.image });
+    setDetailResult(null);
+    setDetailChat([]);
+    setDetailOpen(true);
+    setDetailLoading(true);
+    try {
+      const params = new URLSearchParams({ mode: isRealtime ? "realtime" : mode });
+      if (storeId) params.set("store_id", String(storeId));
+      const { data } = await http.post<ProductInsightResult>(
+        `/analytics/products/${encodeURIComponent(row.item_id)}/insight?${params.toString()}`
+      );
+      setDetailResult(data);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const sendDetailChat = async () => {
+    const q = detailChatInput.trim();
+    if (!q || !detail || !detailResult) return;
+    const next = [...detailChat, { role: "user" as const, content: q }];
+    setDetailChat(next);
+    setDetailChatInput("");
+    setDetailChatLoading(true);
+    try {
+      const { data } = await http.post<{ reply: string }>(
+        `/analytics/products/${encodeURIComponent(detail.item_id)}/insight/chat`,
+        {
+          mode: isRealtime ? "realtime" : mode,
+          store_id: storeId,
+          messages: [{ role: "assistant", content: detailResult.reply }, ...next],
+        }
+      );
+      setDetailChat([...next, { role: "assistant" as const, content: data.reply }]);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setDetailChatLoading(false);
+    }
+  };
+
   const isRealtime = mode === "realtime";
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
@@ -117,7 +237,7 @@ export function AnalyticsProductsPage() {
             <button type="button" className="phb-btn" onClick={() => copyItemId(row.item_id)}>
               <CopyOutlined /> 复制
             </button>
-            <button type="button" className="phb-btn" onClick={() => message.info("AI分析功能开发中")}>
+            <button type="button" className="phb-btn" onClick={() => openProductAI(row)}>
               <RobotOutlined /> AI分析
             </button>
           </div>
@@ -218,6 +338,125 @@ export function AnalyticsProductsPage() {
           />
         </Card>
       )}
+
+      <Drawer
+        title={
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {detail?.image ? (
+              <img src={detail.image} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: "cover" }} />
+            ) : null}
+            <div style={{ minWidth: 0 }}>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 420, fontWeight: 600 }}>
+                {detail?.item_title}
+              </div>
+              <div style={{ fontSize: 12, color: "rgba(128,128,128,0.75)" }}>ID {detail?.item_id}</div>
+            </div>
+          </div>
+        }
+        width={640}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        destroyOnClose
+      >
+        {detailLoading ? (
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <Spin tip="AI 正在分析该商品…" />
+          </div>
+        ) : detailResult ? (
+          <div>
+            <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+              分析范围：{detailResult.range} · 基于生意参谋商品数据
+            </Text>
+
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+              {detailResult.metrics.map((m) => (
+                <div
+                  key={m.label}
+                  style={{
+                    flex: "1 1 130px",
+                    minWidth: 120,
+                    padding: "8px 12px",
+                    borderRadius: 10,
+                    background: "var(--ops-card-bg-2)",
+                    border: "1px solid var(--ops-border)",
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: "var(--ops-text-secondary)", marginBottom: 2 }}>{m.label}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{m.value}</div>
+                  <ProductChangeBadge change={m.change} unit={m.unit} />
+                </div>
+              ))}
+            </div>
+
+            {detailResult.sections.overall && (
+              <div
+                style={{
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  background: "var(--ops-accent-soft)",
+                  borderLeft: "3px solid var(--ops-accent)",
+                  marginBottom: 10,
+                }}
+              >
+                <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{detailResult.sections.overall}</Text>
+              </div>
+            )}
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {detailResult.sections.highlights.length > 0 && (
+                <ProductSection icon={<CheckCircleOutlined />} color="#52c41a" title="亮点" items={detailResult.sections.highlights} />
+              )}
+              {detailResult.sections.risks.length > 0 && (
+                <ProductSection icon={<WarningOutlined />} color="#ff4d4f" title="风险" items={detailResult.sections.risks} />
+              )}
+              {detailResult.sections.suggestions.length > 0 && (
+                <ProductSection icon={<BulbOutlined />} color="var(--ops-accent-light)" title="建议" items={detailResult.sections.suggestions} />
+              )}
+            </div>
+
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--ops-border)" }}>
+              <div style={{ fontWeight: 600, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                <RobotOutlined style={{ color: "var(--ops-accent-light)" }} /> 追问 AI
+              </div>
+              {detailChat.length > 0 && (
+                <div style={{ display: "grid", gap: 8, marginBottom: 10, maxHeight: 260, overflowY: "auto" }}>
+                  {detailChat.map((m, i) =>
+                    m.role === "user" ? (
+                      <div key={i} style={{ alignSelf: "flex-end", maxWidth: "85%", background: "var(--ops-accent-soft)", padding: "8px 12px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap" }}>
+                        {m.content}
+                      </div>
+                    ) : (
+                      <div key={i} style={{ alignSelf: "flex-start", maxWidth: "95%", background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", padding: "8px 12px", borderRadius: 10, fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                        {m.content}
+                      </div>
+                    ),
+                  )}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <Input.TextArea
+                  rows={2}
+                  value={detailChatInput}
+                  onChange={(e) => setDetailChatInput(e.target.value)}
+                  onPressEnter={(e) => {
+                    if (!e.shiftKey) {
+                      e.preventDefault();
+                      sendDetailChat();
+                    }
+                  }}
+                  placeholder={"比如：为什么转化低？要不要降价？该加推吗？"}
+                  disabled={detailChatLoading}
+                />
+                <Button type="primary" icon={<SendOutlined />} loading={detailChatLoading} onClick={sendDetailChat} style={{ flexShrink: 0 }}>
+                  发送
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <Empty description="生成失败或暂无数据，请重试" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
+        )}
+      </Drawer>
     </div>
   );
 }
