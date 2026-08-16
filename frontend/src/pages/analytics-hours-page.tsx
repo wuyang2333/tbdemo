@@ -63,6 +63,25 @@ function ChangeBadge({ change }: { change: number | null | undefined }) {
   );
 }
 
+function groupHours(hours: string[]): string[] {
+  const nums = hours.map((h) => parseInt(h.slice(0, 2), 10)).sort((a, b) => a - b);
+  if (!nums.length) return [];
+  const ranges: string[] = [];
+  let start = nums[0];
+  let prev = nums[0];
+  for (let i = 1; i < nums.length; i++) {
+    if (nums[i] === prev + 1) {
+      prev = nums[i];
+      continue;
+    }
+    ranges.push(start === prev ? `${String(start).padStart(2, "0")}:00` : `${String(start).padStart(2, "0")}:00-${String(prev).padStart(2, "0")}:00`);
+    start = nums[i];
+    prev = nums[i];
+  }
+  ranges.push(start === prev ? `${String(start).padStart(2, "0")}:00` : `${String(start).padStart(2, "0")}:00-${String(prev).padStart(2, "0")}:00`);
+  return ranges;
+}
+
 function HourChart({
   items,
   height,
@@ -304,6 +323,13 @@ export function AnalyticsHoursPage() {
   const topMetricHours = [...items].sort((a, b) => metricValue(b) - metricValue(a)).slice(0, 3).map((p) => p.hour);
   const topRoiHours = [...promoItems].filter((p) => p.promo_roi > 0).sort((a, b) => b.promo_roi - a.promo_roi).slice(0, 3).map((p) => p.hour);
   const badHours = items.filter((p) => p.promo_spend > 0 && p.promo_roi < 1).map((p) => p.hour);
+  const hourAlerts: { level: string; type: string; message: string }[] = [];
+  groupHours(data?.recommended_hours ?? []).forEach((r) => {
+    hourAlerts.push({ level: "success", type: "建议投放", message: `${r} 推广ROI≥2，值得加大投放` });
+  });
+  groupHours(badHours).forEach((r) => {
+    hourAlerts.push({ level: "error", type: "ROI 偏低", message: `${r} 推广ROI<1，建议停投` });
+  });
 
   return (
     <div>
@@ -390,28 +416,25 @@ export function AnalyticsHoursPage() {
             ))}
           </div>
 
-          {items.length > 0 && (
-            <Card variant="borderless" title="建议投放时段" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-              <Space wrap>
-                <Text type="secondary">推广ROI≥2，建议投放：</Text>
-                {data?.recommended_hours && data.recommended_hours.length > 0 ? (
-                  data.recommended_hours.map((h) => (
-                    <Tag key={h} color="green">{h}</Tag>
-                  ))
-                ) : (
-                  <Tag>暂无（推广数据未同步或本期 ROI 均低于 2）</Tag>
-                )}
-              </Space>
-              {badHours.length > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <Space wrap>
-                    <Text type="secondary">ROI&lt;1，建议停投：</Text>
-                    {badHours.map((h) => (
-                      <Tag key={h} color="red">{h}</Tag>
-                    ))}
-                  </Space>
+          {items.length > 0 && hourAlerts.length > 0 && (
+            <Card variant="borderless" title="时段预警" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+              <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
+                <div style={{ display: "grid", gap: 4 }}>
+                  {hourAlerts.map((a, i) => (
+                    <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : a.level === "success" ? "#52c41a" : "#fa8c16" }}>
+                      {a.level === "error" ? "⚠️ " : a.level === "success" ? "✅ " : "❗ "}
+                      [{a.type}] {a.message}
+                    </div>
+                  ))}
                 </div>
-              )}
+              </div>
+            </Card>
+          )}
+{items.length > 0 && hourAlerts.length === 0 && (
+            <Card variant="borderless" title="时段预警" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+              <div style={{ fontSize: 13, color: "rgba(128,128,128,0.6)" }}>
+                暂无时段预警（推广数据未同步或本期 ROI 均在 1~2 之间）
+              </div>
             </Card>
           )}
 
