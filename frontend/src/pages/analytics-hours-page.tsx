@@ -254,9 +254,8 @@ export function AnalyticsHoursPage() {
   const maxSales = Math.max(1, ...items.map((p) => p.sales));
   const maxOrders = Math.max(1, ...items.map((p) => p.orders));
   const maxConv = Math.max(0.01, ...items.map((p) => p.conversion_rate));
-  const maxPromo = Math.max(1, ...promoItems.map((p) => p.promo_spend));
-  const maxRoi = Math.max(0, ...promoItems.map((p) => p.promo_roi));
-  const maxPrevPromo = Math.max(1, ...(data?.prev_promo_items ?? []).map((p) => p.spend));
+  const maxRoi = Math.max(0.01, ...promoItems.map((p) => p.promo_roi));
+  const maxPrevRoi = Math.max(0.01, ...(data?.prev_promo_items ?? []).map((p) => (p.spend ? p.sales / p.spend : 0)));
 
   const metricValue = (it: AnalyticsHourPoint) =>
     metric === "sales" ? it.sales : metric === "visitors" ? it.visitors : metric === "orders" ? it.orders : it.conversion_rate;
@@ -406,7 +405,7 @@ export function AnalyticsHoursPage() {
 
           <Card
             variant="borderless"
-            title="24 小时 推广花费 / ROI"
+            title="24 小时 推广ROI（柱高=ROI）"
             style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
             extra={
               <Space wrap>
@@ -420,17 +419,20 @@ export function AnalyticsHoursPage() {
               height={170}
               peakHour={promoItems.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
               barSlots={(it, idx) => {
-                const prevSpend = data?.prev_promo_items?.[idx]?.spend ?? 0;
+                const prev = data?.prev_promo_items?.[idx];
+                const prevRoi = prev && prev.spend ? prev.sales / prev.spend : 0;
+                const roi = it.promo_roi;
+                const roiColor = roi >= 2 ? "#52c41a" : roi >= 1 ? "#fa8c16" : "#ff4d4f";
                 return (
                   <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
-                    <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
-                      {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
+                    <div style={{ fontSize: 9, fontWeight: 600, color: roi > 0 ? roiColor : "rgba(128,128,128,0.6)" }}>
+                      {roi > 0 ? roi.toFixed(1) : ""}
                     </div>
                     <div style={{ flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "100%" }}>
                       {comparePromo && (
-                        <div style={{ width: "28%", height: `${(prevSpend / maxPrevPromo) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevSpend ? 2 : 0 }} />
+                        <div style={{ width: "28%", height: `${(prevRoi / maxPrevRoi) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevRoi ? 2 : 0 }} />
                       )}
-                      <div style={{ width: "28%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
+                      <div style={{ width: "28%", height: `${(roi / maxRoi) * 100}%`, background: roiColor, borderRadius: "4px 4px 0 0", minHeight: roi ? 2 : 0 }} />
                     </div>
                   </div>
                 );
@@ -440,17 +442,22 @@ export function AnalyticsHoursPage() {
                   <b>{it.hour}</b>
                   <div>花费 {fmtMoney(it.promo_spend)}</div>
                   <div>成交 {fmtMoney(it.promo_sales)}</div>
-                  {comparePromo && <div>上期花费 {fmtMoney(data?.prev_promo_items?.[idx]?.spend ?? 0)}</div>}
+                  {comparePromo && (
+                    <div>
+                      上期ROI{" "}
+                      {(() => { const p = data?.prev_promo_items?.[idx]; return p && p.spend ? (p.sales / p.spend).toFixed(2) : "—"; })()}
+                    </div>
+                  )}
                   <div>ROI {it.promo_roi.toFixed(2)}</div>
                 </>
               )}
             />
             <Space style={{ marginTop: 8 }}>
-              <Tag color="#1677ff">推广花费</Tag>
-              {comparePromo && <Tag>上期推广花费</Tag>}
-              <Tag color="#fa8c16">★ ROI 最高时段</Tag>
-              <Tag color="#52c41a">ROI≥2</Tag>
-              <Tag color="#ff4d4f">ROI&lt;1</Tag>
+              <Tag color="#52c41a">ROI≥2 绿</Tag>
+              <Tag color="#fa8c16">ROI 1~2 橙</Tag>
+              <Tag color="#ff4d4f">ROI&lt;1 红</Tag>
+              {comparePromo && <Tag>上期ROI 灰</Tag>}
+              <Tag color="#fa8c16">★ ROI 最高</Tag>
             </Space>
           </Card>
 
