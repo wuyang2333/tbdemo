@@ -26,23 +26,6 @@ const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
   { label: "上月", value: [dayjs().subtract(1, "month").startOf("month"), dayjs().subtract(1, "month").endOf("month")] },
 ];
 
-const ALL_COLUMNS = [
-  { key: "rank", label: "排名" },
-  { key: "item", label: "商品" },
-  { key: "visitors", label: "访客" },
-  { key: "pv", label: "浏览量" },
-  { key: "buyers", label: "买家" },
-  { key: "sales", label: "销售额" },
-  { key: "orders", label: "销量" },
-  { key: "conversion_rate", label: "转化率" },
-  { key: "add_cart", label: "加购" },
-  { key: "promo_spend", label: "推广花费" },
-  { key: "promo_roi", label: "推广ROI" },
-  { key: "real_roi", label: "真实ROI" },
-  { key: "promo_share", label: "广告占比" },
-  { key: "sales_share", label: "占比" },
-];
-
 function rangePromoMode(r: [string, string]): string | null {
   const s = dayjs(r[0]);
   const e = dayjs(r[1]);
@@ -366,6 +349,12 @@ export function AnalyticsProductsPage() {
     const k = (col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string);
     return !k || !hiddenCols.includes(k);
   });
+  const settingsOptions = columns
+    .map((col) => ({
+      label: col.title as string,
+      value: String((col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string) ?? ""),
+    }))
+    .filter((o) => o.value);
   const tableX = visibleColumns.reduce((sum, col) => sum + ((col.width as number) || 90), 0);
 
   return (
@@ -383,11 +372,11 @@ export function AnalyticsProductsPage() {
               content={
                 <Checkbox.Group
                   style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", width: 230 }}
-                  value={ALL_COLUMNS.map((c) => c.key).filter((k) => !hiddenCols.includes(k))}
+                  value={settingsOptions.map((o) => o.value).filter((k) => !hiddenCols.includes(k))}
                   onChange={(vals) =>
-                    setHiddenCols(ALL_COLUMNS.map((c) => c.key).filter((k) => !vals.map(String).includes(k)))
+                    setHiddenCols(settingsOptions.map((o) => o.value).filter((k) => !vals.map(String).includes(k)))
                   }
-                  options={ALL_COLUMNS.map((c) => ({ label: c.label, value: c.key }))}
+                  options={settingsOptions}
                 />
               }
             >
