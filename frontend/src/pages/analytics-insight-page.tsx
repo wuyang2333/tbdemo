@@ -1,7 +1,7 @@
 import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, RobotOutlined, SendOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Input, Segmented, Space, Spin, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { useRef, useState } from "react";
+import { useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
@@ -95,48 +95,26 @@ export function AnalyticsInsightPage() {
   const [chat, setChat] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const cacheRef = useRef<Record<string, { result: InsightResult; chat: { role: "user" | "assistant"; content: string }[] }>>({});
-  const reqRef = useRef(0);
+  const [genMode, setGenMode] = useState("14");
+  const [genStoreId, setGenStoreId] = useState<number | undefined>(undefined);
 
-  const cacheKey = (m: string, sid?: number) => `${m}|${sid ?? ""}`;
-
-  const callInsight = async (m: string, sid?: number): Promise<InsightResult | null> => {
-    const reqId = ++reqRef.current;
+  const generate = async () => {
     setLoading(true);
     setResult(null);
     try {
-      const params = new URLSearchParams({ mode: m });
-      if (sid) params.set("store_id", String(sid));
+      const params = new URLSearchParams({ mode });
+      if (storeId) params.set("store_id", String(storeId));
       const { data } = await http.post<InsightResult>(`/analytics/insight?${params.toString()}`);
-      if (reqId !== reqRef.current) return null;
       setResult(data);
+      setGenMode(mode);
+      setGenStoreId(storeId);
       setChat([]);
-      return data;
     } catch (error) {
-      if (reqId !== reqRef.current) return null;
       message.error(getApiErrorMessage(error));
       setResult(null);
-      return null;
     } finally {
-      if (reqId === reqRef.current) setLoading(false);
+      setLoading(false);
     }
-  };
-
-  const applyModeStore = async (m: string, sid?: number) => {
-    const key = cacheKey(m, sid);
-    const cached = cacheRef.current[key];
-    if (cached) {
-      setResult(cached.result);
-      setChat(cached.chat);
-      return;
-    }
-    const data = await callInsight(m, sid);
-    if (data) cacheRef.current[key] = { result: data, chat: [] };
-  };
-
-  const generate = async () => {
-    const data = await callInsight(mode, storeId);
-    if (data) cacheRef.current[cacheKey(mode, storeId)] = { result: data, chat: [] };
   };
 
   const sendChat = async () => {
@@ -148,14 +126,11 @@ export function AnalyticsInsightPage() {
     setChatLoading(true);
     try {
       const { data } = await http.post<{ reply: string }>("/analytics/insight/chat", {
-        mode,
-        store_id: storeId,
+        mode: genMode,
+        store_id: genStoreId,
         messages: [{ role: "assistant", content: result.reply }, ...next],
       });
-      const full = [...next, { role: "assistant" as const, content: data.reply }];
-      setChat(full);
-      const key = cacheKey(mode, storeId);
-      if (cacheRef.current[key]) cacheRef.current[key] = { ...cacheRef.current[key], chat: full };
+      setChat([...next, { role: "assistant" as const, content: data.reply }]);
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -171,22 +146,8 @@ export function AnalyticsInsightPage() {
         title="AI 解读"
         extra={
           <Space wrap>
-            <StoreScopeSelect
-              value={storeId}
-              onChange={(v) => {
-                setStoreId(v);
-                applyModeStore(mode, v);
-              }}
-            />
-            <Segmented
-              options={MODE_OPTIONS}
-              value={mode}
-              onChange={(v) => {
-                const m = String(v);
-                setMode(m);
-                applyModeStore(m, storeId);
-              }}
-            />
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => setMode(String(v))} />
             <Button type="primary" icon={<RobotOutlined />} loading={loading} onClick={generate}>
               生成 AI 解读
             </Button>
