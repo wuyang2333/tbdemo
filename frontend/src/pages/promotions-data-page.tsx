@@ -1,5 +1,5 @@
 import { BarChartOutlined, DownloadOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Col, Empty, Row, Segmented, Space, Spin, Statistic, Typography, message } from "antd";
+import { Button, Card, Col, Drawer, Empty, Row, Segmented, Space, Spin, Statistic, Table, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
@@ -17,6 +17,9 @@ export function PromotionsDataPage() {
   const [mode, setMode] = useState("realtime");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [kwOpen, setKwOpen] = useState(false);
+  const [kwLoading, setKwLoading] = useState(false);
+  const [kwItems, setKwItems] = useState<{ word: string; promotion: string; spend: number; sales: number; roi: number; clicks: number; orders: number }[]>([]);
 
   const load = useCallback(async (m: string) => {
     setLoading(true);
@@ -36,6 +39,20 @@ export function PromotionsDataPage() {
     load(mode);
   }, [mode, load]);
   useAutoRefresh(() => load(mode));
+
+  const openKeywords = async () => {
+    setKwOpen(true);
+    setKwLoading(true);
+    setKwItems([]);
+    try {
+      const { data } = await http.get<{ items: { word: string; promotion: string; spend: number; sales: number; roi: number; clicks: number; orders: number }[] }>(`/promotions/keywords?mode=${encodeURIComponent(mode)}`);
+      setKwItems(data.items);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setKwLoading(false);
+    }
+  };
 
   const exportData = async () => {
     try {
@@ -90,6 +107,7 @@ export function PromotionsDataPage() {
             <Button icon={<DownloadOutlined />} onClick={exportData}>
               导出
             </Button>
+            <Button onClick={openKeywords}>关键词报表</Button>
             <Button icon={<ReloadOutlined />} onClick={() => load(mode)}>
               刷新
             </Button>
@@ -180,6 +198,47 @@ export function PromotionsDataPage() {
           </Row>
         </>
       )}
+      <Drawer
+        title="关键词报表"
+        width={640}
+        open={kwOpen}
+        onClose={() => setKwOpen(false)}
+        destroyOnClose
+      >
+        {kwLoading ? (
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <Spin tip="正在拉取关键词报表…" />
+          </div>
+        ) : kwItems.length === 0 ? (
+          <Empty description="该范围暂无关键词数据（实时可能没有，试试昨天/近七天）" />
+        ) : (
+          <Table
+            rowKey={(r, i) => `${r.word}-${i}`}
+            size="small"
+            dataSource={kwItems}
+            pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 个关键词` }}
+            columns={[
+              { title: "关键词", dataIndex: "word", width: 180, ellipsis: true },
+              { title: "计划/商品", dataIndex: "promotion", width: 220, ellipsis: true },
+              { title: "花费", dataIndex: "spend", align: "right", width: 90, render: (v: number) => fmtMoney(v) },
+              { title: "成交", dataIndex: "sales", align: "right", width: 90, render: (v: number) => fmtMoney(v) },
+              {
+                title: "ROI",
+                dataIndex: "roi",
+                align: "right",
+                width: 70,
+                render: (v: number) => (
+                  <span style={{ color: v >= 2 ? "#52c41a" : v >= 1 ? "#fa8c16" : "#ff4d4f", fontWeight: 600 }}>
+                    {v.toFixed(2)}
+                  </span>
+                ),
+              },
+              { title: "点击", dataIndex: "clicks", align: "right", width: 70 },
+              { title: "订单", dataIndex: "orders", align: "right", width: 70 },
+            ]}
+          />
+        )}
+      </Drawer>
     </div>
   );
 }

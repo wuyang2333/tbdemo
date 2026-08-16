@@ -896,6 +896,53 @@ def plan_items(
     return {"items": result}
 
 
+@router.get("/keywords")
+def promo_keywords(
+    mode: str = "yesterday",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """万相台关键词报表（实时/昨天/近7天，实时可能无数据）。"""
+    from backend.app.core.alimama import AlimamaError, _num, _run_json
+    from backend.app.core.sycm import has_profile
+
+    today = date_cls.today()
+    if mode == "realtime":
+        start = end = today.isoformat()
+    elif mode == "yesterday":
+        d = today - timedelta(days=1)
+        start = end = d.isoformat()
+    else:
+        start = (today - timedelta(days=6)).isoformat()
+        end = today.isoformat()
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    rows: list[dict] = []
+    for store in stores:
+        try:
+            payload = _run_json(store, ["report-keyword", "--date", start, "--end-date", end, "--limit", "100", "--raw"])
+        except AlimamaError:
+            continue
+        for r in (payload.get("data") or {}).get("list") or []:
+            if not isinstance(r, dict):
+                continue
+            word = r.get("originalWord") or r.get("word") or r.get("bidword") or "（智能匹配）"
+            spend = _num(r.get("charge"))
+            sales = _num(r.get("alipayInshopAmt"))
+            rows.append(
+                {
+                    "word": word,
+                    "promotion": r.get("promotionName") or "",
+                    "spend": round(spend, 2),
+                    "sales": round(sales, 2),
+                    "roi": round(sales / spend, 2) if spend else 0.0,
+                    "clicks": int(_num(r.get("click"))),
+                    "orders": int(_num(r.get("alipayInshopNum"))),
+                }
+            )
+    rows.sort(key=lambda x: -x["spend"])
+    return {"items": rows[:100], "count": len(rows), "mode": mode}
+
+
 @router.put("/plans/{plan_id}")
 def update_plan(
     plan_id: int,
