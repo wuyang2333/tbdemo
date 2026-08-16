@@ -8,6 +8,7 @@ import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
+import { HourlyPushButton } from "../components/ui/hourly-push";
 import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import { PageHeader } from "../components/ui/page-header";
 import { MODE_OPTIONS, LineChart, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
@@ -496,6 +497,7 @@ export function PromotionsPlansPage() {
             <Button icon={<DownloadOutlined />} onClick={exportPlans}>
               导出
             </Button>
+            <HourlyPushButton />
             <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新
             </Button>

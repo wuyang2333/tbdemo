@@ -11,6 +11,7 @@ import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analyt
 import { LineChart } from "../components/promotions/promotions-ui";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
+import { HourlyPushButton } from "../components/ui/hourly-push";
 import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
@@ -600,6 +601,7 @@ export function AnalyticsProductsPage() {
             >
               <Button icon={<SettingOutlined />}>字段设置</Button>
             </Popover>
+            <HourlyPushButton />
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
               同步店铺数据
             </Button>
