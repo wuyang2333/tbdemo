@@ -223,7 +223,7 @@ export function AnalyticsReportPage() {
               value={date ? dayjs(date) : null}
               onChange={(d) => setDate(d ? d.format("YYYY-MM-DD") : null)}
             />
-            {date && dayLabel !== "今日" && (<Button size="small" onClick={() => setDate(dayjs().subtract(1, "day").format("YYYY-MM-DD"))}>回到昨日</Button>)}
+            
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
