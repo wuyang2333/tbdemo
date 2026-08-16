@@ -151,11 +151,13 @@ def _norm_hourly_rule(r) -> dict | None:
         threshold = float(r.get("threshold") or 0)
     except (TypeError, ValueError):
         return None
+    compare = "prev_hour" if r.get("compare") == "prev_hour" else "yesterday"
     return {
         "id": str(r.get("id") or ""),
         "field": r["field"],
         "operator": r["operator"],
         "threshold": threshold,
+        "compare": compare,
         "enabled": bool(r.get("enabled", True)),
     }
 
@@ -236,12 +238,18 @@ def check_hourly_rules(db, cfg: dict | None = None) -> list[str]:
     date_str = prev.strftime("%Y-%m-%d")
     hour_str = prev.strftime("%H:00")
     yest_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    prev_hour_dt = prev - timedelta(hours=1)
+    prev_hour_date = prev_hour_dt.strftime("%Y-%m-%d")
+    prev_hour_str = prev_hour_dt.strftime("%H:00")
 
     cur_rows = db.execute(
         "SELECT * FROM store_hourly_data WHERE data_date = ? AND hour = ?", (date_str, hour_str)
     ).fetchall()
-    prev_rows = db.execute(
+    yest_rows = db.execute(
         "SELECT * FROM store_hourly_data WHERE data_date = ? AND hour = ?", (yest_str, hour_str)
+    ).fetchall()
+    last_hour_rows = db.execute(
+        "SELECT * FROM store_hourly_data WHERE data_date = ? AND hour = ?", (prev_hour_date, prev_hour_str)
     ).fetchall()
 
     def _agg(rows):
@@ -256,19 +264,28 @@ def check_hourly_rules(db, cfg: dict | None = None) -> list[str]:
         }
 
     cur = _agg(cur_rows)
-    prev = _agg(prev_rows)
+    yest = _agg(yest_rows)
+    last_hour = _agg(last_hour_rows)
+    baseline = {"yesterday": yest, "prev_hour": last_hour}
+    base_label = {"yesterday": "昨日同时段", "prev_hour": "上一小时"}
     pcur = db.execute(
         "SELECT * FROM promo_realtime WHERE data_date = ? AND hour = ?", (date_str, hour_str)
     ).fetchall()
-    pp = db.execute(
+    py = db.execute(
         "SELECT * FROM promo_realtime WHERE data_date = ? AND hour = ?", (yest_str, hour_str)
+    ).fetchall()
+    pl = db.execute(
+        "SELECT * FROM promo_realtime WHERE data_date = ? AND hour = ?", (prev_hour_date, prev_hour_str)
     ).fetchall()
     p_spend = sum(r["spend"] or 0 for r in pcur)
     p_sales = sum(r["sales"] or 0 for r in pcur)
-    pp_spend = sum(r["spend"] or 0 for r in pp)
-    pp_sales = sum(r["sales"] or 0 for r in pp)
+    p_spend_y = sum(r["spend"] or 0 for r in py)
+    p_sales_y = sum(r["sales"] or 0 for r in py)
+    p_spend_l = sum(r["spend"] or 0 for r in pl)
+    p_sales_l = sum(r["sales"] or 0 for r in pl)
     p_roi = round(p_sales / p_spend, 2) if p_spend else 0.0
-    pp_roi = round(pp_sales / pp_spend, 2) if pp_spend else 0.0
+    p_roi_y = round(p_sales_y / p_spend_y, 2) if p_spend_y else 0.0
+    p_roi_l = round(p_sales_l / p_spend_l, 2) if p_spend_l else 0.0
 
     item = {
         "sales": cur["sales"],
@@ -278,27 +295,27 @@ def check_hourly_rules(db, cfg: dict | None = None) -> list[str]:
         "promo_spend": round(p_spend, 2),
         "promo_roi": p_roi,
     }
-    cycle = {
-        "sales": _hpct(cur["sales"], prev["sales"]),
-        "visitors": _hpct(cur["visitors"], prev["visitors"]),
-        "orders": _hpct(cur["orders"], prev["orders"]),
-        "conversion_rate": _hpct(cur["conversion_rate"], prev["conversion_rate"]),
-        "promo_roi": _hpct(p_roi, pp_roi),
+    base_map = {
+        "yesterday": {"sales": yest["sales"], "visitors": yest["visitors"], "orders": yest["orders"], "conversion_rate": yest["conversion_rate"], "promo_roi": p_roi_y},
+        "prev_hour": {"sales": last_hour["sales"], "visitors": last_hour["visitors"], "orders": last_hour["orders"], "conversion_rate": last_hour["conversion_rate"], "promo_roi": p_roi_l},
     }
     messages = []
     for r in rules:
         field = r["field"]
         op = r["operator"]
         threshold = abs(r["threshold"])
+        compare = r.get("compare", "yesterday")
+        base = base_map.get(compare, base_map["yesterday"])
+        bl = base_label.get(compare, "昨日同时段")
         label = HOURLY_LABELS.get(field, field)
         if op == "cycle_drop_pct":
-            v = cycle.get(field)
+            v = _hpct(item.get(field) or 0, base.get(field) or 0)
             if v is not None and v <= -threshold:
-                messages.append(f"{hour_str} {label}较昨日同时段跌 {abs(v):.0f}%（阈值 {threshold}%）")
+                messages.append(f"{hour_str} {label}较{bl}跌 {abs(v):.0f}%（阈值 {threshold}%）")
         elif op == "cycle_up_pct":
-            v = cycle.get(field)
+            v = _hpct(item.get(field) or 0, base.get(field) or 0)
             if v is not None and v >= threshold:
-                messages.append(f"{hour_str} {label}较昨日同时段涨 {v:.0f}%（阈值 {threshold}%）")
+                messages.append(f"{hour_str} {label}较{bl}涨 {v:.0f}%（阈值 {threshold}%）")
         elif op == "lt":
             v = item.get(field)
             if v is not None and v < threshold:
