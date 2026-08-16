@@ -809,30 +809,15 @@ def analytics_products(
 ) -> dict:
     if mode == "realtime":
         sf, sp = _store_filter(store_id)
-        rt_rows = db.execute(
+        rows = db.execute(
             "SELECT * FROM store_item_realtime WHERE 1=1" + sf,
             sp,
         ).fetchall()
-        rt_map = {r["item_id"]: r for r in rt_rows}
-        base_row = db.execute(
-            "SELECT MAX(data_date) AS d FROM store_item_daily" + (" WHERE 1=1" + sf),
-            sp,
-        ).fetchone()
-        base_date = base_row["d"] if base_row and base_row["d"] else None
-        base_map: dict[str, dict] = {}
-        if base_date:
-            for r in db.execute(
-                "SELECT * FROM store_item_daily WHERE data_date = ?" + sf,
-                [base_date] + sp,
-            ).fetchall():
-                base_map[r["item_id"]] = r
         items = []
-        seen: set[str] = set()
-        for iid, r in rt_map.items():
-            seen.add(iid)
+        for r in rows:
             items.append(
                 {
-                    "item_id": iid,
+                    "item_id": r["item_id"],
                     "item_title": r["item_title"],
                     "image": r["image"],
                     "visitors": r["visitors"] or 0,
@@ -841,34 +826,12 @@ def analytics_products(
                     "orders": r["orders"] or 0,
                     "sales": round(r["sales"] or 0, 2),
                     "conversion_rate": round(r["conversion_rate"] or 0, 2),
-                    "add_cart": 0,
-                    "refund_amount": 0.0,
+                    "add_cart": r["add_cart"] or 0,
+                    "refund_amount": round(r["refund_amount"] or 0, 2),
                     "live": True,
                     "date_label": "今日",
                     "days": 1,
                     "latest_date": date_cls.today().isoformat(),
-                }
-            )
-        for iid, r in base_map.items():
-            if iid in seen:
-                continue
-            items.append(
-                {
-                    "item_id": iid,
-                    "item_title": r["item_title"],
-                    "image": r["image"],
-                    "visitors": r["visitors"] or 0,
-                    "pv": r["pv"] or 0,
-                    "buyers": r["buyers"] or 0,
-                    "orders": r["orders"] or 0,
-                    "sales": round(r["sales"] or 0, 2),
-                    "conversion_rate": round((r["buyers"] or 0) / (r["visitors"] or 0) * 100, 2) if r["visitors"] else 0.0,
-                    "add_cart": r["add_cart"] or 0,
-                    "refund_amount": round(r["refund_amount"] or 0, 2),
-                    "live": False,
-                    "date_label": base_date[5:] if base_date else "最近",
-                    "days": 1,
-                    "latest_date": base_date or "",
                 }
             )
         items.sort(key=lambda x: x["sales"], reverse=True)

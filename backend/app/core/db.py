@@ -240,11 +240,18 @@ def _migrate_products_realtime(conn: sqlite3.Connection) -> None:
             orders INTEGER NOT NULL DEFAULT 0,
             sales REAL NOT NULL DEFAULT 0,
             conversion_rate REAL NOT NULL DEFAULT 0,
+            add_cart INTEGER NOT NULL DEFAULT 0,
+            refund_amount REAL NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL,
             UNIQUE(store_id, item_id)
         )
         """
     )
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(store_item_realtime)")}
+    if "add_cart" not in cols:
+        conn.execute("ALTER TABLE store_item_realtime ADD COLUMN add_cart INTEGER NOT NULL DEFAULT 0")
+    if "refund_amount" not in cols:
+        conn.execute("ALTER TABLE store_item_realtime ADD COLUMN refund_amount REAL NOT NULL DEFAULT 0")
     conn.commit()
 
 

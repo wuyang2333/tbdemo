@@ -382,46 +382,71 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
         page += 1
     return out
 def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120) -> list[dict]:
-    """拉取今日实时商品排行（实时榜单接口，index=排序指标 uv/payAmt 等）。"""
-    payload = _run_api_json(
-        [
-            "--store",
-            profile_name(store["id"]),
-            "api",
-            "/ipoll/live/rank/item.json",
-            "-p",
-            "device=0",
-            "-p",
-            f"index={index}",
-            "-p",
-            "page=1",
-            "-p",
-            "limit=100",
-        ],
-        timeout=timeout,
-    )
-    inner = (payload.get("data") or {}).get("data") or {}
-    rows = inner.get("list") or []
+    """拉取今日商品排行实时数据（商品-商品排行-实时档，全量商品，自动翻页）。"""
+    today = date.today().isoformat()
+    fields = ["payAmt", "payItmCnt", "payRate", "itmUv", "itmPv", "payByrCnt", "itemCartCnt", "sucRefundAmt"]
     out: list[dict] = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        item = r.get("item") or {}
-        title = str(item.get("title") or "")
-        if not title:
-            continue
-        pic = str(item.get("pictUrl") or "")
-        out.append(
-            {
-                "item_id": str((r.get("itemId") or {}).get("value") if isinstance(r.get("itemId"), dict) else r.get("itemId") or ""),
-                "item_title": title,
-                "image": pic.replace("//", "https://") if pic else "",
-                "visitors": int(_to_num(_take(r, "uv"))),
-                "pv": int(_to_num(_take(r, "pv"))),
-                "buyers": int(_to_num(_take(r, "buyerCnt"))),
-                "orders": int(_to_num(_take(r, "payItemQty"))),
-                "sales": round(_to_num(_take(r, "payAmt")), 2),
-                "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
-            }
+    page = 1
+    while True:
+        payload = _run_api_json(
+            [
+                "--store",
+                profile_name(store["id"]),
+                "api",
+                "/cc/item/live/view/top.json",
+                "-p",
+                "dateType=today",
+                "-p",
+                f"dateRange={today}|{today}",
+                "-p",
+                "indexCode=" + ",".join(fields),
+                "-p",
+                f"page={page}",
+                "-p",
+                "pageSize=20",
+                "-p",
+                "order=desc",
+                "-p",
+                "orderBy=payAmt",
+                "-p",
+                "device=0",
+            ],
+            timeout=timeout,
         )
+        data = payload.get("data") or {}
+        inner = data.get("data") or {}
+        rows = inner.get("data") or []
+        if not isinstance(rows, list) or not rows:
+            break
+
+        def _id(x) -> str:
+            return str(x.get("value") or "") if isinstance(x, dict) else str(x or "")
+
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            item = r.get("item") or {}
+            title = str(item.get("title") or "")
+            if not title:
+                continue
+            pic = str(item.get("pictUrl") or "")
+            out.append(
+                {
+                    "item_id": _id(r.get("mainProductId")) or _id(r.get("itemId")) or _id(item.get("itemId")),
+                    "item_title": title,
+                    "image": pic.replace("//", "https://") if pic else "",
+                    "visitors": int(_to_num(_take(r, "itmUv"))),
+                    "pv": int(_to_num(_take(r, "itmPv"))),
+                    "buyers": int(_to_num(_take(r, "payByrCnt"))),
+                    "orders": int(_to_num(_take(r, "payItmCnt"))),
+                    "sales": round(_to_num(_take(r, "payAmt")), 2),
+                    "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
+                    "add_cart": int(_to_num(_take(r, "itemCartCnt"))),
+                    "refund_amount": round(_to_num(_take(r, "sucRefundAmt")), 2),
+                }
+            )
+        total = inner.get("recordCount") or 0
+        if len(out) >= total or len(rows) < 20:
+            break
+        page += 1
     return out
