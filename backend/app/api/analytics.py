@@ -845,7 +845,11 @@ def analytics_products(
         total_sales = sum(x["sales"] for x in items) or 1
         for item in items[:20]:
             item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
-        return {"items": items, "total": len(items), "days": 0, "mode": "realtime"}
+        fetched = db.execute(
+            "SELECT MAX(updated_at) AS m FROM store_item_realtime" + (" WHERE 1=1" + sf),
+            sp,
+        ).fetchone()
+        return {"items": items, "total": len(items), "days": 0, "mode": "realtime", "fetched_at": fetched["m"] if fetched and fetched["m"] else None}
 
     if not (1 <= days <= 90):
         days = 14

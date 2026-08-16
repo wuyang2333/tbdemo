@@ -426,6 +426,7 @@ export type AnalyticsProducts = {
   items: AnalyticsProduct[];
   total: number;
   days: number;
+  fetched_at?: string | null;
 };
 
 export type AnalyticsProductDetail = {

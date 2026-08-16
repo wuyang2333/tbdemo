@@ -1,6 +1,7 @@
 import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
+import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
@@ -22,7 +23,7 @@ function MetricCell({ value, change }: { value: string; change: number }) {
   return (
     <div>
       <div>{value}</div>
-      <div style={{ fontSize: 11, fontWeight: 600, color: up ? "#52c41a" : "#ff4d4f" }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: up ? "#ff4d4f" : "#52c41a" }}>
         {up ? "+" : "-"}
         {Math.abs(change).toFixed(2)}%
       </div>
@@ -154,7 +155,12 @@ export function AnalyticsProductsPage() {
         <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setMode(String(v)); }} />
         {!isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
         {!isRealtime && daySwitch(Number(mode), (d) => setMode(String(d)))}
-        {isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>全量商品今日实时，按销售额排序</Text>}
+        {isRealtime && (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          全量商品今日实时 · 按销售额排序
+          {data?.fetched_at ? ` · 抓取时间 ${dayjs(data.fetched_at).format("MM-DD HH:mm:ss")}` : ""}
+        </Text>
+      )}
       </Space>
 
       {loading && !data ? (
