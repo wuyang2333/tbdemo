@@ -178,29 +178,70 @@ def fetch_plan_reports(store: dict, start: str, end: str) -> list[dict]:
             }
         )
     return out
+REALTIME_SCENES = [
+    ("wholesite", "onebpSite", "货品全站推广"),
+    ("keyword", "onebpSearch", "关键词推广"),
+    ("crowd", "onebpDisplay", "人群推广"),
+]
+
+
 def fetch_realtime(store: dict) -> list[dict]:
-    """拉取今天的万相台实时数据（按小时，全渠道合计）。"""
+    """拉取今天各推广场景的实时数据（按小时，分场景）。
+
+    万相台默认实时报表只覆盖短视频/关键词；货品全站等场景需按 bizCode 单独查。
+    """
     today = date.today().isoformat()
-    payload = _run_json(store, ["report-realtime", "--date", today, "--raw"])
-    rows = (payload.get("data") or {}).get("list") or []
+    fields = ["adPv", "charge", "click", "ctr", "alipayInshopAmt", "alipayInshopNum", "cvr", "roi"]
+    body = {
+        "bizCode": "universalBP",
+        "fromRealTime": True,
+        "source": "baseReport",
+        "from": "pcBaseReport",
+        "byPage": True,
+        "totalTag": True,
+        "needCountAccelerate": True,
+        "rptType": "real_time",
+        "queryDomains": ["date"],
+        "queryFieldIn": fields,
+        "startTime": today,
+        "endTime": today,
+        "splitType": "hour",
+        "effectEqual": 15,
+        "havingList": [],
+        "pageSize": 100,
+        "pageNo": 1,
+        "orderField": "charge",
+        "orderBy": "desc",
+        "unifyType": "zhai",
+        "offset": 0,
+    }
+    body_json = json.dumps(body, ensure_ascii=False)
     out: list[dict] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        thedate = row.get("thedate") or ""
-        out.append(
-            {
-                "hour": thedate[-5:] if len(thedate) >= 5 else thedate,
-                "impressions": int(_num(row.get("adPv"))),
-                "clicks": int(_num(row.get("click"))),
-                "ctr": round(_num(row.get("ctr")) * 100, 2),
-                "spend": round(_num(row.get("charge")), 2),
-                "sales": round(_num(row.get("alipayInshopAmt")), 2),
-                "roi": round(_num(row.get("roi")), 2),
-                "orders": int(_num(row.get("alipayInshopNum"))),
-                "conversion_rate": round(_num(row.get("cvr")) * 100, 2),
-            }
+    for key, biz, name in REALTIME_SCENES:
+        payload = _run_json(
+            store,
+            ["api", f"/report/query.json?bizCode={biz}", "--body", body_json],
         )
+        rows = (payload.get("data") or {}).get("list") or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            thedate = row.get("thedate") or ""
+            out.append(
+                {
+                    "scene": key,
+                    "scene_name": name,
+                    "hour": thedate[-5:] if len(thedate) >= 5 else thedate,
+                    "impressions": int(_num(row.get("adPv"))),
+                    "clicks": int(_num(row.get("click"))),
+                    "ctr": round(_num(row.get("ctr")) * 100, 2),
+                    "spend": round(_num(row.get("charge")), 2),
+                    "sales": round(_num(row.get("alipayInshopAmt")), 2),
+                    "roi": round(_num(row.get("roi")), 2),
+                    "orders": int(_num(row.get("alipayInshopNum"))),
+                    "conversion_rate": round(_num(row.get("cvr")) * 100, 2),
+                }
+            )
     return out
 def fetch_plan_realtime(store: dict) -> list[dict]:
     """拉取今天的计划维度实时数据（各计划今日花费/成交/ROI/点击）。"""

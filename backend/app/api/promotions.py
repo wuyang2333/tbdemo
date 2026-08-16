@@ -96,14 +96,16 @@ def _store_realtime_rows(db, store_id: int, items: list[dict], now: str) -> int:
     today = date_cls.today().isoformat()
     for it in items:
         db.execute(
-            "INSERT INTO promo_realtime (store_id, data_date, hour, impressions, clicks, ctr, spend, sales, roi, orders, conversion_rate, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(store_id, data_date, hour) DO UPDATE SET "
+            "INSERT INTO promo_realtime (store_id, scene, scene_name, data_date, hour, impressions, clicks, ctr, spend, sales, roi, orders, conversion_rate, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(store_id, scene, data_date, hour) DO UPDATE SET "
             "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
             "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
             "orders = excluded.orders, conversion_rate = excluded.conversion_rate",
             (
                 store_id,
+                it["scene"],
+                it["scene_name"],
                 today,
                 it["hour"],
                 it["impressions"],
@@ -168,32 +170,48 @@ def promo_data(
 
     if mode == "realtime":
         rows = db.execute(
-            "SELECT * FROM promo_realtime WHERE data_date = ? ORDER BY hour ASC",
+            "SELECT * FROM promo_realtime WHERE data_date = ? ORDER BY hour ASC, scene ASC",
             (today.isoformat(),),
         ).fetchall()
         summary = {"impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0}
-        trend = []
+        scene_map: dict[str, dict] = {}
+        hour_map: dict[str, dict] = {}
         for r in rows:
-            summary["impressions"] += r["impressions"] or 0
-            summary["clicks"] += r["clicks"] or 0
-            summary["spend"] += r["spend"] or 0
-            summary["sales"] += r["sales"] or 0
-            summary["orders"] += r["orders"] or 0
+            for f in ("impressions", "clicks", "spend", "sales", "orders"):
+                summary[f] += r[f] or 0
+            key = r["scene"]
+            item = scene_map.setdefault(
+                key,
+                {"scene": key, "scene_name": r["scene_name"], "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0},
+            )
+            for f in ("impressions", "clicks", "spend", "sales", "orders"):
+                item[f] += r[f] or 0
+            h = r["hour"]
+            hrow = hour_map.setdefault(
+                h,
+                {"label": h, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0},
+            )
+            for f in ("impressions", "clicks", "spend", "sales", "orders"):
+                hrow[f] += r[f] or 0
+        scenes = sorted((_finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
+        trend = []
+        for h in sorted(hour_map.keys()):
+            row = hour_map[h]
             trend.append(
                 {
-                    "label": r["hour"],
-                    "impressions": r["impressions"] or 0,
-                    "clicks": r["clicks"] or 0,
-                    "spend": round(r["spend"] or 0, 2),
-                    "sales": round(r["sales"] or 0, 2),
-                    "orders": r["orders"] or 0,
-                    "roi": round((r["sales"] or 0) / (r["spend"] or 0), 2) if r["spend"] else 0.0,
+                    "label": row["label"],
+                    "impressions": row["impressions"],
+                    "clicks": row["clicks"],
+                    "spend": round(row["spend"], 2),
+                    "sales": round(row["sales"], 2),
+                    "orders": row["orders"],
+                    "roi": round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0,
                 }
             )
         return {
             "mode": mode,
             "summary": _finalize(summary),
-            "scenes": [],
+            "scenes": scenes,
             "trend": trend,
             "trend_unit": "hour",
             "last_sync": _last_sync(db),

@@ -177,6 +177,39 @@ def _migrate_logs(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _migrate_promo_realtime(conn: sqlite3.Connection) -> None:
+    """老版 promo_realtime 无 scene 字段（无法分场景），检测到就重建（仅存当天临时数据）。"""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(promo_realtime)")}
+    except sqlite3.OperationalError:
+        return
+    if "scene" not in cols:
+        conn.execute("DROP TABLE promo_realtime")
+        conn.execute(
+            """
+            CREATE TABLE promo_realtime (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                scene TEXT NOT NULL DEFAULT '',
+                scene_name TEXT NOT NULL DEFAULT '',
+                data_date TEXT NOT NULL,
+                hour TEXT NOT NULL,
+                impressions INTEGER NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                ctr REAL NOT NULL DEFAULT 0,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                orders INTEGER NOT NULL DEFAULT 0,
+                conversion_rate REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(store_id, scene, data_date, hour)
+            )
+            """
+        )
+        conn.commit()
+
+
 def _seed_gifts(conn: sqlite3.Connection) -> None:
     """首次运行时给每家演示店铺写入几笔礼品单（仅当仍是演示店铺时，避免真实店铺下重建示例数据）。"""
     count = conn.execute("SELECT COUNT(*) AS c FROM gifts").fetchone()["c"]
@@ -384,6 +417,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS promo_realtime (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,
+                scene TEXT NOT NULL DEFAULT '',
+                scene_name TEXT NOT NULL DEFAULT '',
                 data_date TEXT NOT NULL,
                 hour TEXT NOT NULL,
                 impressions INTEGER NOT NULL DEFAULT 0,
@@ -395,7 +430,7 @@ def init_db() -> None:
                 orders INTEGER NOT NULL DEFAULT 0,
                 conversion_rate REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                UNIQUE(store_id, data_date, hour)
+                UNIQUE(store_id, scene, data_date, hour)
             )
             """
         )
@@ -450,6 +485,7 @@ def init_db() -> None:
         _migrate(conn)
         _migrate_model_configs(conn)
         _migrate_sycm(conn)
+        _migrate_promo_realtime(conn)
         _seed_stores(conn)
         _migrate_logs(conn)
         _seed_gifts(conn)

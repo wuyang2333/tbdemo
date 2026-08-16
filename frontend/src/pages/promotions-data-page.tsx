@@ -124,53 +124,32 @@ export function PromotionsDataPage() {
             </Col>
           </Row>
 
-          {isRealtime ? (
-            <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-              <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
-                实时数据为全渠道合计，按小时更新（00:00 起到当前小时）。
-              </Text>
-              <Row gutter={[16, 16]}>
-                <Col xs={24} lg={14}>
-                  <Card variant="borderless" title="今日分时：花费 / 成交金额" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-                    <LineChart
-                      labels={labels}
-                      series={[
-                        { name: "花费", color: "#ff5000", values: trend.map((p) => p.spend), format: fmtMoney },
-                        { name: "成交金额", color: "#52c41a", values: trend.map((p) => p.sales), format: fmtMoney },
-                      ]}
-                    />
-                  </Card>
-                </Col>
-                <Col xs={24} lg={10}>
-                  <Card variant="borderless" title="今日分时 ROI" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                    <LineChart labels={labels} series={[{ name: "ROI", color: "#1677ff", values: trend.map((p) => p.roi) }]} height={170} />
-                  </Card>
-                </Col>
-              </Row>
-            </Card>
-          ) : (
-            <Row gutter={[16, 16]}>
-              <Col xs={24} lg={10}>
-                <Card variant="borderless" title={`各推广场景 · ${periodTitle}`} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                  <SceneTable scenes={data.scenes} summary={data.summary} />
-                </Card>
-              </Col>
-              <Col xs={24} lg={14}>
-                <Card variant="borderless" title="花费 / 成交金额 趋势" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-                  <LineChart
-                    labels={labels}
-                    series={[
-                      { name: "花费", color: "#ff5000", values: trend.map((p) => p.spend), format: fmtMoney },
-                      { name: "成交金额", color: "#52c41a", values: trend.map((p) => p.sales), format: fmtMoney },
-                    ]}
-                  />
-                </Card>
-                <Card variant="borderless" title="ROI 趋势" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                  <LineChart labels={labels} series={[{ name: "ROI", color: "#1677ff", values: trend.map((p) => p.roi) }]} height={160} />
-                </Card>
-              </Col>
-            </Row>
-          )}
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={10}>
+              <Card variant="borderless" title={`各推广场景 · ${isRealtime ? "今日实时" : periodTitle}`} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <SceneTable scenes={data.scenes} summary={data.summary} />
+              </Card>
+            </Col>
+            <Col xs={24} lg={14}>
+              <Card variant="borderless" title={isRealtime ? "今日分时：花费 / 成交金额" : "花费 / 成交金额 趋势"} style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+                <LineChart
+                  labels={labels}
+                  series={[
+                    { name: "花费", color: "#ff5000", values: trend.map((p) => p.spend), format: fmtMoney },
+                    { name: "成交金额", color: "#52c41a", values: trend.map((p) => p.sales), format: fmtMoney },
+                  ]}
+                />
+              </Card>
+              <Card variant="borderless" title={isRealtime ? "今日分时 ROI" : "ROI 趋势"} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                <LineChart labels={labels} series={[{ name: "ROI", color: "#1677ff", values: trend.map((p) => p.roi) }]} height={160} />
+              </Card>
+              {isRealtime && (
+                <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 12 }}>
+                  实时数据按小时更新（00:00 起到当前小时），覆盖货品全站 / 关键词 / 人群各场景。
+                </Text>
+              )}
+            </Col>
+          </Row>
         </>
       )}
     </div>
