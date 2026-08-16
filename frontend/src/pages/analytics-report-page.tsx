@@ -1,7 +1,7 @@
 import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from "@ant-design/icons";
 import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useDailyRefreshAt } from "../lib/use-daily-refresh";
@@ -34,6 +34,7 @@ export function AnalyticsReportPage() {
   const [pushTesting, setPushTesting] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string } } | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const analysisMounted = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,6 +165,17 @@ export function AnalyticsReportPage() {
       setAnalysisLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!analysisMounted.current) {
+      analysisMounted.current = true;
+      return;
+    }
+    // 日期/店铺变化：清掉旧分析并重新生成该日期的分析
+    setAnalysisResult(null);
+    runAnalysis();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, storeId]);
 
   const exportPdf = () => {
     if (!data) return;
