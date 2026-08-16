@@ -413,6 +413,13 @@ export type AnalyticsProduct = {
   visitors?: number;
   pv?: number;
   conversion_rate?: number;
+  visitors_cycle?: number;
+  pv_cycle?: number;
+  buyers_cycle?: number;
+  orders_cycle?: number;
+  sales_cycle?: number;
+  conversion_cycle?: number;
+  add_cart_cycle?: number;
 };
 
 export type AnalyticsProducts = {

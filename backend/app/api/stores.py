@@ -663,14 +663,18 @@ def sync_items_realtime(
             now = _fmt(_now())
             for it in items:
                 db.execute(
-                    "INSERT INTO store_item_realtime (store_id, item_id, item_title, image, visitors, pv, buyers, orders, sales, conversion_rate, add_cart, refund_amount, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO store_item_realtime (store_id, item_id, item_title, image, visitors, pv, buyers, orders, sales, conversion_rate, add_cart, refund_amount, visitors_cycle, pv_cycle, buyers_cycle, orders_cycle, sales_cycle, conversion_cycle, add_cart_cycle, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(store_id, item_id) DO UPDATE SET "
                     "item_title = excluded.item_title, image = excluded.image, visitors = excluded.visitors, "
                     "pv = excluded.pv, buyers = excluded.buyers, orders = excluded.orders, "
                     "sales = excluded.sales, conversion_rate = excluded.conversion_rate, "
-                    "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount, updated_at = excluded.updated_at",
-                    (store["id"], it["item_id"], it["item_title"], it.get("image", ""), it["visitors"], it["pv"], it["buyers"], it["orders"], it["sales"], it["conversion_rate"], it.get("add_cart", 0), it.get("refund_amount", 0), now),
+                    "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount, "
+                    "visitors_cycle = excluded.visitors_cycle, pv_cycle = excluded.pv_cycle, "
+                    "buyers_cycle = excluded.buyers_cycle, orders_cycle = excluded.orders_cycle, "
+                    "sales_cycle = excluded.sales_cycle, conversion_cycle = excluded.conversion_cycle, "
+                    "add_cart_cycle = excluded.add_cart_cycle, updated_at = excluded.updated_at",
+                    (store["id"], it["item_id"], it["item_title"], it.get("image", ""), it["visitors"], it["pv"], it["buyers"], it["orders"], it["sales"], it["conversion_rate"], it.get("add_cart", 0), it.get("refund_amount", 0), it.get("visitors_cycle", 0), it.get("pv_cycle", 0), it.get("buyers_cycle", 0), it.get("orders_cycle", 0), it.get("sales_cycle", 0), it.get("conversion_cycle", 0), it.get("add_cart_cycle", 0), now),
                 )
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
         except SycmError as exc:

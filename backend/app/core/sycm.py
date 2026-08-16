@@ -422,6 +422,12 @@ def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120
         def _id(x) -> str:
             return str(x.get("value") or "") if isinstance(x, dict) else str(x or "")
 
+        def _cycle(field: str) -> float:
+            v = r.get(field)
+            if not isinstance(v, dict):
+                return 0.0
+            return round(_to_num(v.get("cycleCrc")) * 100, 2)
+
         for r in rows:
             if not isinstance(r, dict):
                 continue
@@ -443,6 +449,13 @@ def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120
                     "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
                     "add_cart": int(_to_num(_take(r, "itemCartCnt"))),
                     "refund_amount": round(_to_num(_take(r, "sucRefundAmt")), 2),
+                    "visitors_cycle": _cycle("itmUv"),
+                    "pv_cycle": _cycle("itmPv"),
+                    "buyers_cycle": _cycle("payByrCnt"),
+                    "orders_cycle": _cycle("payItmCnt"),
+                    "sales_cycle": _cycle("payAmt"),
+                    "conversion_cycle": _cycle("payRate"),
+                    "add_cart_cycle": _cycle("itemCartCnt"),
                 }
             )
         total = inner.get("recordCount") or 0

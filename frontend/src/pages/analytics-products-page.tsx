@@ -17,6 +17,19 @@ const MODE_OPTIONS = [
   { label: "近 30 天", value: "30" },
 ];
 
+function MetricCell({ value, change }: { value: string; change: number }) {
+  const up = change >= 0;
+  return (
+    <div>
+      <div>{value}</div>
+      <div style={{ fontSize: 11, fontWeight: 600, color: up ? "#52c41a" : "#ff4d4f" }}>
+        {up ? "+" : "-"}
+        {Math.abs(change).toFixed(2)}%
+      </div>
+    </div>
+  );
+}
+
 export function AnalyticsProductsPage() {
   const [data, setData] = useState<AnalyticsProducts | null>(null);
   const [mode, setMode] = useState("realtime");
@@ -95,12 +108,12 @@ export function AnalyticsProductsPage() {
               row.live ? <Tag color="green">今日实时</Tag> : <Tag>{String(v)}</Tag>,
           },
           { title: "商品", key: "item", width: 320, render: renderItem },
-          { title: "访客", dataIndex: "visitors", align: "right", width: 90, sorter: numSorter("visitors"), render: (v: number) => fmtInt(v) },
-          { title: "浏览量", dataIndex: "pv", align: "right", width: 90, sorter: numSorter("pv"), render: (v: number) => fmtInt(v) },
-          { title: "买家", dataIndex: "buyers", align: "right", width: 80, sorter: numSorter("buyers"), render: (v: number) => fmtInt(v) },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number) => fmtMoney(v) },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 100, sorter: numSorter("conversion_rate"), render: (v: number) => fmtPct(v) },
-          { title: "加购", dataIndex: "add_cart", align: "right", width: 80, sorter: numSorter("add_cart"), render: (v: number) => fmtInt(v) },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
+          { title: "浏览量", dataIndex: "pv", align: "right", width: 110, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 100, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 130, sorter: numSorter("sales"), render: (v: number, row) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle ?? 0} /> },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 120, sorter: numSorter("conversion_rate"), render: (v: number, row) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle ?? 0} /> },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 100, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
           { title: "商品", key: "item", width: 340, render: renderItem },

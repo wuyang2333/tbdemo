@@ -252,6 +252,9 @@ def _migrate_products_realtime(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE store_item_realtime ADD COLUMN add_cart INTEGER NOT NULL DEFAULT 0")
     if "refund_amount" not in cols:
         conn.execute("ALTER TABLE store_item_realtime ADD COLUMN refund_amount REAL NOT NULL DEFAULT 0")
+    for col in ("visitors_cycle", "pv_cycle", "buyers_cycle", "orders_cycle", "sales_cycle", "conversion_cycle", "add_cart_cycle"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE store_item_realtime ADD COLUMN {col} REAL NOT NULL DEFAULT 0")
     conn.commit()
 
 
