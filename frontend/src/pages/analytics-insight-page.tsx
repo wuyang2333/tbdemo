@@ -1,7 +1,7 @@
 import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, RobotOutlined, SendOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Input, Segmented, Space, Spin, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
@@ -97,6 +97,23 @@ export function AnalyticsInsightPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const [genMode, setGenMode] = useState("14");
   const [genStoreId, setGenStoreId] = useState<number | undefined>(undefined);
+  const cacheRef = useRef<Record<string, { result: InsightResult; chat: { role: "user" | "assistant"; content: string }[] }>>({});
+
+  const cacheKey = (m: string, sid?: number) => `${m}|${sid ?? ""}`;
+
+  const applyModeStore = (m: string, sid?: number) => {
+    const key = cacheKey(m, sid);
+    const cached = cacheRef.current[key];
+    if (cached) {
+      setResult(cached.result);
+      setChat(cached.chat);
+      setGenMode(m);
+      setGenStoreId(sid);
+    } else {
+      setResult(null);
+      setChat([]);
+    }
+  };
 
   const generate = async () => {
     setLoading(true);
@@ -109,6 +126,7 @@ export function AnalyticsInsightPage() {
       setGenMode(mode);
       setGenStoreId(storeId);
       setChat([]);
+      cacheRef.current[cacheKey(mode, storeId)] = { result: data, chat: [] };
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setResult(null);
@@ -130,7 +148,10 @@ export function AnalyticsInsightPage() {
         store_id: genStoreId,
         messages: [{ role: "assistant", content: result.reply }, ...next],
       });
-      setChat([...next, { role: "assistant" as const, content: data.reply }]);
+      const full = [...next, { role: "assistant" as const, content: data.reply }];
+      setChat(full);
+      const key = cacheKey(genMode, genStoreId);
+      if (cacheRef.current[key]) cacheRef.current[key] = { ...cacheRef.current[key], chat: full };
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -146,8 +167,22 @@ export function AnalyticsInsightPage() {
         title="AI 解读"
         extra={
           <Space wrap>
-            <StoreScopeSelect value={storeId} onChange={setStoreId} />
-            <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => setMode(String(v))} />
+            <StoreScopeSelect
+              value={storeId}
+              onChange={(v) => {
+                setStoreId(v);
+                applyModeStore(mode, v);
+              }}
+            />
+            <Segmented
+              options={MODE_OPTIONS}
+              value={mode}
+              onChange={(v) => {
+                const m = String(v);
+                setMode(m);
+                applyModeStore(m, storeId);
+              }}
+            />
             <Button type="primary" icon={<RobotOutlined />} loading={loading} onClick={generate}>
               生成 AI 解读
             </Button>
