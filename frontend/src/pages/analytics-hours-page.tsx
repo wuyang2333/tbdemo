@@ -97,7 +97,7 @@ function HourChart({
           style={{
             position: "absolute",
             top: 0,
-            left: `calc(${(hover + 0.5) * (100 / n)}%)`,
+            left: `clamp(64px, calc(${(hover + 0.5) * (100 / n)}%), calc(100% - 64px))`,
             transform: "translateX(-50%)",
             background: "rgba(18,21,29,0.96)",
             border: "1px solid var(--ops-border-strong)",
@@ -230,7 +230,7 @@ export function AnalyticsHoursPage() {
         />
         <Text type="secondary" style={{ fontSize: 12 }}>
           当前范围：{data?.label ?? "今日"}
-          {data?.peak_hour ? ` · 销售高峰 ${data.peak_hour}（${fmtMoney(data.peak_sales)}）` : ""}
+          {data?.peak_hour && data.peak_sales > 0 ? ` · 销售高峰 ${data.peak_hour}（${fmtMoney(data.peak_sales)}）` : ""}
         </Text>
       </Space>
 
