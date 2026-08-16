@@ -15,6 +15,7 @@ from backend.app.api.auth import get_current_user
 from backend.app.core.alimama import (
     AlimamaError,
     check_access,
+    fetch_item_promo_wholesite,
     fetch_item_report,
     fetch_plan_realtime,
     fetch_plan_reports,
@@ -475,11 +476,20 @@ def sync_items(
     results = []
     for store in _bound_stores(db):
         try:
-            rows = fetch_item_report(store, start, end, realtime=realtime)
-            source = "report"
-            if not rows:
-                rows = fetch_promo_item_fallback(store, start, end, realtime=realtime)
-                source = "plan"
+            if realtime:
+                # 实时：走货品全站「计划→商品」口径，与万相台全站推广一致
+                # （实时商品报表混入大量短视频条目，不能用作商品推广数据）
+                rows = fetch_item_promo_wholesite(store, start, end, realtime=True)
+                source = "wholesite"
+                if not rows:
+                    rows = fetch_promo_item_fallback(store, start, end, realtime=True)
+                    source = "plan"
+            else:
+                rows = fetch_item_report(store, start, end, realtime=False)
+                source = "report"
+                if not rows:
+                    rows = fetch_promo_item_fallback(store, start, end, realtime=False)
+                    source = "plan"
             for it in rows:
                 db.execute(
                     "INSERT INTO promo_item_stats (store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at) "

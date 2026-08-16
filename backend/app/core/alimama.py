@@ -472,3 +472,51 @@ def fetch_promo_item_fallback(store: dict, start: str, end: str, realtime: bool 
         row["roi"] = round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0
         out.append(row)
     return out
+
+
+def fetch_item_promo_wholesite(store: dict, start: str, end: str, realtime: bool = True) -> list[dict]:
+    """货品全站推广计划 → 商品 的推广数据（与万相台「全站推广」口径一致）。
+
+    货品全站每个计划绑定一个商品，计划实时/按天花费即该商品的全站推广花费。
+    """
+    mapping: dict[str, dict] = {}
+    offset = 0
+    for _ in range(200):
+        payload = _run_json(store, ["promo-wholesite", "--limit", "100", "--page", str(offset // 100 + 1), "--raw"], timeout=180)
+        d = payload.get("data") or {}
+        rows = d.get("list") or []
+        count = int(_num(d.get("count")))
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            cid = str(r.get("campaignId") or "").strip()
+            if not cid:
+                continue
+            item_id, item_title = _campaign_item(r)
+            if item_id:
+                mapping[cid] = {"item_id": item_id, "item_title": item_title or ""}
+        offset += len(rows)
+        if not rows or offset >= count:
+            break
+    stats = fetch_plan_realtime(store) if realtime else fetch_plan_reports(store, start, end)
+    out: list[dict] = []
+    for st in stats:
+        cid = st.get("campaign_id") or ""
+        it = mapping.get(cid)
+        if not it:
+            continue
+        spend = round(_num(st.get("spend")), 2)
+        sales = round(_num(st.get("sales")), 2)
+        out.append(
+            {
+                "item_id": it["item_id"],
+                "item_title": it["item_title"],
+                "spend": spend,
+                "sales": sales,
+                "roi": round(sales / spend, 2) if spend else 0.0,
+                "clicks": int(_num(st.get("clicks"))),
+                "orders": 0,
+                "impressions": 0,
+            }
+        )
+    return out
