@@ -146,6 +146,20 @@ def _take(item: dict, field: str):
     return (item.get(field) or {}).get("value")
 
 
+def _norm_img(url: str) -> str:
+    """规范化商品图片 URL：兼容协议相对地址，并修复重复协议（https:https:// 等）。"""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("https:https://"):
+        return "https://" + url[len("https:https://"):]
+    if url.startswith("http:http://"):
+        return "http://" + url[len("http:http://"):]
+    return url
+
+
 # ---------- 实时（今天） ----------
 
 def _run_live_overview(store: dict, timeout: float = 120) -> dict:
@@ -365,7 +379,7 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
                         else r.get("mainProductId") or item.get("itemId") or ""
                     ),
                     "item_title": title,
-                    "image": str(item.get("pictUrl") or "").replace("//", "https://"),
+                    "image": _norm_img(str(item.get("pictUrl") or "")),
                     "sales": round(_to_num(_take(r, "payAmt")), 2),
                     "orders": int(_to_num(_take(r, "payItmCnt"))),
                     "buyers": int(_to_num(_take(r, "payByrCnt"))),
@@ -440,7 +454,7 @@ def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120
                 {
                     "item_id": _id(r.get("mainProductId")) or _id(r.get("itemId")) or _id(item.get("itemId")),
                     "item_title": title,
-                    "image": pic.replace("//", "https://") if pic else "",
+                    "image": _norm_img(pic),
                     "visitors": int(_to_num(_take(r, "itmUv"))),
                     "pv": int(_to_num(_take(r, "itmPv"))),
                     "buyers": int(_to_num(_take(r, "payByrCnt"))),
