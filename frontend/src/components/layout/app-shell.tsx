@@ -62,17 +62,12 @@ const ICONS: Record<string, ReactNode> = {
 const ANALYTICS_CHILDREN = [
   { key: "/analytics/overview", label: "总览" },
   { key: "/analytics/trend", label: "趋势分析" },
-  { key: "/analytics/compare", label: "店铺对比" },
   { key: "/analytics/conversion", label: "转化分析" },
-  { key: "/analytics/yoy", label: "同比环比" },
   { key: "/analytics/alerts", label: "异常提醒" },
   { key: "/analytics/linkage", label: "联动分析" },
-  { key: "/analytics/range", label: "区间对比" },
-  { key: "/analytics/goal", label: "目标预测" },
   { key: "/analytics/report", label: "经营日报" },
   { key: "/analytics/health", label: "经营健康" },
   { key: "/analytics/insight", label: "AI 解读" },
-  { key: "/analytics/customers", label: "客群分析" },
   { key: "/analytics/hours", label: "时段分析" },
 ];
 

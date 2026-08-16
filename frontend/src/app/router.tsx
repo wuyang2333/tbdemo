@@ -8,17 +8,12 @@ import { AccountsPage } from "../pages/accounts-page";
 import { AiPage } from "../pages/ai-page";
 import { AnalyticsOverviewPage } from "../pages/analytics-overview-page";
 import { AnalyticsTrendPage } from "../pages/analytics-trend-page";
-import { AnalyticsComparePage } from "../pages/analytics-compare-page";
 import { AnalyticsConversionPage } from "../pages/analytics-conversion-page";
-import { AnalyticsYoyPage } from "../pages/analytics-yoy-page";
 import { AnalyticsAlertsPage } from "../pages/analytics-alerts-page";
 import { AnalyticsLinkagePage } from "../pages/analytics-linkage-page";
-import { AnalyticsRangePage } from "../pages/analytics-range-page";
-import { AnalyticsGoalPage } from "../pages/analytics-goal-page";
 import { AnalyticsReportPage } from "../pages/analytics-report-page";
 import { AnalyticsHealthPage } from "../pages/analytics-health-page";
 import { AnalyticsInsightPage } from "../pages/analytics-insight-page";
-import { AnalyticsCustomersPage } from "../pages/analytics-customers-page";
 import { AnalyticsHoursPage } from "../pages/analytics-hours-page";
 import { BoardPage } from "../pages/board-page";
 import { ContentPage } from "../pages/content-page";
@@ -125,17 +120,12 @@ export function AppRouter() {
         <Route path="/analytics" element={<Navigate to="/analytics/overview" replace />} />
         <Route path="/analytics/overview" element={<RequireModule id="analytics"><AnalyticsOverviewPage /></RequireModule>} />
         <Route path="/analytics/trend" element={<RequireModule id="analytics"><AnalyticsTrendPage /></RequireModule>} />
-        <Route path="/analytics/compare" element={<RequireModule id="analytics"><AnalyticsComparePage /></RequireModule>} />
         <Route path="/analytics/conversion" element={<RequireModule id="analytics"><AnalyticsConversionPage /></RequireModule>} />
-        <Route path="/analytics/yoy" element={<RequireModule id="analytics"><AnalyticsYoyPage /></RequireModule>} />
         <Route path="/analytics/alerts" element={<RequireModule id="analytics"><AnalyticsAlertsPage /></RequireModule>} />
         <Route path="/analytics/linkage" element={<RequireModule id="analytics"><AnalyticsLinkagePage /></RequireModule>} />
-        <Route path="/analytics/range" element={<RequireModule id="analytics"><AnalyticsRangePage /></RequireModule>} />
-        <Route path="/analytics/goal" element={<RequireModule id="analytics"><AnalyticsGoalPage /></RequireModule>} />
         <Route path="/analytics/report" element={<RequireModule id="analytics"><AnalyticsReportPage /></RequireModule>} />
         <Route path="/analytics/health" element={<RequireModule id="analytics"><AnalyticsHealthPage /></RequireModule>} />
         <Route path="/analytics/insight" element={<RequireModule id="analytics"><AnalyticsInsightPage /></RequireModule>} />
-        <Route path="/analytics/customers" element={<RequireModule id="analytics"><AnalyticsCustomersPage /></RequireModule>} />
         <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />
         <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
         <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
