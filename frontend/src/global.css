@@ -10,6 +10,12 @@
   --ops-accent: #ff5000;
   --ops-accent-light: #ff8a3d;
   --ops-accent-soft: rgba(255, 80, 0, 0.14);
+  --ops-hoverbar-bg: #1b2230;
+  --ops-hoverbar-border: rgba(255, 255, 255, 0.12);
+  --ops-hoverbar-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --ops-hoverbar-text: #ff8a3d;
+  --ops-hoverbar-text-hover: #ffa96b;
+  --ops-hoverbar-btn-hover: rgba(255, 138, 61, 0.16);
   --ops-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   --ops-shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.25);
   --ops-radius: 14px;
@@ -28,6 +34,12 @@ body[data-theme="light"] {
   --ops-accent: #ff5000;
   --ops-accent-light: #ff7a3d;
   --ops-accent-soft: rgba(255, 80, 0, 0.1);
+  --ops-hoverbar-bg: #ffffff;
+  --ops-hoverbar-border: rgba(18, 24, 45, 0.12);
+  --ops-hoverbar-shadow: 0 4px 14px rgba(30, 40, 70, 0.12);
+  --ops-hoverbar-text: #ff5000;
+  --ops-hoverbar-text-hover: #e64500;
+  --ops-hoverbar-btn-hover: rgba(255, 80, 0, 0.1);
   --ops-shadow: 0 10px 30px rgba(30, 40, 70, 0.1);
   --ops-shadow-sm: 0 4px 14px rgba(30, 40, 70, 0.07);
   --ops-radius: 14px;
@@ -458,9 +470,10 @@ body[data-theme="light"] .ops-hero::before {
   align-items: center;
   gap: 2px;
   padding: 1px;
-  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  background: var(--ops-hoverbar-bg);
+  border: 1px solid var(--ops-hoverbar-border);
   border-radius: 7px;
-  box-shadow: 0 3px 12px rgba(22, 119, 255, 0.35);
+  box-shadow: var(--ops-hoverbar-shadow);
   opacity: 0;
   transform: translateY(-3px);
   pointer-events: none;
@@ -481,7 +494,7 @@ body[data-theme="light"] .ops-hero::before {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #fff;
+  color: var(--ops-hoverbar-text);
   font-size: 12px;
   line-height: 22px;
   cursor: pointer;
@@ -490,5 +503,6 @@ body[data-theme="light"] .ops-hero::before {
   white-space: nowrap;
 }
 .product-hover-bar .phb-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--ops-hoverbar-btn-hover);
+  color: var(--ops-hoverbar-text-hover);
 }
