@@ -9,16 +9,20 @@ const { Text } = Typography;
 
 export const ANALYTICS_DAY_OPTIONS = [7, 14, 30];
 
+function toNum(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 export function fmtMoney(value: number): string {
-  return `¥${value.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `¥${toNum(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function fmtPct(value: number): string {
-  return `${value.toFixed(2)}%`;
+  return `${toNum(value).toFixed(2)}%`;
 }
 
 export function fmtInt(value: number): string {
-  return value.toLocaleString("zh-CN");
+  return toNum(value).toLocaleString("zh-CN");
 }
 
 export function formatValue(fmt: string, value: number | null | undefined): string {

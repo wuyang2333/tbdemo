@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { LineChart, StoreScopeSelect, daySwitch, fmtInt, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
+import { LineChart, StoreScopeSelect, daySwitch, fmtInt, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsProduct, AnalyticsProductDetail, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
@@ -27,6 +27,8 @@ export function AnalyticsProductsPage() {
 
   const load = useCallback(async (m: string, sid?: number) => {
     setLoading(true);
+    setData(null);
+    setDetail(null);
     try {
       const params = new URLSearchParams();
       if (m === "realtime") {
@@ -38,7 +40,6 @@ export function AnalyticsProductsPage() {
       if (sid) params.set("store_id", String(sid));
       const { data: res } = await http.get<AnalyticsProducts>(`/analytics/products?${params.toString()}`);
       setData(res);
-      setDetail(null);
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setData(null);
@@ -89,7 +90,7 @@ export function AnalyticsProductsPage() {
           { title: "浏览量", dataIndex: "pv", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
           { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => `${v.toFixed(2)}%` },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => fmtPct(v) },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
           { title: "商品", dataIndex: "item_title", width: 300, ellipsis: true },
@@ -124,7 +125,7 @@ export function AnalyticsProductsPage() {
       />
 
       <Space style={{ marginBottom: 12 }} wrap>
-        <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => setMode(String(v))} />
+        <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setDetail(null); setMode(String(v)); }} />
         {!isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
         {!isRealtime && daySwitch(Number(mode), (d) => setMode(String(d)))}
         {isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>今日实时，按销售额排序，每 30 分钟可手动刷新</Text>}
