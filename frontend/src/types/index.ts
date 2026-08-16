@@ -280,3 +280,85 @@ export type PromoPlan = {
   tag: string;
   updated_at: string;
 };
+
+export type AnalyticsLinkagePoint = {
+  date: string;
+  label: string;
+  total_sales: number;
+  total_visitors: number;
+  total_orders: number;
+  promo_spend: number;
+  promo_sales: number;
+  promo_roi: number;
+  ad_share: number;
+  overall_roi: number;
+  natural_sales: number;
+};
+
+export type AnalyticsLinkage = {
+  items: AnalyticsLinkagePoint[];
+  summary: {
+    total_sales: number;
+    promo_spend: number;
+    promo_sales: number;
+    natural_sales: number;
+    ad_share: number;
+    promo_roi: number;
+    overall_roi: number;
+    days: number;
+  };
+  days: number;
+};
+
+export type AnalyticsRangeBucket = {
+  start: string;
+  end: string;
+  visitors: number;
+  pv: number;
+  sales: number;
+  orders: number;
+  conversion_rate: number;
+};
+
+export type AnalyticsRangeCompare = {
+  range1: AnalyticsRangeBucket;
+  range2: AnalyticsRangeBucket;
+  compare: { key: string; name: string; fmt: string; r1: number | null; r2: number | null; change_pct: number | null }[];
+  series: (AnalyticsBucket & { date: string })[];
+};
+
+export type AnalyticsGoalProgress = {
+  month: string;
+  goal: number;
+  sales: number;
+  progress_pct: number;
+  days_elapsed: number;
+  days_total: number;
+  avg_daily: number;
+  forecast: number;
+  remaining: number;
+  remaining_daily: number;
+};
+
+export type AnalyticsForecast = {
+  actual: { date: string; sales: number }[];
+  predicted: { date: string; sales: number }[];
+  days: number;
+};
+
+export type AnalyticsReport = {
+  date: string;
+  today: AnalyticsBucket;
+  yesterday: AnalyticsBucket;
+  promo_today: { spend: number; sales: number; roi: number };
+  promo_yesterday: { spend: number; sales: number; roi: number };
+  goal: number;
+  month_sales: number;
+  month: string;
+};
+
+export type AnalyticsHealth = {
+  score: number;
+  items: { key: string; name: string; score: number; detail: string }[];
+  days: number;
+};

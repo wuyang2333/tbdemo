@@ -66,6 +66,12 @@ const ANALYTICS_CHILDREN = [
   { key: "/analytics/conversion", label: "转化分析" },
   { key: "/analytics/yoy", label: "同比环比" },
   { key: "/analytics/alerts", label: "异常提醒" },
+  { key: "/analytics/linkage", label: "联动分析" },
+  { key: "/analytics/range", label: "区间对比" },
+  { key: "/analytics/goal", label: "目标预测" },
+  { key: "/analytics/report", label: "经营日报" },
+  { key: "/analytics/health", label: "经营健康" },
+  { key: "/analytics/insight", label: "AI 解读" },
 ];
 
 const PROMOTIONS_CHILDREN = [

@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import io as _io
+import json as _json
 from datetime import date as date_cls
 from datetime import timedelta
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user
+from backend.app.api.model_configs import get_default_config
+from backend.app.core.ai_client import AIError, chat_completion
 from backend.app.core.db import get_db
 from backend.app.core.sycm import has_profile
 
@@ -415,3 +423,452 @@ def analytics_alerts(
         "checked_days": len(rows),
         "checked_stores": len(by_store),
     }
+# ---------- 联动分析（推广 vs 销售） ----------
+
+@router.get("/linkage")
+def analytics_linkage(
+    days: int = 14,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 90):
+        days = 14
+    start, today = _date_range(days)
+    sd_rows = db.execute(
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date",
+        (start.isoformat(), today.isoformat()),
+    ).fetchall()
+    pd_rows = db.execute(
+        "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date",
+        (start.isoformat(), today.isoformat()),
+    ).fetchall()
+    sd_map: dict[str, dict] = {}
+    pd_map: dict[str, dict] = {}
+    for r in sd_rows:
+        d = r["data_date"]
+        item = sd_map.setdefault(d, {"sales": 0.0, "visitors": 0, "orders": 0})
+        item["sales"] += r["sales"] or 0
+        item["visitors"] += r["visitors"] or 0
+        item["orders"] += r["orders"] or 0
+    for r in pd_rows:
+        d = r["data_date"]
+        item = pd_map.setdefault(d, {"spend": 0.0, "sales": 0.0})
+        item["spend"] += r["spend"] or 0
+        item["sales"] += r["sales"] or 0
+
+    items = []
+    for i in range(days - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        sd = sd_map.get(d, {"sales": 0.0, "visitors": 0, "orders": 0})
+        pd = pd_map.get(d, {"spend": 0.0, "sales": 0.0})
+        total_sales = round(sd["sales"], 2)
+        promo_spend = round(pd["spend"], 2)
+        promo_sales = round(pd["sales"], 2)
+        items.append(
+            {
+                "date": d,
+                "label": d[5:],
+                "total_sales": total_sales,
+                "total_visitors": sd["visitors"],
+                "total_orders": sd["orders"],
+                "promo_spend": promo_spend,
+                "promo_sales": promo_sales,
+                "promo_roi": round(promo_sales / promo_spend, 2) if promo_spend else 0.0,
+                "ad_share": round(min(promo_sales / total_sales * 100, 100.0), 1) if total_sales else 0.0,
+                "overall_roi": round(total_sales / promo_spend, 2) if promo_spend else 0.0,
+                "natural_sales": round(max(total_sales - promo_sales, 0), 2),
+            }
+        )
+    ts = sum(x["total_sales"] for x in items)
+    ps = sum(x["promo_spend"] for x in items)
+    psa = sum(x["promo_sales"] for x in items)
+    summary = {
+        "total_sales": round(ts, 2),
+        "promo_spend": round(ps, 2),
+        "promo_sales": round(psa, 2),
+        "natural_sales": round(max(ts - psa, 0), 2),
+        "ad_share": round(min(psa / ts * 100, 100.0), 1) if ts else 0.0,
+        "promo_roi": round(psa / ps, 2) if ps else 0.0,
+        "overall_roi": round(ts / ps, 2) if ps else 0.0,
+        "days": days,
+    }
+    return {"items": items, "summary": summary, "days": days}
+
+
+# ---------- 区间对比 ----------
+
+@router.get("/range")
+def analytics_range(
+    start: str = "",
+    end: str = "",
+    start2: str = "",
+    end2: str = "",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    today = date_cls.today()
+    r1_start = _to_date(start) or (today - timedelta(days=6))
+    r1_end = _to_date(end) or today
+    r2_end = _to_date(end2) or (r1_start - timedelta(days=1))
+    span = (r1_end - r1_start).days + 1
+    r2_start = _to_date(start2) or (r2_end - timedelta(days=span - 1))
+    if r1_start > r1_end or r2_start > r2_end:
+        raise HTTPException(status_code=400, detail="区间日期不正确（开始日期不能晚于结束日期）")
+
+    rows = db.execute("SELECT * FROM store_daily_data ORDER BY data_date ASC").fetchall()
+
+    def agg(s: date_cls, e: date_cls) -> dict | None:
+        in_r = [r for r in rows if s <= _to_date(r["data_date"]) <= e]
+        if not in_r:
+            return None
+        return _sum_rows(in_r)
+
+    a = agg(r1_start, r1_end)
+    b = agg(r2_start, r2_end)
+    metrics = [
+        ("sales", "销售额", "money"),
+        ("orders", "订单", "int"),
+        ("visitors", "访客", "int"),
+        ("conversion_rate", "转化率", "pct"),
+    ]
+    compare = []
+    for key, name, fmt in metrics:
+        v1 = a[key] if a else None
+        v2 = b[key] if b else None
+        compare.append({"key": key, "name": name, "fmt": fmt, "r1": v1, "r2": v2, "change_pct": _rel_change(v1, v2)})
+    series = []
+    for i in range(span):
+        d = r1_start + timedelta(days=i)
+        ds = d.isoformat()
+        day_rows = [r for r in rows if r["data_date"] == ds]
+        s = _sum_rows(day_rows) if day_rows else {"visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "conversion_rate": 0.0}
+        if len(day_rows) == 1 and day_rows[0]["conversion_rate"]:
+            s["conversion_rate"] = round(day_rows[0]["conversion_rate"], 2)
+        series.append({"date": d.strftime("%m-%d"), **s})
+    return {
+        "range1": {"start": r1_start.isoformat(), "end": r1_end.isoformat(), **(a or {"visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "conversion_rate": 0.0})},
+        "range2": {"start": r2_start.isoformat(), "end": r2_end.isoformat(), **(b or {"visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "conversion_rate": 0.0})},
+        "compare": compare,
+        "series": series,
+    }
+
+
+# ---------- 目标与预测 ----------
+
+class GoalIn(BaseModel):
+    goal: float = 0
+    month: str = ""
+
+
+def _current_month() -> str:
+    return date_cls.today().strftime("%Y-%m")
+
+
+def _goal_value(db) -> tuple[float, str]:
+    row = db.execute("SELECT value FROM meta WHERE key = 'analytics_sales_goal'").fetchone()
+    if not row or not row["value"]:
+        return 0.0, _current_month()
+    try:
+        data = _json.loads(row["value"])
+        return float(data.get("goal") or 0), str(data.get("month") or _current_month())
+    except (ValueError, TypeError, AttributeError):
+        return 0.0, _current_month()
+
+
+@router.get("/goal")
+def get_goal(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    goal, month = _goal_value(db)
+    return {"goal": goal, "month": month}
+
+
+@router.put("/goal")
+def set_goal(
+    body: GoalIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if body.goal < 0:
+        raise HTTPException(status_code=400, detail="目标金额不能为负数")
+    month = (body.month or _current_month()).strip()
+    try:
+        date_cls.fromisoformat(month + "-01")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="月份格式不正确（应为 YYYY-MM）") from exc
+    db.execute(
+        "INSERT INTO meta (key, value) VALUES ('analytics_sales_goal', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_json.dumps({"month": month, "goal": float(body.goal)}, ensure_ascii=False),),
+    )
+    return {"ok": True, "goal": float(body.goal), "month": month}
+
+
+@router.get("/goal/progress")
+def goal_progress(
+    month: str = "",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    month = (month or _current_month()).strip()
+    try:
+        date_cls.fromisoformat(month + "-01")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="月份格式不正确（应为 YYYY-MM）") from exc
+    goal, _ = _goal_value(db)
+    if month != _current_month():
+        goal = 0.0
+    rows = db.execute(
+        "SELECT sales FROM store_daily_data WHERE data_date LIKE ?",
+        (month + "%",),
+    ).fetchall()
+    sales = round(sum(r["sales"] or 0 for r in rows), 2)
+    today = date_cls.today()
+    if month == today.strftime("%Y-%m"):
+        days_elapsed = today.day
+        days_total = 31 if today.month == 12 else (date_cls(today.year, today.month + 1, 1) - timedelta(days=1)).day
+    else:
+        days_elapsed = 0
+        days_total = 30
+    avg_daily = round(sales / days_elapsed, 2) if days_elapsed else 0.0
+    forecast = round(avg_daily * days_total, 2) if avg_daily else 0.0
+    remaining = max(goal - sales, 0)
+    remaining_days = max(days_total - days_elapsed, 0)
+    remaining_daily = round(remaining / remaining_days, 2) if remaining_days else 0.0
+    return {
+        "month": month,
+        "goal": goal,
+        "sales": sales,
+        "progress_pct": round(sales / goal * 100, 1) if goal else 0.0,
+        "days_elapsed": days_elapsed,
+        "days_total": days_total,
+        "avg_daily": avg_daily,
+        "forecast": forecast,
+        "remaining": round(remaining, 2),
+        "remaining_daily": remaining_daily,
+    }
+
+
+@router.get("/forecast")
+def analytics_forecast(
+    days: int = 7,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 30):
+        days = 7
+    today = date_cls.today()
+    rows = db.execute(
+        "SELECT data_date, sales FROM store_daily_data WHERE data_date >= ? ORDER BY data_date",
+        ((today - timedelta(days=13)).isoformat(),),
+    ).fetchall()
+    by_date = {r["data_date"]: r["sales"] or 0 for r in rows}
+    actual = []
+    for i in range(13, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        actual.append({"date": d[5:], "sales": round(by_date.get(d, 0), 2)})
+    xs = []
+    ys = []
+    for i, p in enumerate(actual):
+        if p["sales"] > 0:
+            xs.append(i)
+            ys.append(p["sales"])
+    predicted = []
+    if len(xs) >= 2:
+        n = len(xs)
+        xm = sum(xs) / n
+        ym = sum(ys) / n
+        slope = sum((xs[i] - xm) * (ys[i] - ym) for i in range(n)) / sum((xs[i] - xm) ** 2 for i in range(n)) if sum((xs[i] - xm) ** 2 for i in range(n)) else 0
+        intercept = ym - slope * xm
+        last_idx = 13
+        for k in range(1, days + 1):
+            val = max(slope * (last_idx + k) + intercept, 0)
+            predicted.append({"date": (today + timedelta(days=k)).strftime("%m-%d"), "sales": round(val, 2)})
+    return {"actual": actual, "predicted": predicted, "days": days}
+
+
+# ---------- 经营日报 ----------
+
+@router.get("/report")
+def daily_report(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    today = date_cls.today()
+    yesterday = today - timedelta(days=1)
+    ts = today.isoformat()
+    ys = yesterday.isoformat()
+
+    def sd_sum(d: str) -> dict:
+        rows = db.execute("SELECT * FROM store_daily_data WHERE data_date = ?", (d,)).fetchall()
+        s = _sum_rows(rows)
+        if len(rows) == 1 and rows[0]["conversion_rate"]:
+            s["conversion_rate"] = round(rows[0]["conversion_rate"], 2)
+        return s
+
+    td = sd_sum(ts)
+    yd = sd_sum(ys)
+    pr = db.execute(
+        "SELECT COALESCE(SUM(spend),0) AS spend, COALESCE(SUM(sales),0) AS sales FROM promo_realtime WHERE data_date = ?",
+        (ts,),
+    ).fetchone()
+    py = db.execute(
+        "SELECT COALESCE(SUM(spend),0) AS spend, COALESCE(SUM(sales),0) AS sales FROM promo_daily_data WHERE data_date = ?",
+        (ys,),
+    ).fetchone()
+    goal, _ = _goal_value(db)
+    month = _current_month()
+    month_rows = db.execute("SELECT sales FROM store_daily_data WHERE data_date LIKE ?", (month + "%",)).fetchall()
+    month_sales = round(sum(r["sales"] or 0 for r in month_rows), 2)
+    return {
+        "date": ts,
+        "today": td,
+        "yesterday": yd,
+        "promo_today": {"spend": round(pr["spend"] or 0, 2), "sales": round(pr["sales"] or 0, 2), "roi": round((pr["sales"] or 0) / (pr["spend"] or 0), 2) if pr["spend"] else 0.0},
+        "promo_yesterday": {"spend": round(py["spend"] or 0, 2), "sales": round(py["sales"] or 0, 2), "roi": round((py["sales"] or 0) / (py["spend"] or 0), 2) if py["spend"] else 0.0},
+        "goal": goal,
+        "month_sales": month_sales,
+        "month": month,
+    }
+
+
+@router.get("/export")
+def export_analytics(
+    days: int = 14,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> StreamingResponse:
+    if not (1 <= days <= 90):
+        days = 14
+    start, today = _date_range(days)
+    linkage = analytics_linkage(days=days, user=user, db=db)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "经营数据"
+    ws.append(["日期", "总销售额", "总访客", "总订单", "推广花费", "推广成交", "推广ROI", "广告成交占比", "整体ROI", "自然销售额"])
+    for item in linkage["items"]:
+        ws.append(
+            [
+                item["date"],
+                item["total_sales"],
+                item["total_visitors"],
+                item["total_orders"],
+                item["promo_spend"],
+                item["promo_sales"],
+                item["promo_roi"],
+                f"{item['ad_share']}%",
+                item["overall_roi"],
+                item["natural_sales"],
+            ]
+        )
+    widths = [12, 12, 10, 10, 12, 12, 10, 14, 10, 12]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[chr(64 + idx)].width = width
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"经营数据_{today.strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+# ---------- 健康分 ----------
+
+@router.get("/health")
+def analytics_health(
+    days: int = 14,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 90):
+        days = 14
+    start, today = _date_range(days)
+    rows = db.execute(
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date",
+        (start.isoformat(), today.isoformat()),
+    ).fetchall()
+    if not rows:
+        return {"score": 0, "items": [], "days": days}
+
+    def agg(rs):
+        s = _sum_rows(rs)
+        if len(rs) == 1 and rs[0]["conversion_rate"]:
+            s["conversion_rate"] = round(rs[0]["conversion_rate"], 2)
+        return s
+
+    today_s = agg([r for r in rows if r["data_date"] == today.isoformat()])
+    prev_rows = [r for r in rows if r["data_date"] != today.isoformat()]
+    base = agg(prev_rows) if prev_rows else None
+
+    items = []
+    # 1) 销售额趋势
+    if base and base["sales"]:
+        chg = (today_s["sales"] - base["sales"]) / base["sales"] * 100
+    else:
+        chg = 0.0
+    score = min(max(50 + chg * 2, 0), 100)
+    items.append({"key": "sales", "name": "销售额", "score": round(score), "detail": f"今日 ¥{today_s['sales']:.2f}" + (f"，较前日均值 {chg:+.1f}%" if base and base["sales"] else "，暂无对比基准")})
+
+    # 2) 转化率
+    if base and base["conversion_rate"]:
+        chg = today_s["conversion_rate"] - base["conversion_rate"]
+    else:
+        chg = 0.0
+    score = min(max(60 + chg * 5, 0), 100)
+    items.append({"key": "conv", "name": "转化率", "score": round(score), "detail": f"今日 {today_s['conversion_rate']:.2f}%" + (f"，较前日均值 {chg:+.2f} 个百分点" if base else "")})
+
+    # 3) 访客
+    if base and base["visitors"]:
+        chg = (today_s["visitors"] - base["visitors"]) / base["visitors"] * 100
+    else:
+        chg = 0.0
+    score = min(max(50 + chg, 0), 100)
+    items.append({"key": "uv", "name": "访客", "score": round(score), "detail": f"今日 {today_s['visitors']}" + (f"，较前日均值 {chg:+.1f}%" if base and base["visitors"] else "")})
+
+    # 4) 推广 ROI（区间平均）
+    promo_rows = db.execute(
+        "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?",
+        (start.isoformat(), today.isoformat()),
+    ).fetchall()
+    pspend = sum(r["spend"] or 0 for r in promo_rows)
+    psales = sum(r["sales"] or 0 for r in promo_rows)
+    roi = psales / pspend if pspend else 0.0
+    score = min(max(roi / 2.0 * 100, 0), 100) if pspend else 0
+    items.append({"key": "roi", "name": "推广 ROI", "score": round(score), "detail": f"区间 ROI {roi:.2f}" + ("（目标 2.0）" if pspend else "，暂无推广数据")})
+
+    total = sum(i["score"] for i in items) / len(items)
+    return {"score": round(total), "items": items, "days": days}
+
+
+# ---------- AI 解读 ----------
+
+@router.post("/insight")
+def ai_insight(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    today = date_cls.today()
+    rows = db.execute("SELECT * FROM store_daily_data ORDER BY data_date ASC").fetchall()
+    link = analytics_linkage(days=14, user=user, db=db)
+    summary = link["summary"]
+    trend = "、".join(f"{x['label']}:¥{x['total_sales']:.0f}" for x in link["items"][-7:])
+    anomalies = db.execute("SELECT data_date, message FROM (SELECT data_date, message FROM analytics_alert_probe) LIMIT 0").fetchall() if False else []
+    prompt = (
+        "你是淘宝店铺的运营数据分析师。请根据以下数据，用简体中文写一段不超过 180 字的经营解读，"
+        "分 2-3 点：1) 整体表现 2) 推广效率 3) 一个具体建议。语气务实，数字用万元/万级简化。\n"
+        f"近14天：总销售额 {summary['total_sales']:.0f} 元，推广花费 {summary['promo_spend']:.0f} 元，"
+        f"广告成交占比 {summary['ad_share']}%，推广ROI {summary['promo_roi']}，整体ROI（总销售/推广花费）{summary['overall_roi']}。\n"
+        f"近7天逐日销售额：{trend}。"
+    )
+    try:
+        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"reply": reply, "date": today.isoformat()}
