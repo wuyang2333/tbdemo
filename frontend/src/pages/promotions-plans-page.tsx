@@ -1,5 +1,5 @@
-import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { BarChartOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, Drawer, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -19,6 +19,14 @@ export function PromotionsPlansPage() {
   const [mode, setMode] = useState("realtime");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [diagFilter, setDiagFilter] = useState("");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<{
+    sections: { overall: string; highlights: string[]; risks: string[]; suggestions: string[] };
+    mode: string;
+    summary: { total_spend: number; total_sales: number; total_roi: number; high_count: number; mid_count: number; low_count: number };
+  } | null>(null);
 
   const load = useCallback(async (sc: string, m: string) => {
     setLoading(true);
@@ -40,6 +48,31 @@ export function PromotionsPlansPage() {
   useAutoRefresh(() => load(scene, mode));
 
   const periodTitle = mode === "realtime" ? "实时" : mode === "yesterday" ? "昨天" : "近七天";
+  const diag = (p: PromoPlan) => {
+    if (!p.spend) return { label: "未投放", color: "default" as const };
+    if (p.roi >= 2) return { label: "健康", color: "green" as const };
+    if (p.roi >= 1) return { label: "关注", color: "orange" as const };
+    return { label: "建议暂停", color: "red" as const };
+  };
+  const filteredPlans = plans.filter((p) => !diagFilter || diag(p).label === diagFilter);
+  const counts = {
+    high: plans.filter((p) => diag(p).label === "健康").length,
+    mid: plans.filter((p) => diag(p).label === "关注").length,
+    low: plans.filter((p) => diag(p).label === "建议暂停").length,
+  };
+  const runAI = async () => {
+    setAiOpen(true);
+    setAiLoading(true);
+    setAiResult(null);
+    try {
+      const { data } = await http.post(`/promotions/insight?mode=${encodeURIComponent(mode)}`, undefined, { timeout: 120000 });
+      setAiResult(data);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAiLoading(false);
+    }
+  };
   const sync = async () => {
     setSyncing(true);
     try {
@@ -64,7 +97,26 @@ export function PromotionsPlansPage() {
     { title: "出价", key: "bid", width: 110, render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
     { title: "花费", dataIndex: "spend", align: "right", width: 110, render: (v: number) => (v ? fmtMoney(v) : "—") },
     { title: "成交", dataIndex: "sales", align: "right", width: 120, render: (v: number) => (v ? fmtMoney(v) : "—") },
-    { title: "ROI", dataIndex: "roi", align: "right", width: 80, render: (v: number) => (v ? v.toFixed(2) : "—") },
+    {
+      title: "ROI",
+      dataIndex: "roi",
+      align: "right",
+      width: 80,
+      render: (v: number, row: PromoPlan) => {
+        const d = diag(row);
+        const color = d.color === "green" ? "#52c41a" : d.color === "orange" ? "#fa8c16" : d.color === "red" ? "#ff4d4f" : undefined;
+        return <span style={{ color, fontWeight: 600 }}>{v ? v.toFixed(2) : "—"}</span>;
+      },
+    },
+    {
+      title: "诊断",
+      key: "diag",
+      width: 100,
+      render: (_, row: PromoPlan) => {
+        const d = diag(row);
+        return <Tag color={d.color}>{d.label}</Tag>;
+      },
+    },
     { title: "点击", dataIndex: "clicks", align: "right", width: 90, render: (v: number) => (v ? fmtInt(v) : "—") },
     { title: "标记", key: "tag", width: 130, render: (_, row) => <PlanTagCell plan={row} onSaved={() => load(scene, mode)} /> },
     { title: "备注", key: "note", width: 200, render: (_, row) => <PlanNoteCell plan={row} onSaved={() => load(scene, mode)} /> },
@@ -79,6 +131,9 @@ export function PromotionsPlansPage() {
         extra={
           <Space>
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
+            <Button icon={<RobotOutlined />} onClick={runAI}>
+              AI 推广解读
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新
             </Button>
@@ -92,7 +147,22 @@ export function PromotionsPlansPage() {
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented options={MODE_OPTIONS} value={mode} onChange={(value) => setMode(String(value))} />
         <Select style={{ width: 150 }} value={scene} onChange={setScene} options={SCENE_OPTIONS} />
-        <Text type="secondary" style={{ fontSize: 12 }}>共 {plans.length} 个计划 · 显示{periodTitle}数据（来自万相台）</Text>
+        <Select
+          style={{ width: 130 }}
+          value={diagFilter}
+          onChange={setDiagFilter}
+          options={[
+            { value: "", label: "全部计划" },
+            { value: "健康", label: "健康" },
+            { value: "关注", label: "关注" },
+            { value: "建议暂停", label: "建议暂停" },
+            { value: "未投放", label: "未投放" },
+          ]}
+        />
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          共 {plans.length} 个计划 · <Tag color="green">健康 {counts.high}</Tag> <Tag color="orange">关注 {counts.mid}</Tag>{" "}
+          <Tag color="red">建议暂停 {counts.low}</Tag> · 显示{periodTitle}数据
+        </Text>
       </Space>
 
       {loading && plans.length === 0 ? (
@@ -109,12 +179,72 @@ export function PromotionsPlansPage() {
             rowKey="id"
             size="small"
             columns={columns}
-            dataSource={plans}
+            dataSource={filteredPlans}
             pagination={{ pageSize: 20, showTotal: (c) => `共 ${c} 个计划` }}
             scroll={{ x: 1250 }}
           />
         </Card>
       )}
+      <Drawer
+        title="AI 推广解读"
+        width={520}
+        open={aiOpen}
+        onClose={() => setAiOpen(false)}
+        destroyOnClose
+      >
+        {aiLoading ? (
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <Spin tip="AI 正在分析推广数据…" />
+          </div>
+        ) : aiResult ? (
+          <div>
+            <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+              范围：{aiResult.mode}
+            </Text>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+              <Tag>花费 {fmtMoney(aiResult.summary.total_spend)}</Tag>
+              <Tag>成交 {fmtMoney(aiResult.summary.total_sales)}</Tag>
+              <Tag>ROI {aiResult.summary.total_roi.toFixed(2)}</Tag>
+              <Tag color="green">健康 {aiResult.summary.high_count}</Tag>
+              <Tag color="orange">关注 {aiResult.summary.mid_count}</Tag>
+              <Tag color="red">建议暂停 {aiResult.summary.low_count}</Tag>
+            </div>
+            {aiResult.sections.overall && (
+              <div style={{ padding: "12px 14px", borderRadius: 10, background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
+                <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{aiResult.sections.overall}</Text>
+              </div>
+            )}
+            <div style={{ display: "grid", gap: 8 }}>
+              {aiResult.sections.highlights.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "#52c41a" }}>亮点</Text>
+                  {aiResult.sections.highlights.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+              {aiResult.sections.risks.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "#ff4d4f" }}>风险</Text>
+                  {aiResult.sections.risks.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+              {aiResult.sections.suggestions.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-accent-light)" }}>建议</Text>
+                  {aiResult.sections.suggestions.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <Empty description="生成失败或暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
+        )}
+      </Drawer>
     </div>
   );
 }

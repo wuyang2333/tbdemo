@@ -604,6 +604,137 @@ def sync_promo_hourly(
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
 
+def _promo_insight_data(mode: str, db) -> dict:
+    mode = _mode(mode)
+    today = date_cls.today()
+    if mode == "realtime":
+        scene_rows = db.execute(
+            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_realtime "
+            "WHERE data_date = ? GROUP BY scene ORDER BY spend DESC",
+            (today.isoformat(),),
+        ).fetchall()
+    elif mode == "yesterday":
+        d = (today - timedelta(days=1)).isoformat()
+        scene_rows = db.execute(
+            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
+            "WHERE data_date = ? GROUP BY scene ORDER BY spend DESC",
+            (d,),
+        ).fetchall()
+    else:
+        start = (today - timedelta(days=6)).isoformat()
+        scene_rows = db.execute(
+            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
+            "WHERE data_date >= ? AND data_date <= ? GROUP BY scene ORDER BY spend DESC",
+            (start, today.isoformat()),
+        ).fetchall()
+    scenes = []
+    for r in scene_rows:
+        spend = round(r["spend"] or 0, 2)
+        sales = round(r["sales"] or 0, 2)
+        scenes.append({"scene": r["scene"], "scene_name": r["scene_name"] or r["scene"], "spend": spend, "sales": sales, "roi": round(sales / spend, 2) if spend else 0.0})
+    plans = db.execute(
+        "SELECT p.scene, p.scene_name, p.plan_name, p.status, p.day_budget, "
+        "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks "
+        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ? "
+        "ORDER BY COALESCE(s.spend,0) DESC",
+        (mode,),
+    ).fetchall()
+    plan_list = []
+    for r in plans:
+        spend = round(r["spend"] or 0, 2)
+        sales = round(r["sales"] or 0, 2)
+        plan_list.append(
+            {
+                "scene_name": r["scene_name"] or r["scene"] or "?",
+                "plan_name": r["plan_name"] or "?",
+                "status": r["status"],
+                "day_budget": round(r["day_budget"] or 0, 2),
+                "spend": spend,
+                "sales": sales,
+                "roi": round(sales / spend, 2) if spend else 0.0,
+                "clicks": int(r["clicks"] or 0),
+            }
+        )
+    total_spend = sum(p["spend"] for p in plan_list)
+    total_sales = sum(p["sales"] for p in plan_list)
+    active = [p for p in plan_list if p["status"] == "在投"]
+    low = [p for p in plan_list if p["spend"] > 0 and p["roi"] < 1]
+    mid = [p for p in plan_list if p["spend"] > 0 and 1 <= p["roi"] < 2]
+    high = [p for p in plan_list if p["spend"] > 0 and p["roi"] >= 2]
+    return {
+        "mode": mode,
+        "scenes": scenes,
+        "plans": plan_list,
+        "total_spend": round(total_spend, 2),
+        "total_sales": round(total_sales, 2),
+        "total_roi": round(total_sales / total_spend, 2) if total_spend else 0.0,
+        "active_count": len(active),
+        "low_count": len(low),
+        "mid_count": len(mid),
+        "high_count": len(high),
+    }
+
+
+def _build_promo_prompt(d: dict) -> str:
+    lines = [
+        f"数据范围：{d['mode']}",
+        f"总花费 {d['total_spend']:.0f} 元，总成交 {d['total_sales']:.0f} 元，整体ROI {d['total_roi']}；在投计划 {d['active_count']} 个，其中ROI≥2有{d['high_count']}个、ROI1~2有{d['mid_count']}个、ROI<1有{d['low_count']}个",
+    ]
+    if d["scenes"]:
+        lines.append("分场景：" + "、".join(f"{s['scene_name']}花费{s['spend']:.0f}元成交{s['sales']:.0f}元ROI{s['roi']}" for s in d["scenes"]))
+    if d["plans"]:
+        top = sorted(d["plans"], key=lambda p: -p["spend"])[:6]
+        lines.append("花费最高的计划：" + "；".join(f"{p['plan_name'][:20]}({p['scene_name']})花费{p['spend']:.0f}元ROI{p['roi']}" for p in top))
+        lowplans = [p for p in d["plans"] if p["spend"] > 0 and p["roi"] < 1]
+        if lowplans:
+            lines.append("ROI<1的计划：" + "；".join(f"{p['plan_name'][:20]}ROI{p['roi']}" for p in lowplans[:6]))
+    prompt = (
+        "你是淘宝店铺的电商推广优化师。根据以下万相台推广数据输出推广诊断，严格按格式：\n"
+        "【整体表现】2-3句话概括（总花费、成交、ROI、计划健康度）\n"
+        "【亮点】\n- 高效计划/场景及原因（2-3条）\n"
+        "【风险】\n- 低效计划、花费失控、预算风险等（3条）\n"
+        "【建议】\n- 具体可执行：点名建议暂停/降价/加预算的计划名（4-5条）\n"
+        "简体中文务实，金额≥1万用X.X万简化；只依据给定数据，不要编造。\n\n"
+        + "\n".join(lines)
+    )
+    return prompt
+
+
+@router.post("/insight")
+def promo_ai_insight(
+    mode: str = "realtime",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """AI 推广解读：基于计划/场景数据给出投放优化建议。"""
+    from backend.app.api.analytics import _parse_insight_sections
+    from backend.app.api.model_configs import get_default_config
+    from backend.app.core.ai_client import AIError, chat_completion
+
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    data = _promo_insight_data(mode, db)
+    try:
+        reply = chat_completion(cfg, [{"role": "user", "content": _build_promo_prompt(data)}], timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "sections": _parse_insight_sections(reply),
+        "reply": reply,
+        "mode": data["mode"],
+        "summary": {
+            "total_spend": data["total_spend"],
+            "total_sales": data["total_sales"],
+            "total_roi": data["total_roi"],
+            "active_count": data["active_count"],
+            "high_count": data["high_count"],
+            "mid_count": data["mid_count"],
+            "low_count": data["low_count"],
+        },
+    }
+
+
 @router.put("/plans/{plan_id}")
 def update_plan(
     plan_id: int,
