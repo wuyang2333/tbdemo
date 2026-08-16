@@ -11,9 +11,9 @@ import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
 
-const VIEW_OPTIONS = [
+const SEG_OPTIONS = [
   { label: "实时", value: "realtime" },
-  { label: "日期范围", value: "range" },
+  { label: "昨日", value: "yesterday" },
 ];
 
 const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
@@ -120,7 +120,7 @@ function MetricCell({ value, change }: { value: string; change: number }) {
 
 export function AnalyticsProductsPage() {
   const [data, setData] = useState<AnalyticsProducts | null>(null);
-  const [view, setView] = useState<"realtime" | "range">("realtime");
+  const [view, setView] = useState<"realtime" | "yesterday" | "range">("realtime");
   const [range, setRange] = useState<[string, string] | null>(null);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -145,6 +145,8 @@ export function AnalyticsProductsPage() {
       const params = new URLSearchParams();
       if (view === "realtime") {
         params.set("mode", "realtime");
+      } else if (view === "yesterday") {
+        params.set("mode", "yesterday");
       } else if (range) {
         params.set("mode", "days");
         params.set("start", range[0]);
@@ -172,14 +174,16 @@ export function AnalyticsProductsPage() {
       const itemsUrl =
         view === "realtime"
           ? "/stores/sync-items-realtime"
-          : range
-            ? `/stores/sync-items?start=${range[0]}&end=${range[1]}`
-            : "/stores/sync-items?days=1";
+          : view === "yesterday"
+            ? `/stores/sync-items?date=${dayjs().subtract(1, "day").format("YYYY-MM-DD")}`
+            : range
+              ? `/stores/sync-items?start=${range[0]}&end=${range[1]}`
+              : "/stores/sync-items?days=1";
       const itemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(itemsUrl);
-      const promoMode = view === "realtime" ? "realtime" : range ? (rangePromoMode(range) ?? "7") : "7";
+      const promoMode = view === "realtime" ? "realtime" : view === "yesterday" ? "yesterday" : range ? (rangePromoMode(range) ?? "7") : "7";
       const promoRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync?mode=${promoMode}`);
       const promoItemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync-items?mode=${promoMode}`);
-      const label = view === "realtime" ? "实时商品" : range ? `${range[0]}~${range[1]} 商品` : "商品";
+      const label = view === "realtime" ? "实时商品" : view === "yesterday" ? "昨日商品" : range ? `${range[0]}~${range[1]} 商品` : "商品";
       message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家，推广 ${promoRes.data.ok}/${promoRes.data.total} 家，商品推广 ${promoItemsRes.data.ok}/${promoItemsRes.data.total} 家`);
       [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok), ...promoRes.data.results.filter((r) => !r.ok), ...promoItemsRes.data.results.filter((r) => !r.ok)]
         .slice(0, 3)
@@ -199,7 +203,7 @@ export function AnalyticsProductsPage() {
     setDetailOpen(true);
     setDetailLoading(true);
     try {
-      const params = new URLSearchParams({ mode: view === "realtime" ? "realtime" : "days" });
+      const params = new URLSearchParams({ mode: view === "realtime" ? "realtime" : view === "yesterday" ? "yesterday" : "days" });
       if (view === "range" && range) {
         params.set("start", range[0]);
         params.set("end", range[1]);
@@ -233,7 +237,7 @@ export function AnalyticsProductsPage() {
       const { data } = await http.post<{ reply: string }>(
         `/analytics/products/${encodeURIComponent(detail.item_id)}/insight/chat${chatSuffix}`,
         {
-          mode: view === "realtime" ? "realtime" : "days",
+          mode: view === "realtime" ? "realtime" : view === "yesterday" ? "yesterday" : "days",
           store_id: storeId,
           messages: [{ role: "assistant", content: detailResult.reply }, ...next],
         }
@@ -346,28 +350,29 @@ export function AnalyticsProductsPage() {
 
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented
-          options={VIEW_OPTIONS}
-          value={view}
+          options={SEG_OPTIONS}
+          value={view === "range" ? undefined : view}
           onChange={(v) => {
             setData(null);
-            setView(String(v) as "realtime" | "range");
+            setView(String(v) as "realtime" | "yesterday");
           }}
         />
-        {view === "range" && (
-          <DatePicker.RangePicker
-            presets={RANGE_PRESETS}
-            value={range ? [dayjs(range[0]), dayjs(range[1])] : null}
-            onChange={(dates) => {
-              setData(null);
-              if (dates && dates[0] && dates[1]) {
-                setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
-              } else {
-                setRange(null);
-              }
-            }}
-            allowClear={false}
-          />
-        )}
+        <DatePicker.RangePicker
+          presets={RANGE_PRESETS}
+          value={view === "range" && range ? [dayjs(range[0]), dayjs(range[1])] : null}
+          onChange={(dates) => {
+            setData(null);
+            if (dates && dates[0] && dates[1]) {
+              setView("range");
+              setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
+            } else {
+              setView("realtime");
+              setRange(null);
+            }
+          }}
+          placeholder={["开始日期", "结束日期"]}
+          allowClear
+        />
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序
@@ -387,7 +392,7 @@ export function AnalyticsProductsPage() {
       ) : (
         <Card
           variant="borderless"
-          title={isRealtime ? "实时商品榜（今日）" : range ? `商品销售排行（${range[0]} ~ ${range[1]}）` : "商品销售排行"}
+          title={isRealtime ? "实时商品榜（今日）" : view === "yesterday" ? "昨日商品销售排行" : range ? `商品销售排行（${range[0]} ~ ${range[1]}）` : "商品销售排行"}
           style={{ boxShadow: "var(--ops-shadow-sm)" }}
           extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
         >
