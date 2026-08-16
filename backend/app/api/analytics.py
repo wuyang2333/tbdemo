@@ -792,7 +792,8 @@ def _collect_insight(mode: str, store_id: int | None, db) -> dict:
     }
 
 
-def _build_insight_prompt(d: dict) -> str:
+def _data_lines(d: dict) -> list[str]:
+    """把采集到的经营数据整理成给模型看的数据行（解读与追问共用）。"""
     cur = d["cur"]
     chg = d["chg"]
     promo = d["promo"]
@@ -820,6 +821,10 @@ def _build_insight_prompt(d: dict) -> str:
         lines.append("异常提醒：" + "；".join(d["anomalies"]))
     if any(x.endswith(":¥0") for x in d["trend"]):
         lines.append("注：部分日期销售额为0可能是数据未同步，解读时以有数据的日期为准，不要解读为经营异常。")
+    return lines
+
+
+def _build_insight_prompt(d: dict) -> str:
     prompt = (
         "你是淘宝店铺的运营数据分析师。请根据下面数据输出经营解读，要求：\n"
         "1. 必须严格按以下格式输出，每部分独占一段：\n"
@@ -828,7 +833,7 @@ def _build_insight_prompt(d: dict) -> str:
         "【风险】\n- 风险1\n- 风险2（最多2条，没有就写“暂无明显风险”）\n"
         "【建议】\n- 建议1\n- 建议2\n- 建议3（最多3条，要具体可执行）\n"
         "2. 简体中文、语气务实，不客套；金额≥1万用“X.X万”简化；只依据给定数据，不要编造。\n\n"
-        + "\n".join(lines)
+        + "\n".join(_data_lines(d))
     )
     return prompt
 
@@ -903,6 +908,43 @@ def ai_insight(
         "range": data["range_label"],
         "date": date_cls.today().isoformat(),
     }
+
+class InsightMsgIn(BaseModel):
+    role: str
+    content: str
+
+
+class InsightChatIn(BaseModel):
+    mode: str = "14"
+    store_id: int | None = None
+    messages: list[InsightMsgIn] = []
+
+
+@router.post("/insight/chat")
+def ai_insight_chat(
+    body: InsightChatIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    data = _collect_insight(body.mode, body.store_id, db)
+    context = (
+        "你是淘宝店铺的运营数据分析师。以下是当前数据上下文：\n"
+        + "\n".join(_data_lines(data))
+        + "\n用户会围绕这份数据追问，请结合数据回答，简洁务实，不要编造；数据里没有的信息要如实说明。"
+    )
+    msgs: list[dict] = [{"role": "system", "content": context}]
+    for m in body.messages[-12:]:
+        if m.role in ("user", "assistant") and (m.content or "").strip():
+            msgs.append({"role": m.role, "content": m.content})
+    try:
+        reply = chat_completion(cfg, msgs, timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"reply": reply}
+
 
 # ---------- 通用：单店筛选 ----------
 

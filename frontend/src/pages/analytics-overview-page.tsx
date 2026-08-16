@@ -1,5 +1,5 @@
-import { BarChartOutlined, FullscreenOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Col, Empty, Row, Space, Spin, Statistic, Tag, Typography, message } from "antd";
+import { BarChartOutlined, FullscreenOutlined, HistoryOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, Col, Dropdown, Empty, Row, Space, Spin, Statistic, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -35,6 +35,19 @@ export function AnalyticsOverviewPage() {
   }, [load]);
 
   const { syncing, syncAll } = useSyncStores(load);
+  const [syncingHistory, setSyncingHistory] = useState(false);
+  const syncHistory = async (days: number) => {
+    setSyncingHistory(true);
+    try {
+      const { data } = await http.post<{ ok: number; total: number; days: number }>(`/stores/sync-history?days=${days}`);
+      message.success(`历史数据补拉完成：成功 ${data.ok} / 共 ${data.total} 家，覆盖近 ${data.days} 天`);
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setSyncingHistory(false);
+    }
+  };
 
   return (
     <div>
@@ -51,6 +64,20 @@ export function AnalyticsOverviewPage() {
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>
+            <Dropdown
+              menu={{
+                items: [
+                  { key: "7", label: "近 7 天" },
+                  { key: "14", label: "近 14 天" },
+                  { key: "30", label: "近 30 天" },
+                ],
+                onClick: ({ key }) => syncHistory(Number(key)),
+              }}
+            >
+              <Button icon={<HistoryOutlined />} loading={syncingHistory}>
+                补历史数据
+              </Button>
+            </Dropdown>
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
               同步店铺数据
             </Button>
