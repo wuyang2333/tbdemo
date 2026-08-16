@@ -182,13 +182,6 @@ export function AnalyticsReportPage() {
     }
   };
 
-  useEffect(() => {
-    // 日期/店铺变化：有缓存直接显示，没有则自动生成一次并保存
-    if (!analysisByDate[analysisKey]) {
-      runAnalysis();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, storeId]);
 
   const exportPdf = () => {
     if (!data) return;
@@ -385,7 +378,7 @@ export function AnalyticsReportPage() {
               </div>
             ) : (
               <Text type="secondary" style={{ fontSize: 13 }}>
-                基于所选日期的真实数据（生意参谋 + 万相台），AI 生成经营分析、推广分析、异常分析、总结和今日行动建议。每个日期只生成一次并自动保存，点「重新生成」可覆盖。
+                基于所选日期的真实数据（生意参谋 + 万相台），AI 生成经营分析、推广分析、异常分析、总结和今日行动建议。每个日期生成一次后自动保存，切回已生成的日期直接显示；新日期点「生成分析」生成，点「重新生成」可覆盖。
               </Text>
             )}
           </Card>
