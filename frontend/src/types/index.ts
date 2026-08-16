@@ -405,6 +405,13 @@ export type AnalyticsProduct = {
   days: number;
   latest_date: string;
   sales_share?: number;
+  live?: boolean;
+  date_label?: string;
+  add_cart?: number;
+  refund_amount?: number;
+  visitors?: number;
+  pv?: number;
+  conversion_rate?: number;
 };
 
 export type AnalyticsProducts = {

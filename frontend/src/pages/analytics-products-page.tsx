@@ -85,7 +85,14 @@ export function AnalyticsProductsPage() {
   const columns: TableColumnsType<AnalyticsProduct> = [
     ...(isRealtime
       ? ([
-          { title: "商品", dataIndex: "item_title", width: 280, ellipsis: true },
+          {
+            title: "数据",
+            dataIndex: "date_label",
+            width: 90,
+            render: (v: string, row) =>
+              row.live ? <Tag color="green">今日实时</Tag> : <Tag>{String(v)}</Tag>,
+          },
+          { title: "商品", dataIndex: "item_title", width: 250, ellipsis: true },
           { title: "访客", dataIndex: "visitors", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
@@ -131,7 +138,7 @@ export function AnalyticsProductsPage() {
         <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setDetail(null); setMode(String(v)); }} />
         {!isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
         {!isRealtime && daySwitch(Number(mode), (d) => setMode(String(d)))}
-        {isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>今日实时，按销售额排序，每 30 分钟可手动刷新</Text>}
+        {isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>全量商品（含最近一日数据），有今日实时活动的标绿，按销售额排序</Text>}
       </Space>
 
       {loading && !data ? (
