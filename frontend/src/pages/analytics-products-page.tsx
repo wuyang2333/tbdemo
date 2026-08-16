@@ -160,7 +160,7 @@ export function AnalyticsProductsPage() {
         {!isRealtime && daySwitch(Number(mode), (d) => setMode(String(d)))}
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
-          全量商品今日实时 · 按销售额排序
+          全量商品 · 按销售额排序
           {data?.fetched_at ? ` · 抓取时间 ${dayjs(data.fetched_at).format("MM-DD HH:mm:ss")}` : ""}
         </Text>
       )}
