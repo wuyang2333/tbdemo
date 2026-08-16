@@ -420,6 +420,10 @@ def sync_plans(
             stats_map = {r["campaign_id"]: r for r in stats_list}
             prev_map = {r["campaign_id"]: r for r in prev_list}
             now = _now()
+            try:
+                _refresh_plan_items(db, store)
+            except Exception:  # noqa: BLE001
+                pass
             for p in snapshots:
                 db.execute(
                     "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, bid_type, bid_value, status, gmt_create, spend, sales, roi, clicks, note, tag, updated_at) "
@@ -902,42 +906,71 @@ def export_plans(
     )
 
 
+def _lookup_item_image(db, store_id: int, item_id: str) -> str:
+    """从商品表反查图片（先实时后按天）。"""
+    _r = db.execute(
+        "SELECT image FROM store_item_realtime WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
+        (store_id, item_id),
+    ).fetchone()
+    if _r:
+        return _r["image"]
+    _r = db.execute(
+        "SELECT image FROM store_item_daily WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
+        (store_id, item_id),
+    ).fetchone()
+    return _r["image"] if _r else ""
+
+
+def _refresh_plan_items(db, store: dict) -> None:
+    """抓取店铺的计划↔商品映射并写入缓存表（慢操作，仅在需要时调用）。"""
+    from backend.app.core.alimama import _promo_item_map
+
+    m = _promo_item_map(store)
+    now = _now()
+    for cid, items in m.items():
+        if not items:
+            continue
+        first = items[0]
+        img = _lookup_item_image(db, store["id"], first.get("item_id") or "") if first.get("item_id") else ""
+        db.execute(
+            "INSERT INTO promo_plan_items (store_id, campaign_id, item_id, item_title, image, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(store_id, campaign_id) DO UPDATE SET "
+            "item_id = excluded.item_id, item_title = excluded.item_title, "
+            "image = excluded.image, updated_at = excluded.updated_at",
+            (store["id"], cid, first.get("item_id") or "", first.get("item_title") or "", img, now),
+        )
+
+
 @router.get("/plan-items")
 def plan_items(
+    refresh: int = 0,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """计划 ↔ 商品映射（货品全站/关键词/人群，取每个计划第一个商品）。"""
-    from backend.app.core.alimama import _promo_item_map
+    """计划 ↔ 商品映射（缓存优先，默认 6 小时刷新一次，refresh=1 强制刷新）。"""
     from backend.app.core.sycm import has_profile
 
-    result: dict[str, dict] = {}
     stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
-    for store in stores:
+    stale_cutoff = (datetime.now() - timedelta(hours=6)).isoformat()
+    need: list[dict] = []
+    for st in stores:
+        row = db.execute("SELECT updated_at FROM promo_plan_items WHERE store_id = ? LIMIT 1", (st["id"],)).fetchone()
+        if refresh or not row or (row["updated_at"] or "") < stale_cutoff:
+            need.append(st)
+    for st in need:
         try:
-            m = _promo_item_map(store)
+            _refresh_plan_items(db, st)
         except Exception:  # noqa: BLE001
             continue
-        for cid, items in m.items():
-            if cid not in result and items:
-                first = items[0]
-                img = ""
-                if first.get("item_id"):
-                    _r = db.execute(
-                        "SELECT image FROM store_item_realtime WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
-                        (store["id"], first["item_id"]),
-                    ).fetchone()
-                    if _r:
-                        img = _r["image"]
-                    else:
-                        _r = db.execute(
-                            "SELECT image FROM store_item_daily WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
-                            (store["id"], first["item_id"]),
-                        ).fetchone()
-                        if _r:
-                            img = _r["image"]
-                result[cid] = {"item_id": first["item_id"], "item_title": first["item_title"], "image": img}
-    return {"items": result}
+    result: dict[str, dict] = {}
+    for r in db.execute("SELECT * FROM promo_plan_items ORDER BY store_id").fetchall():
+        result[r["campaign_id"]] = {
+            "item_id": r["item_id"],
+            "item_title": r["item_title"],
+            "image": r["image"],
+        }
+    return {"items": result, "from_cache": not need}
 
 
 @router.get("/keywords")

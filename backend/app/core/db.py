@@ -589,6 +589,19 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS promo_plan_items (
+                store_id INTEGER NOT NULL,
+                campaign_id TEXT NOT NULL,
+                item_id TEXT NOT NULL DEFAULT '',
+                item_title TEXT NOT NULL DEFAULT '',
+                image TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, campaign_id)
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS promo_item_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,

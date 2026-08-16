@@ -38,6 +38,7 @@ export function PromotionsPlansPage() {
   const [syncing, setSyncing] = useState(false);
   const [alerts, setAlerts] = useState<{ level: string; type: string; message: string }[]>([]);
   const [planItems, setPlanItems] = useState<Record<string, { item_id: string; item_title: string; image?: string }>>({});
+  const [itemsLoaded, setItemsLoaded] = useState(false);
   const [diagFilter, setDiagFilter] = useState("");
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -101,7 +102,8 @@ export function PromotionsPlansPage() {
     http
       .get<{ items: Record<string, { item_id: string; item_title: string; image?: string }> }>("/promotions/plan-items")
       .then(({ data }) => setPlanItems(data.items))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setItemsLoaded(true));
   }, []);
   useEffect(() => {
     try {
@@ -325,6 +327,7 @@ export function PromotionsPlansPage() {
       render: (_, row: PromoPlan) => {
         const it = planItems[row.campaign_id];
         const title = it?.item_title || "—";
+        const loadingCell = !it && !itemsLoaded;
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {it?.image ? (
@@ -333,9 +336,13 @@ export function PromotionsPlansPage() {
               <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
             )}
             <div style={{ minWidth: 0, flex: 1 }}>
-              <Tooltip title={title}>
-                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
-              </Tooltip>
+              {loadingCell ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>加载中…</Text>
+              ) : (
+                <Tooltip title={title}>
+                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+                </Tooltip>
+              )}
             </div>
           </div>
         );
