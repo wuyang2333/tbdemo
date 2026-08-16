@@ -39,13 +39,13 @@ export function AnalyticsLinkagePage() {
 
   const columns: TableColumnsType<AnalyticsLinkagePoint> = [
     { title: "日期", dataIndex: "label", width: 70 },
-    { title: "总销售额", dataIndex: "total_sales", align: "right", render: (v: number) => fmtMoney(v) },
-    { title: "推广花费", dataIndex: "promo_spend", align: "right", render: (v: number) => fmtMoney(v) },
-    { title: "推广成交", dataIndex: "promo_sales", align: "right", render: (v: number) => fmtMoney(v) },
-    { title: "广告成交占比", dataIndex: "ad_share", align: "right", render: (v: number) => `${v.toFixed(1)}%` },
-    { title: "推广 ROI", dataIndex: "promo_roi", align: "right", render: (v: number) => v.toFixed(2) },
-    { title: "整体 ROI", dataIndex: "overall_roi", align: "right", render: (v: number) => v.toFixed(2) },
-    { title: "自然销售额", dataIndex: "natural_sales", align: "right", render: (v: number) => fmtMoney(v) },
+    { title: "总销售额", dataIndex: "total_sales", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.total_sales - b.total_sales, render: (v: number) => fmtMoney(v) },
+    { title: "推广花费", dataIndex: "promo_spend", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.promo_spend - b.promo_spend, render: (v: number) => fmtMoney(v) },
+    { title: "推广成交", dataIndex: "promo_sales", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.promo_sales - b.promo_sales, render: (v: number) => fmtMoney(v) },
+    { title: "广告成交占比", dataIndex: "ad_share", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.ad_share - b.ad_share, render: (v: number) => `${v.toFixed(1)}%` },
+    { title: "推广 ROI", dataIndex: "promo_roi", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.promo_roi - b.promo_roi, render: (v: number) => v.toFixed(2) },
+    { title: "整体 ROI", dataIndex: "overall_roi", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.overall_roi - b.overall_roi, render: (v: number) => v.toFixed(2) },
+    { title: "自然销售额", dataIndex: "natural_sales", align: "right", sorter: (a: AnalyticsLinkagePoint, b: AnalyticsLinkagePoint) => a.natural_sales - b.natural_sales, render: (v: number) => fmtMoney(v) },
   ];
 
   return (

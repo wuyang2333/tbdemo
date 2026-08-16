@@ -77,7 +77,7 @@ export function AnalyticsAlertsPage() {
     { title: "日期", dataIndex: "date_label", width: 90 },
     { title: "店铺", dataIndex: "store_name", width: 160 },
     { title: "指标", dataIndex: "metric", width: 90 },
-    { title: "波动", dataIndex: "change_pct", width: 100, align: "right", render: (v: number) => <ChangeBadge change={v} /> },
+    { title: "波动", dataIndex: "change_pct", width: 100, align: "right", sorter: (a: AnalyticsAlert, b: AnalyticsAlert) => a.change_pct - b.change_pct, render: (v: number) => <ChangeBadge change={v} /> },
     {
       title: "等级",
       dataIndex: "level",

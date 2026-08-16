@@ -69,6 +69,8 @@ export function AnalyticsProductsPage() {
   };
 
   const isRealtime = mode === "realtime";
+  const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
+    Number(a[key] ?? 0) - Number(b[key] ?? 0);
   const renderItem = (_: unknown, row: AnalyticsProduct) => (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       {row.image ? (
@@ -93,23 +95,23 @@ export function AnalyticsProductsPage() {
               row.live ? <Tag color="green">今日实时</Tag> : <Tag>{String(v)}</Tag>,
           },
           { title: "商品", key: "item", width: 320, render: renderItem },
-          { title: "访客", dataIndex: "visitors", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "浏览量", dataIndex: "pv", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => fmtPct(v) },
-          { title: "加购", dataIndex: "add_cart", align: "right", width: 70, render: (v: number) => fmtInt(v) },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 90, sorter: numSorter("visitors"), render: (v: number) => fmtInt(v) },
+          { title: "浏览量", dataIndex: "pv", align: "right", width: 90, sorter: numSorter("pv"), render: (v: number) => fmtInt(v) },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 80, sorter: numSorter("buyers"), render: (v: number) => fmtInt(v) },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number) => fmtMoney(v) },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 100, sorter: numSorter("conversion_rate"), render: (v: number) => fmtPct(v) },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 80, sorter: numSorter("add_cart"), render: (v: number) => fmtInt(v) },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
           { title: "商品", key: "item", width: 340, render: renderItem },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
-          { title: "销量", dataIndex: "orders", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "买家", dataIndex: "buyers", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "访客", dataIndex: "visitors", align: "right", width: 90, render: (v: number) => fmtInt(v) },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => fmtPct(v) },
-          { title: "加购", dataIndex: "add_cart", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "占比", dataIndex: "sales_share", align: "right", width: 80, render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
-          { title: "天数", dataIndex: "days", align: "right", width: 70 },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number) => fmtMoney(v) },
+          { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number) => fmtInt(v) },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 90, sorter: numSorter("buyers"), render: (v: number) => fmtInt(v) },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 100, sorter: numSorter("visitors"), render: (v: number) => fmtInt(v) },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 100, sorter: numSorter("conversion_rate"), render: (v: number) => fmtPct(v) },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 90, sorter: numSorter("add_cart"), render: (v: number) => fmtInt(v) },
+          { title: "占比", dataIndex: "sales_share", align: "right", width: 90, sorter: numSorter("sales_share"), render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "天数", dataIndex: "days", align: "right", width: 80, sorter: numSorter("days") },
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
