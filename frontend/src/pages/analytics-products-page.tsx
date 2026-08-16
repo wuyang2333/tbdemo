@@ -1,5 +1,5 @@
 import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, RobotOutlined, SendOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Card, Drawer, Empty, Input, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Drawer, Empty, Input, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -242,7 +242,9 @@ export function AnalyticsProductsPage() {
               <RobotOutlined /> AI分析
             </button>
           </div>
-          <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
+          <Tooltip title={row.item_title}>
+            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
+          </Tooltip>
           <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>ID {row.item_id}</div>
         </div>
       </div>
@@ -260,7 +262,7 @@ export function AnalyticsProductsPage() {
               <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span>
             ),
           },
-          { title: "商品", key: "item", width: 320, render: renderItem },
+          { title: "商品", key: "item", width: 200, render: renderItem },
           { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 110, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
           { title: "买家", dataIndex: "buyers", align: "right", width: 100, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
@@ -273,7 +275,7 @@ export function AnalyticsProductsPage() {
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
           { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
-          { title: "商品", key: "item", width: 340, render: renderItem },
+          { title: "商品", key: "item", width: 200, render: renderItem },
           { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number) => fmtMoney(v) },
           { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number) => fmtInt(v) },
           { title: "买家", dataIndex: "buyers", align: "right", width: 90, sorter: numSorter("buyers"), render: (v: number) => fmtInt(v) },
