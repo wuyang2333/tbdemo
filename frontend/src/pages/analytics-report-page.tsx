@@ -1,4 +1,4 @@
-import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from "@ant-design/icons";
 import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import http, { getApiErrorMessage, TOKEN_KEY } from "../lib/api";
 import { useDailyRefreshAt } from "../lib/use-daily-refresh";
 import { PageHeader } from "../components/ui/page-header";
-import { StoreScopeSelect, useSyncStores } from "../components/analytics/analytics-ui";
+import { StoreScopeSelect } from "../components/analytics/analytics-ui";
 import type { AnalyticsReport } from "../types";
 
 const { Text } = Typography;
@@ -54,7 +54,6 @@ export function AnalyticsReportPage() {
   }, [load]);
   useDailyRefreshAt(load, 9);
 
-  const { syncing, syncAll } = useSyncStores(load);
 
   const dayLabel = data?.date === dayjs().format("YYYY-MM-DD") ? "今日" : data?.date === dayjs().subtract(1, "day").format("YYYY-MM-DD") ? "昨日" : (data?.date || "").slice(5) || "";
 
@@ -145,10 +144,13 @@ export function AnalyticsReportPage() {
     }
   };
 
-  const exportExcel = async () => {
+  const exportPdf = async () => {
     try {
       const token = localStorage.getItem(TOKEN_KEY);
-      const response = await fetch(`/api/analytics/export?days=14`, {
+      const params = new URLSearchParams();
+      if (date) params.set("date", date);
+      if (storeId) params.set("store_id", String(storeId));
+      const response = await fetch(`/api/analytics/report/pdf?${params.toString()}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("导出失败");
@@ -156,10 +158,10 @@ export function AnalyticsReportPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `经营数据_${dayjs().format("YYYYMMDD")}.xlsx`;
+      a.download = `经营日报_${data?.date || dayjs().format("YYYY-MM-DD")}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
-      message.success("已导出 Excel");
+      message.success("已导出 PDF");
     } catch (error) {
       message.error(getApiErrorMessage(error));
     }
@@ -229,9 +231,8 @@ export function AnalyticsReportPage() {
             <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
             <Button icon={<SettingOutlined />} onClick={openPush}>推送设置</Button>
             <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
-            <Button icon={<DownloadOutlined />} onClick={exportExcel}>导出 Excel</Button>
+            <Button icon={<DownloadOutlined />} onClick={exportPdf}>导出 PDF</Button>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>同步数据</Button>
           </Space>
         }
       />

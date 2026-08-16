@@ -821,6 +821,122 @@ def push_report_now(
     return {"ok": True}
 
 
+def _pdf_pct(cur: float, prev: float) -> str:
+    return "—" if not prev else f"{(cur - prev) / prev * 100:+.1f}%"
+
+
+@router.get("/report/pdf")
+def export_report_pdf(
+    date: str = "",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> StreamingResponse:
+    """经营日报导出 PDF（reportlab 生成，中文 STSong-Light）。"""
+    from io import BytesIO
+    from urllib.parse import quote
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    report = daily_report(date=date, store_id=store_id, user=user, db=db)
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=36, bottomMargin=36, leftMargin=36, rightMargin=36)
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("TCN", parent=styles["Title"], fontName="STSong-Light", fontSize=18, leading=24, alignment=1, spaceAfter=8)
+    h2 = ParagraphStyle("H2CN", parent=styles["Heading2"], fontName="STSong-Light", fontSize=13, leading=18, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1f1f1f"))
+    body = ParagraphStyle("BCN", parent=styles["BodyText"], fontName="STSong-Light", fontSize=10.5, leading=16)
+    cell = ParagraphStyle("CCN", parent=styles["BodyText"], fontName="STSong-Light", fontSize=9.5, leading=13)
+
+    t, y, w = report["today"], report["yesterday"], report["last_week"]
+    el: list = []
+    el.append(Paragraph(f"经营日报 {report['date']}", title))
+    el.append(Paragraph("一、核心指标", h2))
+    metrics = [
+        ["指标", "访客", "销售额", "订单", "转化率", "客单价"],
+        ["昨日", f"{t['visitors']:,}", f"¥{t['sales']:,.0f}", f"{t['orders']:,}", f"{t['conversion_rate']}%", f"¥{t['avg_order_value']:,.0f}"],
+        ["前日", f"{y['visitors']:,}", f"¥{y['sales']:,.0f}", f"{y['orders']:,}", f"{y['conversion_rate']}%", f"¥{y['avg_order_value']:,.0f}"],
+        ["环比", _pdf_pct(t['visitors'], y['visitors']), _pdf_pct(t['sales'], y['sales']), _pdf_pct(t['orders'], y['orders']), _pdf_pct(t['conversion_rate'], y['conversion_rate']), _pdf_pct(t['avg_order_value'], y['avg_order_value'])],
+    ]
+    mt = Table([[Paragraph(c, cell) for c in row] for row in metrics], colWidths=[55, 70, 95, 70, 75, 75])
+    mt.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f5")),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9d9d9")),
+                ("FONTNAME", (0, 0), (-1, -1), "STSong-Light"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    el.append(mt)
+    if report.get("add_cart"):
+        el.append(Paragraph(f"加购：{report['add_cart']} 次　退款额：¥{report['refund_amount']:,.2f}", body))
+
+    el.append(Paragraph("二、推广", h2))
+    pt = report["promo_today"]
+    el.append(Paragraph(f"花费 ¥{pt['spend']:,.0f}　成交 ¥{pt['sales']:,.0f}　ROI {pt['roi']:.2f}", body))
+    for x in report["promo_today_scenes"]:
+        el.append(Paragraph(f"· {x['scene_name']}：花费 ¥{x['spend']:,.0f}，成交 ¥{x['sales']:,.0f}，ROI {x['roi']:.2f}", body))
+
+    if report["top_today"]:
+        el.append(Paragraph("三、TOP 商品", h2))
+        rows = [[Paragraph(c, cell) for c in ["#", "商品", "销售额", "订单"]]]
+        for i, it in enumerate(report["top_today"], 1):
+            rows.append([Paragraph(str(i), cell), Paragraph(it["item_title"], cell), Paragraph(f"¥{it['sales']:,.0f}", cell), Paragraph(str(it["orders"]), cell)])
+        tt = Table(rows, colWidths=[28, 310, 90, 60])
+        tt.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f2f5")),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d9d9d9")),
+                    ("FONTNAME", (0, 0), (-1, -1), "STSong-Light"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+                    ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        el.append(tt)
+
+    if report["report_alerts"]:
+        el.append(Paragraph("四、预警", h2))
+        for a in report["report_alerts"]:
+            el.append(Paragraph(f"· {a['message']}", body))
+
+    el.append(Paragraph("五、较上周同期", h2))
+    el.append(
+        Paragraph(
+            f"访客 {t['visitors']:,}（上周 {w['visitors']:,}，{_pdf_pct(t['visitors'], w['visitors'])}）　"
+            f"销售额 ¥{t['sales']:,.0f}（上周 ¥{w['sales']:,.0f}，{_pdf_pct(t['sales'], w['sales'])}）　"
+            f"订单 {t['orders']:,}（上周 {w['orders']:,}，{_pdf_pct(t['orders'], w['orders'])}）",
+            body,
+        )
+    )
+    if report.get("goal"):
+        el.append(Spacer(1, 6))
+        el.append(Paragraph(f"{report['month']} 目标 ¥{report['goal']:,.0f}，本月已达成 ¥{report['month_sales']:,.0f}", body))
+    doc.build(el)
+    buf.seek(0)
+    filename = f"经营日报_{report['date']}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 @router.get("/export")
 def export_analytics(
     days: int = 14,
