@@ -660,32 +660,250 @@ def analytics_health(
 
 # ---------- AI 解读 ----------
 
+def _pct_chg(cur: float, prev: float) -> float | None:
+    return round((cur - prev) / prev * 100, 1) if prev else None
+
+
+def _insight_sum(db, sf, sp, start: date_cls, end: date_cls) -> dict:
+    """某时间段内销售汇总（全部店铺或单店）。"""
+    rows = db.execute(
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf,
+        [start.isoformat(), end.isoformat()] + sp,
+    ).fetchall()
+    s = _sum_rows(rows)
+    if len(rows) == 1 and rows[0]["conversion_rate"]:
+        s["conversion_rate"] = round(rows[0]["conversion_rate"], 2)
+    return s
+
+
+def _insight_promo(db, sf, sp, start: date_cls, end: date_cls) -> dict:
+    """某时间段内推广汇总（万相台按天数据）。"""
+    row = db.execute(
+        "SELECT COALESCE(SUM(spend),0) AS spend, COALESCE(SUM(sales),0) AS sales "
+        "FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?" + sf,
+        [start.isoformat(), end.isoformat()] + sp,
+    ).fetchone()
+    spend = round(row["spend"] or 0, 2)
+    sales = round(row["sales"] or 0, 2)
+    return {"spend": spend, "sales": sales, "roi": round(sales / spend, 2) if spend else 0.0}
+
+
+def _insight_peak(db, sf, sp, start: date_cls, end: date_cls) -> list[dict]:
+    """统计区间内销售额最高的 2 个时段。"""
+    rows = db.execute(
+        "SELECT hour, SUM(sales) AS sales FROM store_hourly_data "
+        "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY hour ORDER BY sales DESC LIMIT 2",
+        [start.isoformat(), end.isoformat()] + sp,
+    ).fetchall()
+    return [{"hour": r["hour"], "sales": round(r["sales"] or 0, 2)} for r in rows]
+
+
+def _collect_insight(mode: str, store_id: int | None, db) -> dict:
+    """按模式汇总 AI 解读所需数据：销售额、推广、趋势、TOP商品、高峰时段、异常。"""
+    today = date_cls.today()
+    sf, sp = _store_filter(store_id)
+    anomalies: list[str] = []
+    if mode == "realtime":
+        ts = today.isoformat()
+        cur = _insight_sum(db, sf, sp, today, today)
+        if not cur["sales"] and not cur["visitors"]:
+            hrows = db.execute(
+                "SELECT visitors, pv, sales, orders FROM store_hourly_data WHERE data_date = ?" + sf,
+                [ts] + sp,
+            ).fetchall()
+            cur = _sum_rows(hrows)
+        prev = _insight_sum(db, sf, sp, today - timedelta(days=1), today - timedelta(days=1))
+        pr = db.execute(
+            "SELECT COALESCE(SUM(spend),0) AS spend, COALESCE(SUM(sales),0) AS sales "
+            "FROM promo_realtime WHERE data_date = ?" + sf,
+            [ts] + sp,
+        ).fetchone()
+        promo = {"spend": round(pr["spend"] or 0, 2), "sales": round(pr["sales"] or 0, 2)}
+        promo["roi"] = round(promo["sales"] / promo["spend"], 2) if promo["spend"] else 0.0
+        promo_prev = _insight_promo(db, sf, sp, today - timedelta(days=1), today - timedelta(days=1))
+        prods = db.execute(
+            "SELECT item_title, sales FROM store_item_realtime WHERE 1=1" + sf + " ORDER BY sales DESC LIMIT 3",
+            sp,
+        ).fetchall()
+        top_products = [{"item_title": r["item_title"], "sales": round(r["sales"] or 0, 2)} for r in prods]
+        peak = _insight_peak(db, sf, sp, today, today)
+        trend = []
+        for i in range(6, -1, -1):
+            d = today - timedelta(days=i)
+            s = _insight_sum(db, sf, sp, d, d)
+            trend.append(f"{d.strftime('%m-%d')}:¥{s['sales']:.0f}")
+        range_label = f"今日实时（{ts[5:]}）"
+    else:
+        if mode == "yesterday":
+            end = today - timedelta(days=1)
+            days = 1
+        else:
+            try:
+                days = int(mode)
+            except (TypeError, ValueError):
+                days = 14
+            if not (1 <= days <= 90):
+                days = 14
+            end = today
+        start = end - timedelta(days=days - 1)
+        cur = _insight_sum(db, sf, sp, start, end)
+        prev = _insight_sum(db, sf, sp, start - timedelta(days=days), end - timedelta(days=days))
+        promo = _insight_promo(db, sf, sp, start, end)
+        promo_prev = _insight_promo(db, sf, sp, start - timedelta(days=days), end - timedelta(days=days))
+        prods = db.execute(
+            "SELECT item_title, SUM(sales) AS sales FROM store_item_daily "
+            "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY item_id ORDER BY sales DESC LIMIT 3",
+            [start.isoformat(), end.isoformat()] + sp,
+        ).fetchall()
+        top_products = [{"item_title": r["item_title"], "sales": round(r["sales"] or 0, 2)} for r in prods]
+        peak = _insight_peak(db, sf, sp, start, end)
+        n = min(days, 7)
+        trend = []
+        for i in range(n - 1, -1, -1):
+            d = end - timedelta(days=i)
+            s = _insight_sum(db, sf, sp, d, d)
+            trend.append(f"{d.strftime('%m-%d')}:¥{s['sales']:.0f}")
+        range_label = f"近 {days} 天（{start.strftime('%m-%d')}~{end.strftime('%m-%d')}）" if days > 1 else f"昨日（{end.strftime('%m-%d')}）"
+        try:
+            alerts = analytics_alerts(days=30, store_id=store_id, user=None, db=db)
+            anomalies = [a["message"] for a in alerts["items"][:3]]
+        except Exception:  # noqa: BLE001
+            anomalies = []
+    ad_share = round(min(promo["sales"] / cur["sales"] * 100, 100.0), 1) if cur["sales"] else 0.0
+    return {
+        "range_label": range_label,
+        "cur": cur,
+        "prev": prev,
+        "chg": {
+            "sales": _pct_chg(cur["sales"], prev["sales"]),
+            "orders": _pct_chg(cur["orders"], prev["orders"]),
+            "visitors": _pct_chg(cur["visitors"], prev["visitors"]),
+            "conversion": round(cur["conversion_rate"] - prev["conversion_rate"], 2) if prev["conversion_rate"] else None,
+        },
+        "promo": {**promo, "ad_share": ad_share},
+        "promo_chg": {
+            "spend": _pct_chg(promo["spend"], promo_prev["spend"]),
+            "roi": round(promo["roi"] - promo_prev["roi"], 2) if promo_prev["spend"] else None,
+        },
+        "trend": trend,
+        "top_products": top_products,
+        "peak": peak,
+        "anomalies": anomalies,
+    }
+
+
+def _build_insight_prompt(d: dict) -> str:
+    cur = d["cur"]
+    chg = d["chg"]
+    promo = d["promo"]
+    pchg = d["promo_chg"]
+    fmt_pct = lambda x: f"{x:+.1f}%" if x is not None else "—"
+    fmt_pp = lambda x: f"{x:+.2f} 个百分点" if x is not None else "—"
+    lines = [
+        f"数据范围：{d['range_label']}",
+        (
+            f"销售额 {cur['sales']:.0f} 元（环比 {fmt_pct(chg['sales'])}），订单 {cur['orders']}（环比 {fmt_pct(chg['orders'])}），"
+            f"访客 {cur['visitors']}（环比 {fmt_pct(chg['visitors'])}），转化率 {cur['conversion_rate']}%（较上期 {fmt_pp(chg['conversion'])}）"
+        ),
+        (
+            f"推广花费 {promo['spend']:.0f} 元（环比 {fmt_pct(pchg['spend'])}），推广成交 {promo['sales']:.0f} 元，"
+            f"推广ROI {promo['roi']}（较上期 {fmt_pp(pchg['roi'])}），广告成交占比 {promo['ad_share']}%"
+        ),
+    ]
+    if d["trend"]:
+        lines.append("逐日销售额：" + "、".join(d["trend"]))
+    if d["top_products"]:
+        lines.append("TOP商品：" + "；".join(f"{p['item_title'][:24]} ¥{p['sales']:.0f}" for p in d["top_products"]))
+    if d["peak"]:
+        lines.append("高峰时段：" + "、".join(f"{p['hour']}（¥{p['sales']:.0f}）" for p in d["peak"]))
+    if d["anomalies"]:
+        lines.append("异常提醒：" + "；".join(d["anomalies"]))
+    if any(x.endswith(":¥0") for x in d["trend"]):
+        lines.append("注：部分日期销售额为0可能是数据未同步，解读时以有数据的日期为准，不要解读为经营异常。")
+    prompt = (
+        "你是淘宝店铺的运营数据分析师。请根据下面数据输出经营解读，要求：\n"
+        "1. 必须严格按以下格式输出，每部分独占一段：\n"
+        "【整体表现】一句话概括本期经营并给出关键数字（销售额、订单、推广ROI）。\n"
+        "【亮点】\n- 亮点1\n- 亮点2\n- 亮点3（最多3条，确实没有就写“本期暂无突出亮点”）\n"
+        "【风险】\n- 风险1\n- 风险2（最多2条，没有就写“暂无明显风险”）\n"
+        "【建议】\n- 建议1\n- 建议2\n- 建议3（最多3条，要具体可执行）\n"
+        "2. 简体中文、语气务实，不客套；金额≥1万用“X.X万”简化；只依据给定数据，不要编造。\n\n"
+        + "\n".join(lines)
+    )
+    return prompt
+
+
+def _parse_insight_sections(reply: str) -> dict:
+    """解析【整体表现】【亮点】【风险】【建议】标记输出为结构化 sections。"""
+    import re as _re
+    sections = {"overall": "", "highlights": [], "risks": [], "suggestions": []}
+    key_map = {"整体表现": "overall", "亮点": "highlights", "风险": "risks", "建议": "suggestions"}
+    found = False
+    for m in _re.finditer(r"【([^】]+)】\s*(.*?)(?=【[^】]+】|$)", reply, _re.S):
+        title = m.group(1).strip()
+        key = key_map.get(title)
+        if key is None:
+            continue
+        found = True
+        body = m.group(2).strip()
+        if key == "overall":
+            sections[key] = _re.sub(r"\s+", " ", body).strip()
+        else:
+            items = []
+            for line in body.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                line = _re.sub(r"^[-•*]\s*", "", line)
+                line = _re.sub(r"^\d+[.、)]\s*", "", line)
+                if line:
+                    items.append(line)
+            if not items and body:
+                items = [_re.sub(r"^[-•*]\s*", "", body)]
+            sections[key] = items[:4]
+    if not found:
+        sections["overall"] = _re.sub(r"\s+", " ", reply).strip()
+    return sections
+
+
+def _insight_metrics(d: dict) -> list[dict]:
+    chg = d["chg"]
+    promo = d["promo"]
+    pchg = d["promo_chg"]
+    return [
+        {"label": "销售额", "value": f"¥{d['cur']['sales']:,.0f}", "change": chg["sales"], "unit": "%"},
+        {"label": "订单", "value": f"{d['cur']['orders']}", "change": chg["orders"], "unit": "%"},
+        {"label": "访客", "value": f"{d['cur']['visitors']}", "change": chg["visitors"], "unit": "%"},
+        {"label": "转化率", "value": f"{d['cur']['conversion_rate']}%", "change": chg["conversion"], "unit": "pp"},
+        {"label": "推广花费", "value": f"¥{promo['spend']:,.0f}", "change": pchg["spend"], "unit": "%"},
+        {"label": "推广ROI", "value": f"{promo['roi']}", "change": pchg["roi"], "unit": "val"},
+    ]
+
+
 @router.post("/insight")
 def ai_insight(
+    mode: str = "14",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    today = date_cls.today()
-    rows = db.execute("SELECT * FROM store_daily_data ORDER BY data_date ASC").fetchall()
-    link = analytics_linkage(days=14, user=user, db=db)
-    summary = link["summary"]
-    trend = "、".join(f"{x['label']}:¥{x['total_sales']:.0f}" for x in link["items"][-7:])
-    anomalies = db.execute("SELECT data_date, message FROM (SELECT data_date, message FROM analytics_alert_probe) LIMIT 0").fetchall() if False else []
-    prompt = (
-        "你是淘宝店铺的运营数据分析师。请根据以下数据，用简体中文写一段不超过 180 字的经营解读，"
-        "分 2-3 点：1) 整体表现 2) 推广效率 3) 一个具体建议。语气务实，数字用万元/万级简化。\n"
-        f"近14天：总销售额 {summary['total_sales']:.0f} 元，推广花费 {summary['promo_spend']:.0f} 元，"
-        f"广告成交占比 {summary['ad_share']}%，推广ROI {summary['promo_roi']}，整体ROI（总销售/推广花费）{summary['overall_roi']}。\n"
-        f"近7天逐日销售额：{trend}。"
-    )
+    data = _collect_insight(mode, store_id, db)
+    prompt = _build_insight_prompt(data)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0)
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"reply": reply, "date": today.isoformat()}
+    return {
+        "sections": _parse_insight_sections(reply),
+        "reply": reply,
+        "metrics": _insight_metrics(data),
+        "range": data["range_label"],
+        "date": date_cls.today().isoformat(),
+    }
+
 # ---------- 通用：单店筛选 ----------
 
 def _store_filter(store_id: int | None) -> tuple[str, list]:
