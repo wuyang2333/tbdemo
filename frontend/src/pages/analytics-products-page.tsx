@@ -311,12 +311,11 @@ export function AnalyticsProductsPage() {
             dataIndex: "rank",
             width: 70,
             align: "center",
-            sorter: numSorter("rank"),
             render: (v: number) => (
               <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span>
             ),
           },
-          { title: "商品", key: "item", width: 200, sorter: (a: AnalyticsProduct, b: AnalyticsProduct) => (a.item_title || "").localeCompare(b.item_title || "", "zh"), render: renderItem },
+          { title: "商品", key: "item", width: 200, render: renderItem },
           { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 110, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
           { title: "买家", dataIndex: "buyers", align: "right", width: 100, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
@@ -329,7 +328,7 @@ export function AnalyticsProductsPage() {
           { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, sorter: numSorter("promo_share"), render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "排名", dataIndex: "rank", width: 70, align: "center", sorter: numSorter("rank"), render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
+          { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
           { title: "商品", key: "item", width: 200, render: renderItem },
           { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle} /> },
           { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.orders_cycle} /> },
