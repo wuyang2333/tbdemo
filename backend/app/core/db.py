@@ -207,6 +207,32 @@ def _migrate_logs(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _migrate_products(conn: sqlite3.Connection) -> None:
+    """商品分析：单品每日销售数据表。"""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS store_item_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL,
+            item_title TEXT NOT NULL DEFAULT '',
+            data_date TEXT NOT NULL,
+            sales REAL NOT NULL DEFAULT 0,
+            orders INTEGER NOT NULL DEFAULT 0,
+            buyers INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(store_id, item_id, data_date)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_item_daily ON store_item_daily(store_id, data_date)
+        """
+    )
+    conn.commit()
+
+
 def _migrate_promo_realtime(conn: sqlite3.Connection) -> None:
     """老版 promo_realtime 无 scene 字段（无法分场景），检测到就重建（仅存当天临时数据）。"""
     try:
@@ -515,6 +541,7 @@ def init_db() -> None:
         _migrate(conn)
         _migrate_model_configs(conn)
         _migrate_sycm(conn)
+        _migrate_products(conn)
         _migrate_analytics(conn)
         _migrate_promo_realtime(conn)
         _seed_stores(conn)

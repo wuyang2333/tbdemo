@@ -14,6 +14,7 @@ import { AnalyticsHealthPage } from "../pages/analytics-health-page";
 import { AnalyticsInsightPage } from "../pages/analytics-insight-page";
 import { AnalyticsHoursPage } from "../pages/analytics-hours-page";
 import { BoardPage } from "../pages/board-page";
+import { AnalyticsProductsPage } from "../pages/analytics-products-page";
 import { ContentPage } from "../pages/content-page";
 import { CustomersPage } from "../pages/customers-page";
 import { DashboardPage } from "../pages/dashboard-page";
@@ -123,6 +124,7 @@ export function AppRouter() {
         <Route path="/analytics/health" element={<RequireModule id="analytics"><AnalyticsHealthPage /></RequireModule>} />
         <Route path="/analytics/insight" element={<RequireModule id="analytics"><AnalyticsInsightPage /></RequireModule>} />
         <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />
+        <Route path="/analytics/products" element={<RequireModule id="analytics"><AnalyticsProductsPage /></RequireModule>} />
         <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
         <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
         <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />

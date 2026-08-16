@@ -23,9 +23,9 @@ import {
   TeamOutlined,
   UserSwitchOutlined,
 } from "@ant-design/icons";
-import { Avatar, Button, Dropdown, Input, Layout, Menu, Select, Space, Tooltip, Typography } from "antd";
+import { Avatar, Badge, Button, Dropdown, Input, Layout, Menu, Popover, Select, Space, Tag, Tooltip, Typography } from "antd";
 import type { MenuProps } from "antd";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -33,6 +33,7 @@ import { useThemeMode } from "../../app/providers";
 import { useAuth } from "../../lib/auth";
 import { BRAND } from "../../lib/brand";
 import { canAccessModule, FOOTER_MODULES, getModule, MAIN_MODULES, MODULES } from "../../lib/modules";
+import http from "../../lib/api";
 import { useStores } from "../../lib/store";
 import type { ModuleMeta } from "../../types";
 
@@ -67,6 +68,7 @@ const ANALYTICS_CHILDREN = [
   { key: "/analytics/health", label: "经营健康" },
   { key: "/analytics/insight", label: "AI 解读" },
   { key: "/analytics/hours", label: "时段分析" },
+  { key: "/analytics/products", label: "商品分析" },
 ];
 
 const PROMOTIONS_CHILDREN = [
@@ -125,6 +127,26 @@ export function AppShell() {
   const { stores, currentStore, setCurrent } = useStores();
   const [collapsed, setCollapsed] = useState(false);
   const [keyword, setKeyword] = useState("");
+  const [notifCount, setNotifCount] = useState(0);
+  const [notifItems, setNotifItems] = useState<{ id: string; date_label: string; level: string; message: string }[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const loadNotifs = useCallback(async () => {
+    try {
+      const { data } = await http.get<{ count: number; items: { id: string; date_label: string; level: string; message: string }[] }>(
+        "/analytics/alerts/summary"
+      );
+      setNotifCount(data.count);
+      setNotifItems(data.items);
+    } catch {
+      setNotifCount(0);
+      setNotifItems([]);
+    }
+  }, []);
+  useEffect(() => {
+    loadNotifs();
+    const timer = setInterval(loadNotifs, 60000);
+    return () => clearInterval(timer);
+  }, [loadNotifs]);
   const [openKeys, setOpenKeys] = useState<string[]>(() => {
     const seg = location.pathname.split("/")[1];
     return seg === "analytics" || seg === "promotions" ? [seg] : [];
@@ -470,13 +492,49 @@ export function AppShell() {
                 style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
               />
             </Tooltip>
-            <Tooltip title="通知">
-              <Button
-                type="text"
-                icon={<BellOutlined style={{ fontSize: 16 }} />}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
-              />
-            </Tooltip>
+            <Popover
+              placement="bottomRight"
+              trigger="click"
+              open={notifOpen}
+              onOpenChange={setNotifOpen}
+              content={
+                <div style={{ width: 320 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <Text strong>异常提醒</Text>
+                    <a
+                      onClick={() => {
+                        setNotifOpen(false);
+                        navigate("/analytics/alerts");
+                      }}
+                    >
+                      查看全部
+                    </a>
+                  </div>
+                  {notifItems.length === 0 ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>暂无异常提醒</Text>
+                  ) : (
+                    notifItems.map((item) => (
+                      <div key={item.id} style={{ padding: "6px 0", borderBottom: "1px solid var(--ops-border)", fontSize: 12, lineHeight: 1.6 }}>
+                        <Tag color={item.level === "error" ? "red" : item.level === "warn" ? "orange" : "default"} style={{ marginRight: 6 }}>
+                          {item.date_label}
+                        </Tag>
+                        {item.message}
+                      </div>
+                    ))
+                  )}
+                </div>
+              }
+            >
+              <Tooltip title="通知">
+                <Badge count={notifCount} size="small" offset={[-4, 4]}>
+                  <Button
+                    type="text"
+                    icon={<BellOutlined style={{ fontSize: 16 }} />}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
+                  />
+                </Badge>
+              </Tooltip>
+            </Popover>
             <div style={{ width: 1, height: 24, background: borderColor }} />
             <Dropdown menu={{ items: userMenu }} placement="bottomRight" trigger={["click"]}>
               <Space size={9} align="center" style={{ cursor: "pointer" }}>

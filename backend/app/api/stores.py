@@ -592,6 +592,55 @@ def sync_hourly(
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 
+@router.post("/sync-items")
+def sync_items(
+    date: str = "",
+    days: int = 1,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """同步商品销售排行到 store_item_daily：单日（date）或近 N 天（days，默认昨天起往前）。"""
+    from datetime import date as date_cls
+    from backend.app.core.sycm import SycmError, fetch_item_sales
+
+    if not (1 <= days <= 30):
+        days = 1
+    today = date_cls.today()
+    if date:
+        dates = [date]
+        try:
+            date_cls.fromisoformat(date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="日期格式不正确（应为 YYYY-MM-DD）") from exc
+    else:
+        dates = [(today - timedelta(days=offset)).isoformat() for offset in range(1, days + 1)]
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    results = []
+    for store in stores:
+        total_rows = 0
+        err = None
+        for target in dates:
+            try:
+                items = fetch_item_sales(store, target)
+                now = _fmt(_now())
+                for it in items:
+                    db.execute(
+                        "INSERT INTO store_item_daily (store_id, item_id, item_title, data_date, sales, orders, buyers, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(store_id, item_id, data_date) DO UPDATE SET "
+                        "item_title = excluded.item_title, sales = excluded.sales, "
+                        "orders = excluded.orders, buyers = excluded.buyers",
+                        (store["id"], it["item_id"], it["item_title"], target, it["sales"], it["orders"], it["buyers"], now),
+                    )
+                total_rows += len(items)
+            except SycmError as exc:
+                err = str(exc)
+                break
+        results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total_rows, "error": err})
+    _log(db, user, "同步商品数据", "", f"{len(dates)} 天 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
+
+
 @router.get("/current")
 def get_current_store(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
     row = db.execute(

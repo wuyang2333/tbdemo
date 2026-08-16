@@ -797,3 +797,94 @@ def set_alerts_config(
         (_json.dumps(cfg, ensure_ascii=False),),
     )
     return {"ok": True, **cfg}
+# ---------- 商品分析 ----------
+
+@router.get("/products")
+def analytics_products(
+    days: int = 14,
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 90):
+        days = 14
+    start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
+    rows = db.execute(
+        "SELECT * FROM store_item_daily WHERE data_date >= ? AND data_date <= ?" + sf,
+        [start.isoformat(), today.isoformat()] + sp,
+    ).fetchall()
+    prod_map: dict[str, dict] = {}
+    for r in rows:
+        key = r["item_id"]
+        item = prod_map.setdefault(
+            key,
+            {"item_id": key, "item_title": r["item_title"], "sales": 0.0, "orders": 0, "buyers": 0, "days": 0, "latest_date": ""},
+        )
+        item["sales"] += r["sales"] or 0
+        item["orders"] += r["orders"] or 0
+        item["buyers"] += r["buyers"] or 0
+        item["days"] += 1
+        if r["data_date"] > item["latest_date"]:
+            item["latest_date"] = r["data_date"]
+    items = []
+    for item in prod_map.values():
+        item["sales"] = round(item["sales"], 2)
+        items.append(item)
+    items.sort(key=lambda x: x["sales"], reverse=True)
+    total_sales = sum(x["sales"] for x in items) or 1
+    for item in items[:20]:
+        item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+    return {"items": items[:50], "total": len(items), "days": days}
+
+
+@router.get("/products/{item_id}")
+def analytics_product_detail(
+    item_id: str,
+    days: int = 14,
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 90):
+        days = 14
+    start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
+    rows = db.execute(
+        "SELECT * FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+        [item_id, start.isoformat(), today.isoformat()] + sp,
+    ).fetchall()
+    by_date: dict[str, dict] = {}
+    title = ""
+    for r in rows:
+        title = r["item_title"] or title
+        d = r["data_date"]
+        item = by_date.setdefault(d, {"date": d[5:], "sales": 0.0, "orders": 0, "buyers": 0})
+        item["sales"] += r["sales"] or 0
+        item["orders"] += r["orders"] or 0
+        item["buyers"] += r["buyers"] or 0
+    series = []
+    for i in range(days - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        row = by_date.get(d)
+        if row:
+            row["sales"] = round(row["sales"], 2)
+            series.append(row)
+        else:
+            series.append({"date": d[5:], "sales": 0.0, "orders": 0, "buyers": 0})
+    return {"item_id": item_id, "item_title": title, "series": series}
+
+
+# ---------- 异常通知汇总（顶部铃铛） ----------
+
+@router.get("/alerts/summary")
+def alerts_summary(
+    days: int = 3,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 30):
+        days = 3
+    result = analytics_alerts(days=days, user=user, db=db)
+    items = result["items"]
+    return {"count": len(items), "items": items[:10], "checked_at": date_cls.today().isoformat()}

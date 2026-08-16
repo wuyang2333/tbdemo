@@ -395,3 +395,26 @@ export type AnalyticsAlertsConfig = {
   visitors_down: number;
   conversion_down: number;
 };
+
+export type AnalyticsProduct = {
+  item_id: string;
+  item_title: string;
+  sales: number;
+  orders: number;
+  buyers: number;
+  days: number;
+  latest_date: string;
+  sales_share?: number;
+};
+
+export type AnalyticsProducts = {
+  items: AnalyticsProduct[];
+  total: number;
+  days: number;
+};
+
+export type AnalyticsProductDetail = {
+  item_id: string;
+  item_title: string;
+  series: { date: string; sales: number; orders: number; buyers: number }[];
+};

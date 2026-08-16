@@ -326,3 +326,36 @@ def fetch_hourly(store: dict, timeout: float = 120) -> list[dict]:
             )
             prev = cur
     return out
+def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> list[dict]:
+    """拉取指定日期店铺商品销售排行（销售额/销量/销售人数）。"""
+    payload = _run_api_json(
+        [
+            "--store",
+            profile_name(store["id"]),
+            "sale-shop-list",
+            "--date",
+            target_date,
+            "--limit",
+            "100",
+            "--raw",
+        ],
+        timeout=timeout,
+    )
+    rows = (payload.get("data") or {}).get("dataSource") or []
+    out: list[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        title = str(r.get("itemTitle") or "")
+        if not title:
+            continue
+        out.append(
+            {
+                "item_id": str(r.get("itemId") or ""),
+                "item_title": title,
+                "sales": round(_to_num(r.get("shopPayAmt1d")), 2),
+                "orders": int(_to_num(r.get("shopPayItmCnt1d"))),
+                "buyers": int(_to_num(r.get("shopPayUsrCnt1d"))),
+            }
+        )
+    return out
