@@ -14,9 +14,6 @@ const { Text } = Typography;
 const MODE_OPTIONS = [
   { label: "实时", value: "realtime" },
   { label: "昨天", value: "yesterday" },
-  { label: "近 7 天", value: "7" },
-  { label: "近 14 天", value: "14" },
-  { label: "近 30 天", value: "30" },
 ];
 
 interface ProductInsightSections {
@@ -216,7 +213,6 @@ export function AnalyticsProductsPage() {
   };
 
   const isRealtime = mode === "realtime";
-  const isDaysMode = ["7", "14", "30"].includes(mode);
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
   const copyItemId = async (id: string) => {
@@ -335,7 +331,7 @@ export function AnalyticsProductsPage() {
       ) : (
         <Card
           variant="borderless"
-          title={isRealtime ? "实时商品榜（今日）" : isDaysMode ? `商品销售排行 TOP（近 ${mode} 天）` : "昨日商品销售排行"}
+          title={isRealtime ? "实时商品榜（今日）" : "昨日商品销售排行"}
           style={{ boxShadow: "var(--ops-shadow-sm)" }}
           extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
         >
