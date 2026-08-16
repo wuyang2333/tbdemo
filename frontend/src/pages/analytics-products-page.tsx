@@ -431,7 +431,6 @@ export function AnalyticsProductsPage() {
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序
-          {data?.fetched_at ? ` · 抓取时间 ${dayjs(data.fetched_at).format("MM-DD HH:mm:ss")}` : ""}
         </Text>
       )}
       </Space>
