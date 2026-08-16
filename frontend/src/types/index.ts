@@ -188,6 +188,33 @@ export type AnalyticsDailyPoint = AnalyticsBucket & {
   value_per_visitor: number;
 };
 
+export type AnalyticsCompareEntry = {
+  change_pct: number | null;
+  prev: number | null;
+};
+
+export type AnalyticsCompareMetric = {
+  key: string;
+  name: string;
+  fmt: "money" | "int" | "pct";
+  today: number;
+  dod: AnalyticsCompareEntry;
+  wow: AnalyticsCompareEntry;
+  mom: AnalyticsCompareEntry;
+  yoy: AnalyticsCompareEntry;
+};
+
+export type AnalyticsAlert = {
+  date: string;
+  date_label: string;
+  store_id: number;
+  store_name: string;
+  metric: string;
+  level: "error" | "warn" | "info";
+  change_pct: number;
+  message: string;
+};
+
 export type AnalyticsSummary = {
   today: AnalyticsBucket;
   week: AnalyticsBucket;

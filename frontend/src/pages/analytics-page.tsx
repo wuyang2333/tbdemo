@@ -21,6 +21,8 @@ import { useCallback, useEffect, useState } from "react";
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
 import type {
+  AnalyticsAlert,
+  AnalyticsCompareMetric,
   AnalyticsDailyPoint,
   AnalyticsStoreAgg,
   AnalyticsSummary,
@@ -37,6 +39,13 @@ function fmtMoney(value: number): string {
 
 function fmtPct(value: number): string {
   return `${value.toFixed(2)}%`;
+}
+
+function formatValue(fmt: string, value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  if (fmt === "money") return fmtMoney(value);
+  if (fmt === "pct") return fmtPct(value);
+  return `${value}`;
 }
 
 function TrendChart({ trend }: { trend: AnalyticsTrendPoint[] }) {
@@ -182,6 +191,26 @@ function BucketCard({ title, data }: { title: string; data: AnalyticsSummary["to
   );
 }
 
+function ChangeBadge({ change, prevText }: { change: number | null; prevText?: string }) {
+  if (change === null || change === undefined) {
+    return (
+      <div>
+        <Tag>无数据</Tag>
+        {prevText ? <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>{prevText}</div> : null}
+      </div>
+    );
+  }
+  const up = change >= 0;
+  return (
+    <div>
+      <span style={{ color: up ? "#52c41a" : "#ff4d4f", fontWeight: 600, whiteSpace: "nowrap" }}>
+        {up ? "▲" : "▼"} {Math.abs(change).toFixed(1)}%
+      </span>
+      {prevText ? <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>{prevText}</div> : null}
+    </div>
+  );
+}
+
 function OverviewTab({ summary }: { summary: AnalyticsSummary | null }) {
   if (!summary) return null;
   return (
@@ -223,11 +252,7 @@ function OverviewTab({ summary }: { summary: AnalyticsSummary | null }) {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={15}>
-          <Card
-            variant="borderless"
-            title="销售额 / 订单数趋势"
-            style={{ boxShadow: "var(--ops-shadow-sm)" }}
-          >
+          <Card variant="borderless" title="销售额 / 订单数趋势" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
             <Space style={{ marginBottom: 8 }}>
               <Tag color="#ff5000">销售额</Tag>
               <Tag color="#1677ff">订单数</Tag>
@@ -384,6 +409,114 @@ function ConversionTab({ daily }: { daily: AnalyticsDailyPoint[] }) {
   );
 }
 
+function YoyTab({ metrics }: { metrics: AnalyticsCompareMetric[] }) {
+  const columns: TableColumnsType<AnalyticsCompareMetric> = [
+    { title: "指标", dataIndex: "name", width: 110 },
+    {
+      title: "今日",
+      dataIndex: "today",
+      width: 140,
+      align: "right",
+      render: (v: number, row) => (
+        <span style={{ fontWeight: 700 }}>{formatValue(row.fmt, v)}</span>
+      ),
+    },
+    {
+      title: "较昨日（环比）",
+      key: "dod",
+      width: 170,
+      render: (_, row) => (
+        <ChangeBadge change={row.dod.change_pct} prevText={`昨日 ${formatValue(row.fmt, row.dod.prev)}`} />
+      ),
+    },
+    {
+      title: "较上周（环比）",
+      key: "wow",
+      width: 170,
+      render: (_, row) => (
+        <ChangeBadge change={row.wow.change_pct} prevText={`上周 ${formatValue(row.fmt, row.wow.prev)}`} />
+      ),
+    },
+    {
+      title: "较上月（环比）",
+      key: "mom",
+      width: 170,
+      render: (_, row) => (
+        <ChangeBadge change={row.mom.change_pct} prevText={`上月 ${formatValue(row.fmt, row.mom.prev)}`} />
+      ),
+    },
+    {
+      title: "较去年今日（同比）",
+      key: "yoy",
+      width: 180,
+      render: (_, row) => (
+        <ChangeBadge change={row.yoy.change_pct} prevText={`去年 ${formatValue(row.fmt, row.yoy.prev)}`} />
+      ),
+    },
+  ];
+  return (
+    <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+        说明：环比=与上一周期比，同比=与去年同一天比。数据积累满相应周期后自动显示，未积累显示「无数据」。
+      </Text>
+      <Table<AnalyticsCompareMetric>
+        rowKey="key"
+        size="small"
+        columns={columns}
+        dataSource={metrics}
+        pagination={false}
+        scroll={{ x: 820 }}
+      />
+    </Card>
+  );
+}
+
+function AlertsTab({ alerts, baselineDays }: { alerts: AnalyticsAlert[]; baselineDays: number }) {
+  const columns: TableColumnsType<AnalyticsAlert> = [
+    { title: "日期", dataIndex: "date_label", width: 90 },
+    { title: "店铺", dataIndex: "store_name", width: 160 },
+    { title: "指标", dataIndex: "metric", width: 90 },
+    {
+      title: "波动",
+      dataIndex: "change_pct",
+      width: 100,
+      align: "right",
+      render: (v: number) => <ChangeBadge change={v} />,
+    },
+    {
+      title: "等级",
+      dataIndex: "level",
+      width: 80,
+      render: (level: AnalyticsAlert["level"]) =>
+        level === "error" ? <Tag color="red">严重</Tag> : level === "warn" ? <Tag color="orange">提醒</Tag> : <Tag>信息</Tag>,
+    },
+    { title: "说明", dataIndex: "message" },
+  ];
+  return (
+    <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+      <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+        检测规则：按店铺对比每天指标与前 {baselineDays} 天均值——销售额下跌超 30%（严重）/上涨超 60%、订单或访客下跌超 30%、转化率下滑超 20% 时提醒。
+      </Text>
+      {alerts.length === 0 ? (
+        <Empty
+          description="目前还没有波动提醒。需要至少积累 3 天数据，系统才会开始自动判断波动。"
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          style={{ padding: 24 }}
+        />
+      ) : (
+        <Table<AnalyticsAlert>
+          rowKey={(row) => `${row.date}_${row.store_id}_${row.metric}`}
+          size="small"
+          columns={columns}
+          dataSource={alerts}
+          pagination={{ pageSize: 10, showTotal: (c) => `共 ${c} 条` }}
+          scroll={{ x: 760 }}
+        />
+      )}
+    </Card>
+  );
+}
+
 function daySwitch(days: number, onDays: (d: number) => void) {
   return (
     <Space>
@@ -401,6 +534,9 @@ export function AnalyticsPage() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [daily, setDaily] = useState<AnalyticsDailyPoint[]>([]);
   const [stores, setStores] = useState<AnalyticsStoreAgg[]>([]);
+  const [compareMetrics, setCompareMetrics] = useState<AnalyticsCompareMetric[]>([]);
+  const [alerts, setAlerts] = useState<AnalyticsAlert[]>([]);
+  const [baselineDays, setBaselineDays] = useState(7);
   const [trendDays, setTrendDays] = useState(14);
   const [compareDays, setCompareDays] = useState(14);
   const [loading, setLoading] = useState(false);
@@ -422,26 +558,40 @@ export function AnalyticsPage() {
     setStores(data.items);
   }, []);
 
+  const loadCompare = useCallback(async () => {
+    const { data } = await http.get<{ metrics: AnalyticsCompareMetric[] }>("/analytics/compare");
+    setCompareMetrics(data.metrics);
+  }, []);
+
+  const loadAlerts = useCallback(async () => {
+    const { data } = await http.get<{ items: AnalyticsAlert[]; baseline_days: number }>("/analytics/alerts");
+    setAlerts(data.items);
+    setBaselineDays(data.baseline_days);
+  }, []);
+
+  const reload = useCallback(async () => {
+    if (active === "overview") await loadSummary();
+    else if (active === "trend") await loadDaily(trendDays);
+    else if (active === "compare") await loadStores(compareDays);
+    else if (active === "conversion") await loadDaily(30);
+    else if (active === "yoy") await loadCompare();
+    else await loadAlerts();
+  }, [active, trendDays, compareDays, loadSummary, loadDaily, loadStores, loadCompare, loadAlerts]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const run = async () => {
-      try {
-        if (active === "overview") await loadSummary();
-        else if (active === "trend") await loadDaily(trendDays);
-        else if (active === "compare") await loadStores(compareDays);
-        else await loadDaily(30);
-      } catch (error) {
+    reload()
+      .catch((error) => {
         if (!cancelled) message.error(getApiErrorMessage(error));
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setLoading(false);
-      }
-    };
-    run();
+      });
     return () => {
       cancelled = true;
     };
-  }, [active, trendDays, compareDays, reloadTick, loadSummary, loadDaily, loadStores]);
+  }, [reload, reloadTick]);
 
   const syncAll = async () => {
     setSyncing(true);
@@ -454,10 +604,7 @@ export function AnalyticsPage() {
       if (failed.length) {
         failed.slice(0, 3).forEach((f) => message.warning(`${f.store_name}：${f.error || "同步失败"}`));
       }
-      if (active === "overview") await loadSummary();
-      else if (active === "trend") await loadDaily(trendDays);
-      else if (active === "compare") await loadStores(compareDays);
-      else await loadDaily(30);
+      await reload();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -498,6 +645,8 @@ export function AnalyticsPage() {
             { key: "trend", label: "趋势分析", children: <TrendTab daily={daily} days={trendDays} onDays={setTrendDays} /> },
             { key: "compare", label: "店铺对比", children: <CompareTab stores={stores} days={compareDays} onDays={setCompareDays} /> },
             { key: "conversion", label: "转化分析", children: <ConversionTab daily={daily} /> },
+            { key: "yoy", label: "同比环比", children: <YoyTab metrics={compareMetrics} /> },
+            { key: "alerts", label: "异常提醒", children: <AlertsTab alerts={alerts} baselineDays={baselineDays} /> },
           ]}
         />
         {loading && (
