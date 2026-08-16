@@ -7,7 +7,16 @@ import { RULE_FIELDS, RULE_OPERATORS, ruleText } from "../../lib/alert-rules";
 
 const { Text } = Typography;
 
-type HourlyRule = { id: string; field: string; operator: string; threshold: number; compare: string; enabled: boolean };
+type HourlyRule = { id: string; field: string; operator: string; threshold: number; compare: string; scene: string; enabled: boolean };
+
+const SCENE_OPTIONS = [
+  { value: "", label: "全部场景" },
+  { value: "wholesite", label: "货品全站推广" },
+  { value: "keyword", label: "关键词推广" },
+  { value: "crowd", label: "人群推广" },
+  { value: "content", label: "内容营销" },
+];
+const PROMO_FIELDS = ["promo_spend", "promo_roi"];
 
 const COMPARE_OPTIONS = [
   { value: "yesterday", label: "较昨日同时段" },
@@ -25,6 +34,7 @@ export function HourlyPushButton() {
   const [newOp, setNewOp] = useState("cycle_drop_pct");
   const [newTh, setNewTh] = useState(30);
   const [newCompare, setNewCompare] = useState("yesterday");
+  const [newScene, setNewScene] = useState("");
 
   const openModal = async () => {
     setOpen(true);
@@ -77,12 +87,13 @@ export function HourlyPushButton() {
     if (!newField) return;
     setCfg((p) => ({
       ...p,
-      rules: [...p.rules, { id: `hp_${Date.now()}_${Math.floor(Math.random() * 10000)}`, field: newField, operator: newOp, threshold: Number(newTh), compare: newCompare, enabled: true }],
+      rules: [...p.rules, { id: `hp_${Date.now()}_${Math.floor(Math.random() * 10000)}`, field: newField, operator: newOp, threshold: Number(newTh), compare: newCompare, scene: PROMO_FIELDS.includes(newField) ? newScene : "", enabled: true }],
     }));
     setNewField(undefined);
     setNewOp("cycle_drop_pct");
     setNewTh(30);
     setNewCompare("yesterday");
+    setNewScene("");
   };
   const updRule = (id: string, patch: { enabled?: boolean }) =>
     setCfg((p) => ({ ...p, rules: p.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
@@ -118,8 +129,9 @@ export function HourlyPushButton() {
               {cfg.rules.map((r) => (
                 <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", borderRadius: 8, padding: "6px 10px" }}>
                   <Text style={{ fontSize: 13, flex: 1 }}>
+                    {r.scene ? `[${SCENE_OPTIONS.find((x) => x.value === r.scene)?.label || r.scene}] ` : ""}
                     {ruleText({ id: r.id, module: "hour", field: r.field, operator: r.operator as "cycle_drop_pct" | "cycle_up_pct" | "lt" | "gt", threshold: r.threshold, enabled: r.enabled })}
-                    <Text type="secondary" style={{ fontSize: 11 }}>（{r.compare === "prev_hour" ? "较上一小时" : "较昨日同时段"}）</Text>
+                    {["cycle_drop_pct", "cycle_up_pct"].includes(r.operator) ? `（${r.compare === "prev_hour" ? "较上一小时" : "较昨日同时段"}）` : ""}
                   </Text>
                   <Switch size="small" checked={r.enabled} onChange={(c) => updRule(r.id, { enabled: c })} />
                   <Button size="small" danger type="text" onClick={() => delRule(r.id)}>删除</Button>
@@ -129,7 +141,10 @@ export function HourlyPushButton() {
             <Space wrap>
               <Select size="small" style={{ width: 130 }} placeholder="字段" options={RULE_FIELDS.hour.map((f) => ({ value: f.key, label: f.label }))} value={newField} onChange={setNewField} />
               <Select size="small" style={{ width: 150 }} options={RULE_OPERATORS.map((o) => ({ value: o.value, label: o.label }))} value={newOp} onChange={setNewOp} />
-              <Select size="small" style={{ width: 130 }} options={COMPARE_OPTIONS} value={newCompare} onChange={setNewCompare} />
+              {PROMO_FIELDS.includes(newField || "") && (
+                <Select size="small" style={{ width: 130 }} options={SCENE_OPTIONS} value={newScene} onChange={setNewScene} />
+              )}
+              <Select size="small" style={{ width: 130 }} options={COMPARE_OPTIONS} value={newCompare} onChange={setNewCompare} disabled={["lt", "gt"].includes(newOp)} />
               <InputNumber size="small" style={{ width: 100 }} placeholder="阈值" value={newTh} min={0} onChange={(v) => setNewTh(Number(v ?? 0))} />
               <Button size="small" type="primary" onClick={addRule} disabled={!newField}>添加规则</Button>
             </Space>
