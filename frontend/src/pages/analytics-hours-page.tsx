@@ -141,7 +141,7 @@ export function AnalyticsHoursPage() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<{
-    sections: { overall: string; highlights: string[]; risks: string[]; suggestions: string[] };
+    sections: { overall: string; highlights: string[]; conversion: string[]; risks: string[]; suggestions: string[] };
     range: string;
     recommended_hours: string[];
   } | null>(null);
@@ -526,15 +526,23 @@ export function AnalyticsHoursPage() {
             <div style={{ display: "grid", gap: 8 }}>
               {aiResult.sections.highlights.length > 0 && (
                 <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#52c41a" }}>高峰</Text>
+                  <Text strong style={{ color: "#52c41a" }}>销售时段规律</Text>
                   {aiResult.sections.highlights.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+              {aiResult.sections.conversion.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "#1677ff" }}>流量与转化</Text>
+                  {aiResult.sections.conversion.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {aiResult.sections.risks.length > 0 && (
                 <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#ff4d4f" }}>风险</Text>
+                  <Text strong style={{ color: "#ff4d4f" }}>风险提醒</Text>
                   {aiResult.sections.risks.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
@@ -542,7 +550,7 @@ export function AnalyticsHoursPage() {
               )}
               {aiResult.sections.suggestions.length > 0 && (
                 <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "var(--ops-accent-light)" }}>建议</Text>
+                  <Text strong style={{ color: "var(--ops-accent-light)" }}>投放建议</Text>
                   {aiResult.sections.suggestions.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}

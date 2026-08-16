@@ -839,10 +839,19 @@ def _build_insight_prompt(d: dict) -> str:
 
 
 def _parse_insight_sections(reply: str) -> dict:
-    """解析【整体表现】【亮点】【风险】【建议】标记输出为结构化 sections。"""
+    """解析【...】标记输出为结构化 sections（支持 5 段时段解读与通用 4 段）。"""
     import re as _re
-    sections = {"overall": "", "highlights": [], "risks": [], "suggestions": []}
-    key_map = {"整体表现": "overall", "亮点": "highlights", "风险": "risks", "建议": "suggestions"}
+    sections = {"overall": "", "highlights": [], "conversion": [], "risks": [], "suggestions": []}
+    key_map = {
+        "整体表现": "overall",
+        "销售时段规律": "highlights",
+        "亮点": "highlights",
+        "流量与转化": "conversion",
+        "风险提醒": "risks",
+        "风险": "risks",
+        "投放建议": "suggestions",
+        "建议": "suggestions",
+    }
     found = False
     for m in _re.finditer(r"【([^】]+)】\s*(.*?)(?=【[^】]+】|$)", reply, _re.S):
         title = m.group(1).strip()
@@ -1485,24 +1494,54 @@ def analytics_hours(
 
 def _build_hours_prompt(d: dict) -> str:
     summary = d["summary"]
+    conv_rate = round(summary["orders"] / max(summary["visitors"], 1) * 100, 2)
     lines = [
         f"数据范围：{d['label']}",
-        f"访客 {summary['visitors']}，销售额 {summary['sales']:.0f} 元，订单 {summary['orders']}，推广花费 {summary['promo_spend']:.0f} 元，推广成交 {summary['promo_sales']:.0f} 元，推广ROI {summary['promo_roi']}",
-        "逐小时（访客/销售额/推广花费/ROI）：" + "、".join(
-            f"{it['hour']}:{it['visitors']}/{it['sales']:.0f}/{it['promo_spend']:.0f}/{it['promo_roi']}"
+        f"访客 {summary['visitors']}，销售额 {summary['sales']:.0f} 元，订单 {summary['orders']}，转化率 {conv_rate}%，推广花费 {summary['promo_spend']:.0f} 元，推广成交 {summary['promo_sales']:.0f} 元，推广ROI {summary['promo_roi']}",
+        "逐小时(访客/销售额/订单/转化率%/推广花费/ROI)：" + "、".join(
+            f"{it['hour']}:{it['visitors']}/{it['sales']:.0f}/{it['orders']}/{it['conversion_rate']}/{it['promo_spend']:.0f}/{it['promo_roi']}"
             for it in d["items"]
         ),
-        "时段分组：" + "、".join(f"{seg['name']}销售{seg['sales']:.0f}占{seg['sales_pct']}%" for seg in d["segments"]),
     ]
+    conv_peak = sorted([it for it in d["items"] if it["visitors"] > 0], key=lambda x: x["conversion_rate"], reverse=True)[:3]
+    if conv_peak:
+        lines.append("转化率最高时段：" + "、".join(f"{it['hour']}（{it['conversion_rate']}%）" for it in conv_peak))
+    anomalies = []
+    for it in d["items"]:
+        for name, val in (("访客", it["visitors_cycle"]), ("销售额", it["sales_cycle"])):
+            if val is not None and abs(val) >= 30:
+                anomalies.append(f"{it['hour']}{name}{val:+.0f}%")
+    if anomalies:
+        lines.append("较上一周期涨跌≥30%的时段：" + "、".join(anomalies[:8]))
+    for sc in d.get("promo_by_scene", {}).values():
+        active = []
+        for h in range(24):
+            it = sc["items"].get(f"{h:02d}:00") or {"spend": 0.0, "sales": 0.0, "roi": 0.0}
+            if it["spend"] > 0:
+                active.append((f"{h:02d}:00", it))
+        if not active:
+            continue
+        total_spend = sum(it["spend"] for _, it in active)
+        total_sales = sum(it["sales"] for _, it in active)
+        roi = round(total_sales / total_spend, 2) if total_spend else 0
+        top = sorted(active, key=lambda x: x[1]["roi"], reverse=True)[:3]
+        bottom = sorted(active, key=lambda x: x[1]["roi"])[:2]
+        lines.append(
+            f"场景{sc['scene_name']}：总花费{total_spend:.0f}元，ROI{roi}；ROI最高时段 "
+            + "、".join(f"{h}({it['roi']})" for h, it in top)
+            + "；ROI最低时段 "
+            + "、".join(f"{h}({it['roi']})" for h, it in bottom)
+        )
     if d["recommended_hours"]:
-        lines.append("推广ROI≥2 且有花费的时段：" + "、".join(d["recommended_hours"]))
+        lines.append("推广ROI≥2 的时段：" + "、".join(d["recommended_hours"]))
     prompt = (
-        "你是淘宝店铺的运营数据分析师。根据以下分时数据输出时段经营解读，严格按格式：\n"
-        "【整体表现】一句话概括（含销售额、访客、推广ROI关键数字）\n"
-        "【高峰】\n- 高峰时段及原因推测（最多2条）\n"
-        "【风险】\n- 时段上的问题（最多2条，如某时段推广ROI过低、转化差）\n"
-        "【建议】\n- 具体可执行的投放/运营建议，明确写\"几点到几点建议投/停投\"（最多3条）\n"
-        "简体中文务实，金额≥1万用X.X万简化；只依据给定数据。\n\n"
+        "你是淘宝店铺的运营数据分析师。根据以下分时数据输出详细时段经营解读，严格按格式，每部分独占一段，条目用“- ”开头：\n"
+        "【整体表现】2-3句话概括本期（含销售额、访客、转化率、推广ROI关键数字）\n"
+        "【销售时段规律】\n- 销售高峰/次高峰/低谷时段及特征（3-4条）\n"
+        "【流量与转化】\n- 访客高峰、转化率特征（2-3条）\n"
+        "【投放建议】\n- 按场景按时段的具体建议，明确“几点到几点投/停投”（4-5条）\n"
+        "【风险提醒】\n- 低ROI时段、异常波动等（2-3条）\n"
+        "简体中文务实，金额≥1万用X.X万简化；只依据给定数据，不要编造。\n\n"
         + "\n".join(lines)
     )
     return prompt
