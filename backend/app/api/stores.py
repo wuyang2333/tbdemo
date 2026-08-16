@@ -625,12 +625,18 @@ def sync_items(
                 now = _fmt(_now())
                 for it in items:
                     db.execute(
-                        "INSERT INTO store_item_daily (store_id, item_id, item_title, data_date, sales, orders, buyers, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO store_item_daily (store_id, item_id, item_title, image, data_date, sales, orders, buyers, visitors, pv, conversion_rate, add_cart, refund_amount, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(store_id, item_id, data_date) DO UPDATE SET "
-                        "item_title = excluded.item_title, sales = excluded.sales, "
-                        "orders = excluded.orders, buyers = excluded.buyers",
-                        (store["id"], it["item_id"], it["item_title"], target, it["sales"], it["orders"], it["buyers"], now),
+                        "item_title = excluded.item_title, image = excluded.image, sales = excluded.sales, "
+                        "orders = excluded.orders, buyers = excluded.buyers, visitors = excluded.visitors, "
+                        "pv = excluded.pv, conversion_rate = excluded.conversion_rate, "
+                        "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount",
+                        (
+                            store["id"], it["item_id"], it["item_title"], it.get("image", ""), target,
+                            it["sales"], it["orders"], it["buyers"], it.get("visitors", 0), it.get("pv", 0),
+                            it.get("conversion_rate", 0), it.get("add_cart", 0), it.get("refund_amount", 0), now,
+                        ),
                     )
                 total_rows += len(items)
             except SycmError as exc:

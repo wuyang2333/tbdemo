@@ -849,17 +849,27 @@ def analytics_products(
         key = r["item_id"]
         item = prod_map.setdefault(
             key,
-            {"item_id": key, "item_title": r["item_title"], "sales": 0.0, "orders": 0, "buyers": 0, "days": 0, "latest_date": ""},
+            {"item_id": key, "item_title": r["item_title"], "image": r["image"] or "", "sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0, "add_cart": 0, "refund_amount": 0.0, "conversion_rate": 0.0, "days": 0, "latest_date": ""},
         )
         item["sales"] += r["sales"] or 0
         item["orders"] += r["orders"] or 0
         item["buyers"] += r["buyers"] or 0
+        item["visitors"] += r["visitors"] or 0
+        item["pv"] += r["pv"] or 0
+        item["add_cart"] += r["add_cart"] or 0
+        item["refund_amount"] += r["refund_amount"] or 0
+        if r["conversion_rate"]:
+            item["conversion_rate"] = r["conversion_rate"]
+        if r["image"]:
+            item["image"] = r["image"]
         item["days"] += 1
         if r["data_date"] > item["latest_date"]:
             item["latest_date"] = r["data_date"]
     items = []
     for item in prod_map.values():
         item["sales"] = round(item["sales"], 2)
+        item["refund_amount"] = round(item["refund_amount"], 2)
+        item["conversion_rate"] = round(item["buyers"] / item["visitors"] * 100, 2) if item["visitors"] else 0.0
         items.append(item)
     items.sort(key=lambda x: x["sales"], reverse=True)
     total_sales = sum(x["sales"] for x in items) or 1
@@ -889,10 +899,12 @@ def analytics_product_detail(
     for r in rows:
         title = r["item_title"] or title
         d = r["data_date"]
-        item = by_date.setdefault(d, {"date": d[5:], "sales": 0.0, "orders": 0, "buyers": 0})
+        item = by_date.setdefault(d, {"date": d[5:], "sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0})
         item["sales"] += r["sales"] or 0
         item["orders"] += r["orders"] or 0
         item["buyers"] += r["buyers"] or 0
+        item["visitors"] += r["visitors"] or 0
+        item["pv"] += r["pv"] or 0
     # 今天用实时快照补充
     rsf, rsp = _store_filter(store_id)
     rt = db.execute(
@@ -901,10 +913,12 @@ def analytics_product_detail(
     ).fetchone()
     if rt:
         today_key = date_cls.today().isoformat()
-        item = by_date.setdefault(today_key, {"date": today_key[5:], "sales": 0.0, "orders": 0, "buyers": 0})
+        item = by_date.setdefault(today_key, {"date": today_key[5:], "sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0})
         item["sales"] = round(rt["sales"] or 0, 2)
         item["orders"] = rt["orders"] or 0
         item["buyers"] = rt["buyers"] or 0
+        item["visitors"] = rt["visitors"] or 0
+        item["pv"] = rt["pv"] or 0
         title = title or rt["item_title"]
     series = []
     for i in range(days - 1, -1, -1):
@@ -914,7 +928,7 @@ def analytics_product_detail(
             row["sales"] = round(row["sales"], 2)
             series.append(row)
         else:
-            series.append({"date": d[5:], "sales": 0.0, "orders": 0, "buyers": 0})
+            series.append({"date": d[5:], "sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0})
     return {"item_id": item_id, "item_title": title, "series": series}
 
 

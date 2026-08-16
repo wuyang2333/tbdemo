@@ -93,12 +93,15 @@ export function AnalyticsProductsPage() {
           { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => fmtPct(v) },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "商品", dataIndex: "item_title", width: 300, ellipsis: true },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
-          { title: "销量", dataIndex: "orders", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "销售人数", dataIndex: "buyers", align: "right", width: 90, render: (v: number) => fmtInt(v) },
-          { title: "销售占比", dataIndex: "sales_share", align: "right", width: 90, render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
-          { title: "有数据天数", dataIndex: "days", align: "right", width: 90 },
+          { title: "商品", dataIndex: "item_title", width: 280, ellipsis: true },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 100, render: (v: number) => fmtMoney(v) },
+          { title: "销量", dataIndex: "orders", align: "right", width: 70, render: (v: number) => fmtInt(v) },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 80, render: (v: number) => fmtInt(v) },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 80, render: (v: number) => fmtPct(v) },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 70, render: (v: number) => fmtInt(v) },
+          { title: "占比", dataIndex: "sales_share", align: "right", width: 70, render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "天数", dataIndex: "days", align: "right", width: 60 },
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
@@ -154,7 +157,7 @@ export function AnalyticsProductsPage() {
                 columns={columns}
                 dataSource={data.items}
                 pagination={{ pageSize: 10, showTotal: () => `共 ${data.total} 个商品` }}
-                scroll={{ x: 720 }}
+                scroll={{ x: 880 }}
                 onRow={(record) => ({ onClick: () => openDetail(record), style: { cursor: "pointer" } })}
               />
             </Card>

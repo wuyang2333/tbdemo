@@ -327,37 +327,59 @@ def fetch_hourly(store: dict, timeout: float = 120) -> list[dict]:
             prev = cur
     return out
 def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> list[dict]:
-    """拉取指定日期店铺商品销售排行（销售额/销量/销售人数）。"""
-    payload = _run_api_json(
-        [
-            "--store",
-            profile_name(store["id"]),
-            "sale-shop-list",
-            "--date",
-            target_date,
-            "--limit",
-            "100",
-            "--raw",
-        ],
-        timeout=timeout,
-    )
-    rows = (payload.get("data") or {}).get("dataSource") or []
+    """拉取指定日期商品排行（生意参谋 商品-商品排行，全量商品 + 40+ 指标，自动翻页）。"""
     out: list[dict] = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        title = str(r.get("itemTitle") or "")
-        if not title:
-            continue
-        out.append(
-            {
-                "item_id": str(r.get("itemId") or ""),
-                "item_title": title,
-                "sales": round(_to_num(r.get("shopPayAmt1d")), 2),
-                "orders": int(_to_num(r.get("shopPayItmCnt1d"))),
-                "buyers": int(_to_num(r.get("shopPayUsrCnt1d"))),
-            }
+    page = 1
+    while True:
+        payload = _run_api_json(
+            [
+                "--store",
+                profile_name(store["id"]),
+                "item-list",
+                "--date",
+                target_date,
+                "--page",
+                str(page),
+                "--limit",
+                "20",
+                "--raw",
+            ],
+            timeout=timeout,
         )
+        data = payload.get("data") or {}
+        rows = data.get("data") or []
+        if not isinstance(rows, list) or not rows:
+            break
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            item = r.get("item") or {}
+            title = str(item.get("title") or "")
+            if not title:
+                continue
+            out.append(
+                {
+                    "item_id": str(
+                        (r.get("mainProductId") or {}).get("value")
+                        if isinstance(r.get("mainProductId"), dict)
+                        else r.get("mainProductId") or item.get("itemId") or ""
+                    ),
+                    "item_title": title,
+                    "image": str(item.get("pictUrl") or "").replace("//", "https://"),
+                    "sales": round(_to_num(_take(r, "payAmt")), 2),
+                    "orders": int(_to_num(_take(r, "payItmCnt"))),
+                    "buyers": int(_to_num(_take(r, "payByrCnt"))),
+                    "visitors": int(_to_num(_take(r, "itmUv"))),
+                    "pv": int(_to_num(_take(r, "itmPv"))),
+                    "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
+                    "add_cart": int(_to_num(_take(r, "itemCartCnt"))),
+                    "refund_amount": round(_to_num(_take(r, "sucRefundAmt")), 2),
+                }
+            )
+        total = data.get("recordCount") or 0
+        if len(out) >= total or len(rows) < 20:
+            break
+        page += 1
     return out
 def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120) -> list[dict]:
     """拉取今日实时商品排行（实时榜单接口，index=排序指标 uv/payAmt 等）。"""

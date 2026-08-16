@@ -207,6 +207,23 @@ def _migrate_logs(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _migrate_item_daily(conn: sqlite3.Connection) -> None:
+    """商品每日数据补充商品排行指标列（访客/浏览/转化/加购/退款/图片）。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(store_item_daily)")}
+    additions = {
+        "visitors": "INTEGER NOT NULL DEFAULT 0",
+        "pv": "INTEGER NOT NULL DEFAULT 0",
+        "conversion_rate": "REAL NOT NULL DEFAULT 0",
+        "add_cart": "INTEGER NOT NULL DEFAULT 0",
+        "refund_amount": "REAL NOT NULL DEFAULT 0",
+        "image": "TEXT NOT NULL DEFAULT ''",
+    }
+    for col, typ in additions.items():
+        if col not in cols:
+            conn.execute(f"ALTER TABLE store_item_daily ADD COLUMN {col} {typ}")
+    conn.commit()
+
+
 def _migrate_products_realtime(conn: sqlite3.Connection) -> None:
     """商品分析：实时商品排行数据表（今日实时快照）。"""
     conn.execute(
@@ -566,6 +583,7 @@ def init_db() -> None:
         _migrate_model_configs(conn)
         _migrate_sycm(conn)
         _migrate_products(conn)
+        _migrate_item_daily(conn)
         _migrate_products_realtime(conn)
         _migrate_analytics(conn)
         _migrate_promo_realtime(conn)
