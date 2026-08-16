@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { StoreScopeSelect, daySwitch, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
+import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
@@ -317,8 +317,6 @@ export function AnalyticsProductsPage() {
 
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setMode(String(v)); }} />
-        {isDaysMode && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
-        {isDaysMode && daySwitch(Number(mode), (d) => setMode(String(d)))}
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序
