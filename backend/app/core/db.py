@@ -355,6 +355,59 @@ def init_db() -> None:
             """
         )
 
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_daily_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                scene TEXT NOT NULL,
+                scene_name TEXT NOT NULL DEFAULT '',
+                data_date TEXT NOT NULL,
+                impressions INTEGER NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                ctr REAL NOT NULL DEFAULT 0,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                orders INTEGER NOT NULL DEFAULT 0,
+                add_cart INTEGER NOT NULL DEFAULT 0,
+                conversion_rate REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(store_id, scene, data_date)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promo_daily ON promo_daily_data(store_id, data_date)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                scene TEXT NOT NULL DEFAULT '',
+                scene_name TEXT NOT NULL DEFAULT '',
+                campaign_id TEXT NOT NULL,
+                plan_name TEXT NOT NULL DEFAULT '',
+                day_budget REAL NOT NULL DEFAULT 0,
+                bid_type TEXT NOT NULL DEFAULT '',
+                bid_value REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT '',
+                gmt_create TEXT NOT NULL DEFAULT '',
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                tag TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, campaign_id)
+            )
+            """
+        )
         conn.commit()
         _migrate(conn)
         _migrate_model_configs(conn)

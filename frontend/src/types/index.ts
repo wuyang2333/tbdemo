@@ -226,3 +226,57 @@ export type AnalyticsSummary = {
   last_sync: string | null;
 };
 
+
+export type PromoSceneAgg = {
+  scene: string;
+  scene_name: string;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  spend: number;
+  sales: number;
+  roi: number;
+  orders: number;
+  add_cart: number;
+};
+
+export type PromoTrendPoint = {
+  date: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+  sales: number;
+  orders: number;
+  roi: number;
+};
+
+export type PromoData = {
+  summary: PromoSceneAgg;
+  scenes: PromoSceneAgg[];
+  trend: PromoTrendPoint[];
+  days: number;
+  scene: string;
+  bound_stores: number;
+  last_sync: string | null;
+};
+
+export type PromoPlan = {
+  id: number;
+  store_id: number;
+  scene: string;
+  scene_name: string;
+  campaign_id: string;
+  plan_name: string;
+  day_budget: number;
+  bid_type: string;
+  bid_value: number;
+  status: string;
+  gmt_create: string;
+  spend: number;
+  sales: number;
+  roi: number;
+  clicks: number;
+  note: string;
+  tag: string;
+  updated_at: string;
+};

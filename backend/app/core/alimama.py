@@ -1,0 +1,179 @@
+"""万相台推广数据抓取：复用店铺的淘宝登录档案（taobao.com 通用登录态）调用万相台 one.alimama.com 接口。
+
+依赖项目内内置的 alimama-cli（MIT 协议，见 backend/alimama_cli/LICENSE）。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from backend.app.core.sycm import has_profile, profile_path
+
+CLI_DIR = Path(__file__).resolve().parent.parent.parent / "alimama_cli"
+CLI_SCRIPT = CLI_DIR / "alimama_cli.py"
+PYTHON = sys.executable
+
+_ENV = dict(os.environ)
+_ENV["ALIMAMA_BYPASS_CURFEW"] = "1"
+_ENV["SYCM_BYPASS_CURFEW"] = "1"
+_ENV["PYTHONIOENCODING"] = "utf-8"
+_ENV["PYTHONUTF8"] = "1"
+
+SCENE_NAMES = {
+    "wholesite": "货品全站推广",
+    "keyword": "关键词推广",
+    "crowd": "人群推广",
+}
+
+
+class AlimamaError(Exception):
+    """带用户可读信息的万相台抓取错误。"""
+
+
+def _friendly(text: str) -> str:
+    if not text:
+        return "万相台操作失败，请稍后再试"
+    if (
+        "登录态无效" in text
+        or "未找到阿里妈妈登录态" in text
+        or "请重新登录" in text
+        or "重新绑定" in text
+    ):
+        return "万相台登录已失效，请重新点「打开浏览器登录」绑定店铺"
+    if "验证码" in text or "滑块" in text or "风控" in text or "操作过于频繁" in text:
+        return "万相台触发了安全验证，请稍后再试"
+    return text
+
+
+def _run_cli(store: dict, args: list[str], timeout: float = 120) -> tuple[str, str, int]:
+    if not has_profile(store["id"]):
+        raise AlimamaError("该店铺还没有绑定生意参谋/万相台登录，请先点「打开浏览器登录」")
+    if not CLI_SCRIPT.exists():
+        raise AlimamaError("万相台组件缺失，请先更新程序")
+    env = dict(_ENV)
+    env["ALIMAMA_COOKIE_FILE"] = str(profile_path(store["id"]))
+    cmd = [str(PYTHON), str(CLI_SCRIPT), *args]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+            cwd=str(CLI_DIR),
+        )
+    except FileNotFoundError as exc:
+        raise AlimamaError(f"无法启动 Python：{exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise AlimamaError("万相台请求超时，请稍后再试") from exc
+    return proc.stdout or "", proc.stderr or "", proc.returncode or 0
+
+
+def _run_json(store: dict, args: list[str], timeout: float = 120) -> dict:
+    out, err, code = _run_cli(store, args, timeout=timeout)
+    if code != 0:
+        text = (err or out or "").strip().replace("\n", "；")
+        raise AlimamaError(_friendly(text))
+    try:
+        return json.loads(out)
+    except ValueError as exc:
+        raise AlimamaError("万相台返回异常，请稍后再试") from exc
+
+
+def _num(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def check_access(store: dict) -> dict:
+    """验证该店铺登录态能否访问万相台。"""
+    out, err, code = _run_cli(store, ["doctor"], timeout=60)
+    if code != 0:
+        raise AlimamaError(_friendly((err or out or "").strip()))
+    return {"ok": True, "store_id": store["id"], "store_name": store["name"]}
+
+
+def fetch_scene_daily(store: dict, start: str, end: str) -> list[dict]:
+    """拉取各推广场景按天的数据（展现/点击/花费/成交/ROI 等）。"""
+    payload = _run_json(
+        store, ["scene-daily", "--date", start, "--end-date", end, "--raw"]
+    )
+    scenes = payload.get("scenes") or {}
+    out: list[dict] = []
+    for key, wrapper in scenes.items():
+        if not isinstance(wrapper, dict):
+            continue
+        for row in wrapper.get("list") or []:
+            if not isinstance(row, dict):
+                continue
+            out.append(
+                {
+                    "scene": key,
+                    "scene_name": SCENE_NAMES.get(key, key),
+                    "date": row.get("thedate") or row.get("startTime") or "",
+                    "impressions": int(_num(row.get("adPv"))),
+                    "clicks": int(_num(row.get("click"))),
+                    "ctr": round(_num(row.get("ctr")) * 100, 2),
+                    "spend": round(_num(row.get("charge")), 2),
+                    "sales": round(_num(row.get("alipayInshopAmt")), 2),
+                    "roi": round(_num(row.get("roi")), 2),
+                    "orders": int(_num(row.get("alipayInshopNum"))),
+                    "add_cart": int(_num(row.get("cartInshopNum") or row.get("colCartNum"))),
+                    "conversion_rate": round(_num(row.get("cvr")) * 100, 2),
+                }
+            )
+    return out
+
+
+def fetch_plan_snapshots(store: dict) -> list[dict]:
+    """拉取三个推广场景的当前计划快照（计划名/日预算/出价/状态）。"""
+    plans: list[dict] = []
+    for key in ("crowd", "keyword", "wholesite"):
+        payload = _run_json(store, [f"promo-{key}", "--limit", "100", "--raw"])
+        for c in (payload.get("data") or {}).get("list") or []:
+            if not isinstance(c, dict):
+                continue
+            plans.append(
+                {
+                    "scene": key,
+                    "scene_name": SCENE_NAMES.get(key, key),
+                    "campaign_id": str(c.get("campaignId") or ""),
+                    "plan_name": c.get("campaignName") or "",
+                    "day_budget": round(_num(c.get("dayBudget")), 2),
+                    "bid_type": c.get("bidType") or c.get("constraintType") or "",
+                    "bid_value": round(_num(c.get("constraintValue")), 2),
+                    "status": "在投" if c.get("onlineStatus") == 1 else "暂停",
+                    "gmt_create": c.get("gmtCreate") or "",
+                }
+            )
+    return plans
+
+
+def fetch_plan_reports(store: dict, start: str, end: str) -> list[dict]:
+    """拉取计划维度报表（各计划的花费/成交/ROI/点击）。"""
+    payload = _run_json(
+        store, ["report-campaign", "--date", start, "--end-date", end, "--limit", "100", "--raw"]
+    )
+    out: list[dict] = []
+    for r in (payload.get("data") or {}).get("list") or []:
+        if not isinstance(r, dict):
+            continue
+        out.append(
+            {
+                "campaign_id": str(r.get("campaignId") or ""),
+                "plan_name": r.get("promotionName") or "",
+                "spend": round(_num(r.get("charge")), 2),
+                "sales": round(_num(r.get("alipayInshopAmt")), 2),
+                "roi": round(_num(r.get("roi")), 2),
+                "clicks": int(_num(r.get("click"))),
+            }
+        )
+    return out
