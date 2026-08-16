@@ -355,10 +355,19 @@ export type AnalyticsForecast = {
 
 export type AnalyticsReport = {
   date: string;
-  today: AnalyticsBucket;
-  yesterday: AnalyticsBucket;
+  is_today: boolean;
+  today: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number };
+  yesterday: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number };
+  last_week: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number };
   promo_today: { spend: number; sales: number; roi: number };
   promo_yesterday: { spend: number; sales: number; roi: number };
+  promo_today_scenes: { scene: string; scene_name: string; spend: number; sales: number; roi: number }[];
+  promo_yesterday_scenes: { scene: string; scene_name: string; spend: number; sales: number; roi: number }[];
+  top_today: { item_id: string; item_title: string; image?: string; sales: number; orders: number }[];
+  top_yesterday: { item_id: string; item_title: string; image?: string; sales: number; orders: number }[];
+  add_cart: number;
+  refund_amount: number;
+  report_alerts: { level: string; type: string; message: string }[];
   goal: number;
   month_sales: number;
   month: string;

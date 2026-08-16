@@ -84,13 +84,54 @@ async def _realtime_sync_loop() -> None:
         await asyncio.sleep(180)
 
 
+def _run_report_push_once() -> None:
+    """定时推送经营日报：到点且已启用推送时，生成日报文本发到群机器人。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        from datetime import datetime
+
+        from backend.app.api.analytics import (
+            _report_push_config,
+            _report_text_lines,
+            daily_report,
+            send_report_webhook,
+        )
+
+        cfg = _report_push_config(conn)
+        if not cfg.get("enabled") or not cfg.get("webhook"):
+            return
+        now = datetime.now()
+        if now.hour == int(cfg.get("hour") or 0) and now.minute == int(cfg.get("minute") or 0):
+            report = daily_report(date="", store_id=None, user=None, db=conn)
+            text = "\n".join(_report_text_lines(report))
+            send_report_webhook(cfg["webhook"], text)
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+async def _report_push_loop() -> None:
+    """日报推送循环：每分钟检查一次是否到点。"""
+    await asyncio.sleep(25)
+    while True:
+        try:
+            await asyncio.to_thread(_run_report_push_once)
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
+    push_task = asyncio.create_task(_report_push_loop())
     yield
     task.cancel()
     realtime_task.cancel()
+    push_task.cancel()
 
 
 def create_app() -> FastAPI:
