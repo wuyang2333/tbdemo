@@ -343,7 +343,8 @@ export function AnalyticsProductsPage() {
               onMouseLeave: () => setHoverKey((k) => (k === record.item_id ? null : k)),
             })}
             pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
-            scroll={{ x: 1400 }}
+            tableLayout="fixed"
+            scroll={{ x: isRealtime ? 1220 : 1310 }}
           />
         </Card>
       )}
