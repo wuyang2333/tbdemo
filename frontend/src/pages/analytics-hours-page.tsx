@@ -7,6 +7,7 @@ import http, { getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
+import { LineChart } from "../components/promotions/promotions-ui";
 import type { AnalyticsHourPoint, AnalyticsHours } from "../types";
 
 const { Text } = Typography;
@@ -32,6 +33,25 @@ const METRIC_OPTIONS = [
 
 type MetricKey = "sales" | "visitors" | "orders" | "conversion_rate";
 
+const HOURS_CFG_KEY = "analytics_hours_cfg_v1";
+function readHoursConfig() {
+  try {
+    const raw = localStorage.getItem(HOURS_CFG_KEY);
+    if (raw) {
+      const c = JSON.parse(raw);
+      return {
+        quick: typeof c.quick === "string" ? c.quick : "today",
+        metric: (["sales", "visitors", "orders", "conversion_rate"].includes(c.metric) ? c.metric : "sales") as MetricKey,
+        scene: typeof c.scene === "string" ? c.scene : "all",
+        compare: typeof c.compare === "boolean" ? c.compare : true,
+        comparePromo: typeof c.comparePromo === "boolean" ? c.comparePromo : true,
+        range: Array.isArray(c.range) && c.range.length === 2 ? (c.range as [string, string]) : null,
+      };
+    }
+  } catch {}
+  return { quick: "today", metric: "sales" as MetricKey, scene: "all", compare: true, comparePromo: true, range: null };
+}
+
 function ChangeBadge({ change }: { change: number | null | undefined }) {
   if (change == null) return <span style={{ color: "rgba(128,128,128,0.55)", fontSize: 11 }}>—</span>;
   const up = change >= 0;
@@ -48,13 +68,15 @@ function HourChart({
   height,
   barSlots,
   tooltipFor,
-  peakHour,
+  peakHours = [],
+  anomaly,
 }: {
   items: AnalyticsHourPoint[];
   height: number;
   barSlots: (item: AnalyticsHourPoint, idx: number) => React.ReactNode;
   tooltipFor: (item: AnalyticsHourPoint, idx: number) => React.ReactNode;
-  peakHour?: string;
+  peakHours?: string[];
+  anomaly?: (item: AnalyticsHourPoint, idx: number) => React.ReactNode;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const n = items.length || 1;
@@ -94,7 +116,10 @@ function HourChart({
               transition: "background 0.15s",
             }}
           >
-            {peakHour === it.hour && <div style={{ fontSize: 9, color: "#fa8c16", lineHeight: 1 }}>★</div>}
+            {peakHours.includes(it.hour) && (
+              <div style={{ fontSize: 9, color: peakHours[0] === it.hour ? "#fa8c16" : "rgba(128,128,128,0.55)", lineHeight: 1 }}>★</div>
+            )}
+            {anomaly ? anomaly(it, idx) : null}
             <div style={{ width: "100%", flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center" }}>
               {barSlots(it, idx)}
             </div>
@@ -131,13 +156,14 @@ function HourChart({
 export function AnalyticsHoursPage() {
   const [data, setData] = useState<AnalyticsHours | null>(null);
   const [lastUpdated, setLastUpdated] = useState("");
-  const [quick, setQuick] = useState("today");
-  const [range, setRange] = useState<[string, string] | null>(null);
+  const [cfgInit] = useState(readHoursConfig);
+  const [quick, setQuick] = useState(cfgInit.quick);
+  const [range, setRange] = useState<[string, string] | null>(cfgInit.range);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
-  const [compare, setCompare] = useState(true);
-  const [comparePromo, setComparePromo] = useState(true);
-  const [metric, setMetric] = useState<MetricKey>("sales");
-  const [scene, setScene] = useState("all");
+  const [compare, setCompare] = useState(cfgInit.compare);
+  const [comparePromo, setComparePromo] = useState(cfgInit.comparePromo);
+  const [metric, setMetric] = useState<MetricKey>(cfgInit.metric);
+  const [scene, setScene] = useState(cfgInit.scene);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -187,6 +213,11 @@ export function AnalyticsHoursPage() {
     load(storeId);
   }, [load, storeId]);
   useAutoRefresh(() => load(storeId));
+  useEffect(() => {
+    try {
+      localStorage.setItem(HOURS_CFG_KEY, JSON.stringify({ quick, range, metric, scene, compare, comparePromo }));
+    } catch {}
+  }, [quick, range, metric, scene, compare, comparePromo]);
 
   const syncHourly = async () => {
     setSyncing(true);
@@ -268,9 +299,11 @@ export function AnalyticsHoursPage() {
   const maxPrevMetric = Math.max(1, ...(data?.prev_items ?? []).map((_, idx) => metricPrev(idx)));
   const metricCycle = (it: AnalyticsHourPoint) =>
     metric === "sales" ? it.sales_cycle : metric === "visitors" ? it.visitors_cycle : metric === "orders" ? it.orders_cycle : it.conversion_cycle;
-  const metricPeakHour = items.length ? items.reduce((a, b) => (metricValue(b) > metricValue(a) ? b : a)).hour : undefined;
   const metricLabel = ({ sales: "销售额", visitors: "访客", orders: "订单", conversion_rate: "转化率" } as Record<MetricKey, string>)[metric];
   const fmtMetric = (v: number) => (metric === "sales" ? fmtMoney(v) : metric === "conversion_rate" ? `${v.toFixed(2)}%` : fmtInt(v));
+  const topMetricHours = [...items].sort((a, b) => metricValue(b) - metricValue(a)).slice(0, 3).map((p) => p.hour);
+  const topRoiHours = [...promoItems].filter((p) => p.promo_roi > 0).sort((a, b) => b.promo_roi - a.promo_roi).slice(0, 3).map((p) => p.hour);
+  const badHours = items.filter((p) => p.promo_spend > 0 && p.promo_roi < 1).map((p) => p.hour);
 
   return (
     <div>
@@ -357,6 +390,46 @@ export function AnalyticsHoursPage() {
             ))}
           </div>
 
+          {items.length > 0 && (
+            <Card variant="borderless" title="建议投放时段" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+              <Space wrap>
+                <Text type="secondary">推广ROI≥2，建议投放：</Text>
+                {data?.recommended_hours && data.recommended_hours.length > 0 ? (
+                  data.recommended_hours.map((h) => (
+                    <Tag key={h} color="green">{h}</Tag>
+                  ))
+                ) : (
+                  <Tag>暂无（推广数据未同步或本期 ROI 均低于 2）</Tag>
+                )}
+              </Space>
+              {badHours.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <Space wrap>
+                    <Text type="secondary">ROI&lt;1，建议停投：</Text>
+                    {badHours.map((h) => (
+                      <Tag key={h} color="red">{h}</Tag>
+                    ))}
+                  </Space>
+                </div>
+              )}
+            </Card>
+          )}
+
+          <Card variant="borderless" title="分时转化率曲线（成交 ÷ 访客）" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+            <LineChart
+              labels={items.map((p) => p.hour.slice(0, 2))}
+              series={[
+                { name: "转化率", color: "#1677ff", values: items.map((p) => p.conversion_rate), format: (v: number) => `${v.toFixed(2)}%` },
+              ]}
+            />
+            {items.length > 0 && (
+              <Space style={{ marginTop: 8 }} wrap>
+                <Tag color="#1677ff">转化率最高 {items.reduce((a, b) => (b.conversion_rate > a.conversion_rate ? b : a)).hour}</Tag>
+                <Tag>转化率最低 {items.reduce((a, b) => (b.conversion_rate < a.conversion_rate ? b : a)).hour}</Tag>
+              </Space>
+            )}
+          </Card>
+
           <Card
             variant="borderless"
             title={`24 小时 ${metricLabel}分布`}
@@ -371,7 +444,14 @@ export function AnalyticsHoursPage() {
             <HourChart
               items={items}
               height={190}
-              peakHour={metricPeakHour}
+              peakHours={topMetricHours}
+              anomaly={(it) => {
+                const c = it.sales_cycle;
+                if (c == null) return null;
+                if (c <= -50) return <div title={`销售额环比 ${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff4d4f", marginBottom: 1 }} />;
+                if (c >= 100) return <div title={`销售额环比 +${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#fa8c16", marginBottom: 1 }} />;
+                return null;
+              }}
               barSlots={(it, idx) => {
                 const prev = metricPrev(idx);
                 return (
@@ -399,7 +479,9 @@ export function AnalyticsHoursPage() {
             <Space style={{ marginTop: 8 }}>
               <Tag color="var(--ops-accent)">{metricLabel}</Tag>
               {compare && <Tag>上期{metricLabel}</Tag>}
-              <Tag color="#fa8c16">★ {metricLabel}最高</Tag>
+              <Tag color="#fa8c16">★ 前3高峰</Tag>
+              <Tag color="#ff4d4f">● 环比骤降≥50%</Tag>
+              <Tag color="#fa8c16">● 环比暴涨≥100%</Tag>
             </Space>
           </Card>
 
@@ -417,7 +499,7 @@ export function AnalyticsHoursPage() {
             <HourChart
               items={promoItems}
               height={170}
-              peakHour={promoItems.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
+              peakHours={topRoiHours}
               barSlots={(it, idx) => {
                 const prev = data?.prev_promo_items?.[idx];
                 const prevRoi = prev && prev.spend ? prev.sales / prev.spend : 0;
@@ -457,7 +539,7 @@ export function AnalyticsHoursPage() {
               <Tag color="#fa8c16">ROI 1~2 橙</Tag>
               <Tag color="#ff4d4f">ROI&lt;1 红</Tag>
               {comparePromo && <Tag>上期ROI 灰</Tag>}
-              <Tag color="#fa8c16">★ ROI 最高</Tag>
+              <Tag color="#fa8c16">★ ROI 前3</Tag>
             </Space>
           </Card>
 
