@@ -817,6 +817,77 @@ def push_report_now(
     return {"ok": True}
 
 
+def _build_analysis_context(r: dict) -> str:
+    t, y = r["today"], r["yesterday"]
+    pt, py = r["promo_today"], r["promo_yesterday"]
+    real_roi = t["sales"] / pt["spend"] if pt["spend"] else 0.0
+    prev_real_roi = y["sales"] / py["spend"] if py["spend"] else 0.0
+    lines = [
+        f"日期：{r['date']}",
+        f"访客 {t['visitors']}（前日 {y['visitors']}）｜销售额 ¥{t['sales']:,.0f}（前日 ¥{y['sales']:,.0f}）｜订单 {t['orders']}｜转化率 {t['conversion_rate']}%｜客单价 ¥{t['avg_order_value']:,.0f}｜真实ROI {real_roi:.2f}（前日 {prev_real_roi:.2f}）",
+    ]
+    if r.get("add_cart"):
+        lines.append(f"加购 {r['add_cart']} 次")
+    lines.append(f"推广：花费 ¥{pt['spend']:,.0f}，成交 ¥{pt['sales']:,.0f}，推广ROI {pt['roi']:.2f}，真实ROI {real_roi:.2f}")
+    for x in r["promo_today_scenes"]:
+        lines.append(f"场景 {x['scene_name']}：花费 ¥{x['spend']:,.0f}，成交 ¥{x['sales']:,.0f}，ROI {x['roi']:.2f}")
+    if r["top_today"]:
+        lines.append("TOP商品：" + "；".join(f"{x['item_title'][:14]} ¥{x['sales']:,.0f}" for x in r["top_today"][:3]))
+    if r["report_alerts"]:
+        lines.append("异常：" + "；".join(a["message"] for a in r["report_alerts"]))
+    return "\n".join(lines)
+
+
+_ANALYSIS_KEYS = ["经营分析", "推广分析", "异常分析", "总结", "今日行动建议"]
+
+
+def _parse_analysis_sections(reply: str) -> dict:
+    import re as _re
+
+    sections = {k: "" for k in _ANALYSIS_KEYS}
+    matches = list(_re.finditer(r"【(.+?)】", reply))
+    for i, m in enumerate(matches):
+        key = m.group(1)
+        if key in sections:
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(reply)
+            sections[key] = reply[start:end].strip()
+    return sections
+
+
+@router.post("/report/analysis")
+def report_analysis(
+    date: str = "",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """AI 详细经营分析：经营分析/推广分析/异常分析/总结/今日行动建议。"""
+    from backend.app.api.model_configs import get_default_config
+    from backend.app.core.ai_client import AIError, chat_completion
+
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    report = daily_report(date=date, store_id=store_id, user=user, db=db)
+    context = _build_analysis_context(report)
+    prompt = (
+        "你是淘宝店铺的资深运营专家。基于下面这份昨日真实经营数据，输出一份详细的经营分析报告。"
+        "严格按格式，每部分独占一段，条目用“- ”开头，务实用数据说话、可执行，不要编造：\n"
+        "【经营分析】2-4句话：整体经营状况（销售额、访客、转化、客单价、真实ROI 及环比），指出趋势和问题\n"
+        "【推广分析】2-4句话：付费推广表现（总花费/成交/ROI/真实ROI、各场景优劣、哪些场景在浪费钱、推广ROI与真实ROI的差异）\n"
+        "【异常分析】逐条列出数据里的异常（商品骤降、ROI偏低计划、转化异常等），说明可能影响\n"
+        "【总结】2-3句话：今天整体状况一句话总结\n"
+        "【今日行动建议】3-5条具体可执行的建议（调预算、停投/加投场景、优化哪些商品、补货/定价等），落到具体场景或商品\n\n"
+        + context
+    )
+    try:
+        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=180.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"sections": _parse_analysis_sections(reply), "reply": reply, "date": report["date"]}
+
+
 @router.get("/export")
 def export_analytics(
     days: int = 14,

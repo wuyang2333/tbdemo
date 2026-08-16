@@ -32,6 +32,8 @@ export function AnalyticsReportPage() {
   const [pushCfg, setPushCfg] = useState({ enabled: false, webhook: "", hour: 9, minute: 0 });
   const [pushSaving, setPushSaving] = useState(false);
   const [pushTesting, setPushTesting] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string } } | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -140,6 +142,26 @@ export function AnalyticsReportPage() {
       message.error(getApiErrorMessage(error));
     } finally {
       setPushTesting(false);
+    }
+  };
+
+  const runAnalysis = async () => {
+    setAnalysisLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (date) params.set("date", date);
+      if (storeId) params.set("store_id", String(storeId));
+      const { data: res } = await http.post<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string } }>(
+        `/analytics/report/analysis?${params.toString()}`,
+        undefined,
+        { timeout: 180000 }
+      );
+      setAnalysisResult(res);
+      message.success("分析已生成");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAnalysisLoading(false);
     }
   };
 
@@ -282,6 +304,51 @@ export function AnalyticsReportPage() {
 
           <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
             <Text style={{ whiteSpace: "pre-line" }}>{buildText()}</Text>
+          </Card>
+
+          <Card
+            variant="borderless"
+            title="AI 经营分析"
+            style={{ boxShadow: "var(--ops-shadow-sm)", marginTop: 16 }}
+            extra={
+              !analysisLoading && !analysisResult ? (
+                <Button type="primary" icon={<RobotOutlined />} onClick={runAnalysis}>生成分析</Button>
+              ) : undefined
+            }
+          >
+            {analysisLoading ? (
+              <div style={{ textAlign: "center", padding: 40 }}><Spin tip="AI 正在结合昨日数据生成经营分析…" /></div>
+            ) : analysisResult ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                {[
+                  { key: "经营分析" as const, color: "var(--ops-accent-light)", bg: "var(--ops-accent-soft)" },
+                  { key: "推广分析" as const, color: "#1677ff", bg: "rgba(22,119,255,0.08)" },
+                  { key: "异常分析" as const, color: "#ff4d4f", bg: "rgba(255,77,79,0.08)" },
+                  { key: "总结" as const, color: "#52c41a", bg: "rgba(82,196,26,0.08)" },
+                  { key: "今日行动建议" as const, color: "#fa8c16", bg: "rgba(250,140,22,0.08)" },
+                ].map((sec) =>
+                  analysisResult.sections[sec.key] ? (
+                    <div key={sec.key} style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "12px 14px", background: sec.bg }}>
+                      <Text strong style={{ color: sec.color }}>{sec.key}</Text>
+                      <div style={{ fontSize: 13, lineHeight: 1.9, marginTop: 6, color: "var(--ops-text)", whiteSpace: "pre-wrap" }}>
+                        {analysisResult.sections[sec.key]}
+                      </div>
+                    </div>
+                  ) : null
+                )}
+                <div style={{ marginTop: 4 }}>
+                  <Button icon={<CopyOutlined />} onClick={() => {
+                    const txt = `【经营日报 ${data?.date} AI分析】\n` + Object.entries(analysisResult.sections).map(([k, v]) => (v ? `【${k}】\n${v}` : "")).filter(Boolean).join("\n\n");
+                    navigator.clipboard.writeText(txt);
+                    message.success("分析已复制");
+                  }}>复制分析</Button>
+                </div>
+              </div>
+            ) : (
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                基于昨日真实数据（生意参谋 + 万相台），AI 生成经营分析、推广分析、异常分析、总结和今日行动建议。点右上角「生成分析」。
+              </Text>
+            )}
           </Card>
         </>
       )}
