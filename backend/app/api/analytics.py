@@ -363,6 +363,26 @@ def analytics_linkage(
 
 # ---------- 区间对比 ----------
 
+class GoalIn(BaseModel):
+    goal: float = 0
+    month: str = ""
+
+
+def _current_month() -> str:
+    return date_cls.today().strftime("%Y-%m")
+
+
+def _goal_value(db) -> tuple[float, str]:
+    row = db.execute("SELECT value FROM meta WHERE key = 'analytics_sales_goal'").fetchone()
+    if not row or not row["value"]:
+        return 0.0, _current_month()
+    try:
+        data = _json.loads(row["value"])
+        return float(data.get("goal") or 0), str(data.get("month") or _current_month())
+    except (ValueError, TypeError, AttributeError):
+        return 0.0, _current_month()
+
+
 @router.get("/goal")
 def get_goal(
     user: dict = Depends(get_current_user),
