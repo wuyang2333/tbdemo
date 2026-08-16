@@ -13,6 +13,7 @@ const { Text } = Typography;
 
 const MODE_OPTIONS = [
   { label: "实时", value: "realtime" },
+  { label: "昨天", value: "yesterday" },
   { label: "近 7 天", value: "7" },
   { label: "近 14 天", value: "14" },
   { label: "近 30 天", value: "30" },
@@ -122,6 +123,8 @@ export function AnalyticsProductsPage() {
       const params = new URLSearchParams();
       if (m === "realtime") {
         params.set("mode", "realtime");
+      } else if (m === "yesterday") {
+        params.set("mode", "yesterday");
       } else {
         params.set("mode", "days");
         params.set("days", m);
@@ -145,12 +148,17 @@ export function AnalyticsProductsPage() {
     setSyncing(true);
     try {
       const storeRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>("/stores/sync-all");
-      const itemsUrl = mode === "realtime" ? "/stores/sync-items-realtime" : `/stores/sync-items?days=${mode}`;
+      const itemsUrl =
+        mode === "realtime"
+          ? "/stores/sync-items-realtime"
+          : mode === "yesterday"
+            ? `/stores/sync-items?date=${dayjs().subtract(1, "day").format("YYYY-MM-DD")}`
+            : `/stores/sync-items?days=${mode}`;
       const itemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(itemsUrl);
-      const promoMode = mode === "realtime" ? "realtime" : "7";
+      const promoMode = mode === "realtime" ? "realtime" : mode === "yesterday" ? "yesterday" : "7";
       const promoRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync?mode=${promoMode}`);
       const promoItemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync-items?mode=${mode === "realtime" ? "realtime" : mode}`);
-      const label = mode === "realtime" ? "实时商品" : `近 ${mode} 天商品`;
+      const label = mode === "realtime" ? "实时商品" : mode === "yesterday" ? "昨日商品" : `近 ${mode} 天商品`;
       message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家，推广 ${promoRes.data.ok}/${promoRes.data.total} 家，商品推广 ${promoItemsRes.data.ok}/${promoItemsRes.data.total} 家`);
       [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok), ...promoRes.data.results.filter((r) => !r.ok), ...promoItemsRes.data.results.filter((r) => !r.ok)]
         .slice(0, 3)
@@ -208,6 +216,7 @@ export function AnalyticsProductsPage() {
   };
 
   const isRealtime = mode === "realtime";
+  const isDaysMode = ["7", "14", "30"].includes(mode);
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
   const copyItemId = async (id: string) => {
@@ -308,8 +317,8 @@ export function AnalyticsProductsPage() {
 
       <Space style={{ marginBottom: 12 }} wrap>
         <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setMode(String(v)); }} />
-        {!isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
-        {!isRealtime && daySwitch(Number(mode), (d) => setMode(String(d)))}
+        {isDaysMode && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
+        {isDaysMode && daySwitch(Number(mode), (d) => setMode(String(d)))}
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序
@@ -329,7 +338,7 @@ export function AnalyticsProductsPage() {
       ) : (
         <Card
           variant="borderless"
-          title={isRealtime ? "实时商品榜（今日）" : `商品销售排行 TOP（近 ${mode} 天）`}
+          title={isRealtime ? "实时商品榜（今日）" : isDaysMode ? `商品销售排行 TOP（近 ${mode} 天）` : "昨日商品销售排行"}
           style={{ boxShadow: "var(--ops-shadow-sm)" }}
           extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
         >

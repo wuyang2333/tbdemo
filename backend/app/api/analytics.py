@@ -1367,6 +1367,38 @@ def set_alerts_config(
     return {"ok": True, **cfg}
 # ---------- 商品分析 ----------
 
+def _aggregate_item_rows(rows) -> list[dict]:
+    """把商品每日明细按商品聚合（销售额/订单/买家/访客/转化/加购/退款）。"""
+    prod_map: dict[str, dict] = {}
+    for r in rows:
+        key = r["item_id"]
+        item = prod_map.setdefault(
+            key,
+            {"item_id": key, "item_title": r["item_title"], "image": r["image"] or "", "sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0, "add_cart": 0, "refund_amount": 0.0, "conversion_rate": 0.0, "days": 0, "latest_date": ""},
+        )
+        item["sales"] += r["sales"] or 0
+        item["orders"] += r["orders"] or 0
+        item["buyers"] += r["buyers"] or 0
+        item["visitors"] += r["visitors"] or 0
+        item["pv"] += r["pv"] or 0
+        item["add_cart"] += r["add_cart"] or 0
+        item["refund_amount"] += r["refund_amount"] or 0
+        if r["conversion_rate"]:
+            item["conversion_rate"] = r["conversion_rate"]
+        if r["image"]:
+            item["image"] = r["image"]
+        item["days"] += 1
+        if r["data_date"] > item["latest_date"]:
+            item["latest_date"] = r["data_date"]
+    items = []
+    for item in prod_map.values():
+        item["sales"] = round(item["sales"], 2)
+        item["refund_amount"] = round(item["refund_amount"], 2)
+        item["conversion_rate"] = round(item["buyers"] / item["visitors"] * 100, 2) if item["visitors"] else 0.0
+        items.append(item)
+    return items
+
+
 def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
     """给商品列表附加推广数据（promo_spend/promo_sales/promo_roi/promo_share）。"""
     rows = db.execute(
@@ -1443,6 +1475,21 @@ def analytics_products(
         ).fetchone()
         return {"items": items, "total": len(items), "days": 0, "mode": "realtime", "fetched_at": fetched["m"] if fetched and fetched["m"] else None}
 
+    if mode == "yesterday":
+        sf, sp = _store_filter(store_id)
+        ys = (date_cls.today() - timedelta(days=1)).isoformat()
+        rows = db.execute(
+            "SELECT * FROM store_item_daily WHERE data_date = ?" + sf,
+            [ys] + sp,
+        ).fetchall()
+        items = _aggregate_item_rows(rows)
+        items.sort(key=lambda x: x["sales"], reverse=True)
+        total_sales = sum(x["sales"] for x in items) or 1
+        for item in items[:20]:
+            item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+        _attach_promo(db, items, "yesterday", sf, sp)
+        return {"items": items[:50], "total": len(items), "days": 1, "mode": "yesterday"}
+
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
@@ -1451,33 +1498,7 @@ def analytics_products(
         "SELECT * FROM store_item_daily WHERE data_date >= ? AND data_date <= ?" + sf,
         [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
-    prod_map: dict[str, dict] = {}
-    for r in rows:
-        key = r["item_id"]
-        item = prod_map.setdefault(
-            key,
-            {"item_id": key, "item_title": r["item_title"], "image": r["image"] or "", "sales": 0.0, "orders": 0, "buyers": 0, "visitors": 0, "pv": 0, "add_cart": 0, "refund_amount": 0.0, "conversion_rate": 0.0, "days": 0, "latest_date": ""},
-        )
-        item["sales"] += r["sales"] or 0
-        item["orders"] += r["orders"] or 0
-        item["buyers"] += r["buyers"] or 0
-        item["visitors"] += r["visitors"] or 0
-        item["pv"] += r["pv"] or 0
-        item["add_cart"] += r["add_cart"] or 0
-        item["refund_amount"] += r["refund_amount"] or 0
-        if r["conversion_rate"]:
-            item["conversion_rate"] = r["conversion_rate"]
-        if r["image"]:
-            item["image"] = r["image"]
-        item["days"] += 1
-        if r["data_date"] > item["latest_date"]:
-            item["latest_date"] = r["data_date"]
-    items = []
-    for item in prod_map.values():
-        item["sales"] = round(item["sales"], 2)
-        item["refund_amount"] = round(item["refund_amount"], 2)
-        item["conversion_rate"] = round(item["buyers"] / item["visitors"] * 100, 2) if item["visitors"] else 0.0
-        items.append(item)
+    items = _aggregate_item_rows(rows)
     items.sort(key=lambda x: x["sales"], reverse=True)
     total_sales = sum(x["sales"] for x in items) or 1
     for item in items[:20]:
