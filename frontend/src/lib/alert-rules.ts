@@ -33,6 +33,7 @@ export const RULE_FIELDS: Record<RuleModule, RuleField[]> = {
   hour: [
     { key: "sales", label: "销售额", kind: "cycle" },
     { key: "visitors", label: "访客", kind: "cycle" },
+    { key: "orders", label: "订单", kind: "cycle" },
     { key: "conversion_rate", label: "转化率", kind: "value", unit: "%" },
     { key: "promo_spend", label: "推广花费", kind: "value" },
     { key: "promo_roi", label: "推广ROI", kind: "value" },

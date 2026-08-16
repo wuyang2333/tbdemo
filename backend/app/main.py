@@ -123,15 +123,54 @@ async def _report_push_loop() -> None:
         await asyncio.sleep(60)
 
 
+def _run_hourly_push_once() -> None:
+    """小时异常推送：检查上个小时数据，触发规则则推送到微信（pushplus）。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        from backend.app.api.alerts import _hourly_push_config, check_hourly_rules, send_pushplus
+
+        cfg = _hourly_push_config(conn)
+        if not cfg.get("enabled") or not cfg.get("token"):
+            return
+        messages = check_hourly_rules(conn, cfg)
+        if messages:
+            send_pushplus(cfg["token"], "店铺小时异常提醒", "\n".join(messages))
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+async def _hourly_push_loop() -> None:
+    """小时异常检查循环：每个整点过 5 分检查一次上个小时。"""
+    await asyncio.sleep(40)
+    last_key = ""
+    while True:
+        try:
+            from datetime import datetime
+
+            now = datetime.now()
+            key = now.strftime("%Y-%m-%d %H")
+            if now.minute >= 5 and last_key != key:
+                last_key = key
+                await asyncio.to_thread(_run_hourly_push_once)
+        except Exception:
+            pass
+        await asyncio.sleep(60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
     push_task = asyncio.create_task(_report_push_loop())
+    hourly_push_task = asyncio.create_task(_hourly_push_loop())
     yield
     task.cancel()
     realtime_task.cancel()
     push_task.cancel()
+    hourly_push_task.cancel()
 
 
 def create_app() -> FastAPI:

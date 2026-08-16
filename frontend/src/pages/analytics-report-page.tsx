@@ -1,5 +1,5 @@
 import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
+import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, InputNumber, Modal, Row, Select, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
@@ -9,6 +9,7 @@ import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect } from "../components/analytics/analytics-ui";
 import type { AnalyticsReport } from "../types";
 import { buildReportHtml } from "../lib/report-html";
+import { RULE_FIELDS, RULE_OPERATORS, ruleText } from "../lib/alert-rules";
 
 const ANALYSIS_KEY = "report_analysis_cache_v1";
 
@@ -43,6 +44,14 @@ export function AnalyticsReportPage() {
     }
   });
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [hpOpen, setHpOpen] = useState(false);
+  const [hpCfg, setHpCfg] = useState<{ enabled: boolean; token: string; rules: { id: string; field: string; operator: string; threshold: number; enabled: boolean }[] }>({ enabled: false, token: "", rules: [] });
+  const [hpSaving, setHpSaving] = useState(false);
+  const [hpTesting, setHpTesting] = useState(false);
+  const [hpChecking, setHpChecking] = useState(false);
+  const [hpNewField, setHpNewField] = useState<string | undefined>(undefined);
+  const [hpNewOp, setHpNewOp] = useState("cycle_drop_pct");
+  const [hpNewTh, setHpNewTh] = useState(30);
   const analysisKey = `${date || ""}|${storeId || ""}`;
   const currentAnalysis = analysisByDate[analysisKey] || null;
   useEffect(() => {
@@ -189,6 +198,67 @@ export function AnalyticsReportPage() {
   };
 
 
+  const openHp = async () => {
+    setHpOpen(true);
+    try {
+      const { data } = await http.get<{ enabled: boolean; token: string; rules: { id: string; field: string; operator: string; threshold: number; enabled: boolean }[] }>("/alerts/hourly-push-config");
+      setHpCfg(data);
+    } catch {}
+  };
+  const saveHp = async (silent = false) => {
+    setHpSaving(true);
+    try {
+      await http.put("/alerts/hourly-push-config", hpCfg, { timeout: 20000 });
+      if (!silent) {
+        message.success("小时推送设置已保存");
+        setHpOpen(false);
+      }
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+      throw error;
+    } finally {
+      setHpSaving(false);
+    }
+  };
+  const testHp = async () => {
+    setHpTesting(true);
+    try {
+      await saveHp(true);
+      await http.post("/alerts/hourly-push/test", undefined, { timeout: 30000 });
+      message.success("已发送测试消息，请查看微信");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setHpTesting(false);
+    }
+  };
+  const checkHp = async () => {
+    setHpChecking(true);
+    try {
+      await saveHp(true);
+      const { data } = await http.post<{ messages: string[]; pushed: boolean }>("/alerts/hourly-push/check?push=1", undefined, { timeout: 30000 });
+      if (data.messages.length) message.success(`检查到 ${data.messages.length} 条异常，已推送微信`);
+      else message.info("上个小时暂无触发异常的规则");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setHpChecking(false);
+    }
+  };
+  const addHpRule = () => {
+    if (!hpNewField) return;
+    setHpCfg((p) => ({
+      ...p,
+      rules: [...p.rules, { id: `hp_${Date.now()}_${Math.floor(Math.random() * 10000)}`, field: hpNewField, operator: hpNewOp, threshold: Number(hpNewTh), enabled: true }],
+    }));
+    setHpNewField(undefined);
+    setHpNewOp("cycle_drop_pct");
+    setHpNewTh(30);
+  };
+  const updHpRule = (id: string, patch: { enabled?: boolean }) =>
+    setHpCfg((p) => ({ ...p, rules: p.rules.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+  const delHpRule = (id: string) => setHpCfg((p) => ({ ...p, rules: p.rules.filter((r) => r.id !== id) }));
+
   const exportPdf = () => {
     if (!data) return;
     const win = window.open("", "_blank", "width=920,height=1100");
@@ -281,6 +351,7 @@ export function AnalyticsReportPage() {
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
             <Button icon={<SettingOutlined />} onClick={openPush}>推送设置</Button>
+            <Button icon={<SendOutlined />} onClick={openHp}>小时推送</Button>
             <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
             <Button icon={<DownloadOutlined />} onClick={exportPdf}>导出 PDF</Button>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
@@ -435,6 +506,52 @@ export function AnalyticsReportPage() {
             </div>
           </div>
           <Text type="secondary" style={{ fontSize: 12 }}>每天到点自动生成日报并推送到群里；需后端服务保持运行。</Text>
+        </div>
+      </Modal>
+      <Modal
+        title="小时异常推送设置"
+        open={hpOpen}
+        onCancel={() => setHpOpen(false)}
+        onOk={() => saveHp(false)}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={hpSaving}
+        width={560}
+        destroyOnClose
+      >
+        <div style={{ display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>启用</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>开启后每小时自动检查上个小时数据，触发规则推送到微信</span></div>
+            <Switch checked={hpCfg.enabled} onChange={(v) => setHpCfg((p) => ({ ...p, enabled: v }))} checkedChildren="开" unCheckedChildren="关" />
+          </div>
+          <div>
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>pushplus Token</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>pushplus.plus 绑定微信后获取</span></div>
+            <Input placeholder="pushplus token" value={hpCfg.token} onChange={(e) => setHpCfg((p) => ({ ...p, token: e.target.value }))} />
+          </div>
+          <div style={{ borderTop: "1px solid var(--ops-border)", paddingTop: 12 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>小时级推送规则（较昨日同时段 / 阈值）</div>
+            {hpCfg.rules.length === 0 && <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>还没有规则，添加一条试试。</Text>}
+            <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
+              {hpCfg.rules.map((r) => (
+                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", borderRadius: 8, padding: "6px 10px" }}>
+                  <Text style={{ fontSize: 13, flex: 1 }}>{ruleText({ id: r.id, module: "hour", field: r.field, operator: r.operator as "cycle_drop_pct" | "cycle_up_pct" | "lt" | "gt", threshold: r.threshold, enabled: r.enabled })}</Text>
+                  <Switch size="small" checked={r.enabled} onChange={(c) => updHpRule(r.id, { enabled: c })} />
+                  <Button size="small" danger type="text" onClick={() => delHpRule(r.id)}>删除</Button>
+                </div>
+              ))}
+            </div>
+            <Space wrap>
+              <Select size="small" style={{ width: 130 }} placeholder="字段" options={RULE_FIELDS.hour.map((f) => ({ value: f.key, label: f.label }))} value={hpNewField} onChange={setHpNewField} />
+              <Select size="small" style={{ width: 150 }} options={RULE_OPERATORS.map((o) => ({ value: o.value, label: o.label }))} value={hpNewOp} onChange={setHpNewOp} />
+              <InputNumber size="small" style={{ width: 110 }} placeholder="阈值" value={hpNewTh} min={0} onChange={(v) => setHpNewTh(Number(v ?? 0))} />
+              <Button size="small" type="primary" onClick={addHpRule} disabled={!hpNewField}>添加规则</Button>
+            </Space>
+            <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 8 }}>例：销售额 环比跌超 30% → 上个小时销售额较昨日同时段跌超 30% 时推微信</Text>
+          </div>
+          <div style={{ borderTop: "1px solid var(--ops-border)", paddingTop: 12, display: "flex", gap: 10 }}>
+            <Button icon={<SendOutlined />} loading={hpTesting} onClick={testHp}>测试推送</Button>
+            <Button loading={hpChecking} onClick={checkHp}>立即检查上个小时</Button>
+          </div>
         </div>
       </Modal>
     </div>

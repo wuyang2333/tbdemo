@@ -126,3 +126,222 @@ def set_config(
         (json.dumps(cur, ensure_ascii=False),),
     )
     return {"ok": True, **cur}
+
+
+
+# ==================== 小时级异常推送（pushplus → 微信） ====================
+
+HOURLY_FIELDS = {"sales", "visitors", "orders", "conversion_rate", "promo_spend", "promo_roi"}
+HOURLY_LABELS = {
+    "sales": "销售额",
+    "visitors": "访客",
+    "orders": "订单",
+    "conversion_rate": "转化率",
+    "promo_spend": "推广花费",
+    "promo_roi": "推广ROI",
+}
+
+
+def _norm_hourly_rule(r) -> dict | None:
+    if not isinstance(r, dict):
+        return None
+    if r.get("field") not in HOURLY_FIELDS or r.get("operator") not in RULE_OPERATORS:
+        return None
+    try:
+        threshold = float(r.get("threshold") or 0)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "id": str(r.get("id") or ""),
+        "field": r["field"],
+        "operator": r["operator"],
+        "threshold": threshold,
+        "enabled": bool(r.get("enabled", True)),
+    }
+
+
+def _hourly_push_config(db) -> dict:
+    default = {"enabled": False, "token": "", "rules": []}
+    row = db.execute("SELECT value FROM meta WHERE key = 'hourly_push_config'").fetchone()
+    if row and row["value"]:
+        try:
+            data = json.loads(row["value"])
+            default["enabled"] = bool(data.get("enabled", False))
+            default["token"] = str(data.get("token") or "")
+            if isinstance(data.get("rules"), list):
+                default["rules"] = [r for r in (_norm_hourly_rule(x) for x in data["rules"]) if r]
+        except (ValueError, TypeError):
+            pass
+    return default
+
+
+class HourlyPushIn(BaseModel):
+    enabled: bool = False
+    token: str = ""
+    rules: list | None = None
+
+
+@router.get("/hourly-push-config")
+def get_hourly_push_config(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    return _hourly_push_config(db)
+
+
+@router.put("/hourly-push-config")
+def set_hourly_push_config(
+    body: HourlyPushIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = {
+        "enabled": bool(body.enabled),
+        "token": (body.token or "").strip(),
+        "rules": [r for r in (_norm_hourly_rule(x) for x in (body.rules or [])) if r],
+    }
+    db.execute(
+        "INSERT INTO meta (key, value) VALUES ('hourly_push_config', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (json.dumps(cfg, ensure_ascii=False),),
+    )
+    return {"ok": True, **cfg}
+
+
+def send_pushplus(token: str, title: str, content: str) -> None:
+    """通过 pushplus 推送到个人微信。"""
+    import urllib.request
+
+    body = json.dumps({"token": token, "title": title, "content": content, "template": "txt"}).encode("utf-8")
+    req = urllib.request.Request("https://www.pushplus.plus/send", data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        resp.read()
+
+
+def _hpct(cur: float, prev: float):
+    if not prev:
+        return None
+    return round((cur - prev) / prev * 100, 1)
+
+
+def check_hourly_rules(db, cfg: dict | None = None) -> list[str]:
+    """检查上个小时的数据是否触发推送规则，返回触发消息列表（不推送）。"""
+    from datetime import datetime, timedelta
+
+    cfg = cfg or _hourly_push_config(db)
+    rules = [r for r in cfg.get("rules") or [] if r.get("enabled")]
+    if not rules:
+        return []
+    now = datetime.now()
+    prev = now - timedelta(hours=1)
+    date_str = prev.strftime("%Y-%m-%d")
+    hour_str = prev.strftime("%H:00")
+    yest_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    cur_rows = db.execute(
+        "SELECT * FROM store_hourly_data WHERE data_date = ? AND hour = ?", (date_str, hour_str)
+    ).fetchall()
+    prev_rows = db.execute(
+        "SELECT * FROM store_hourly_data WHERE data_date = ? AND hour = ?", (yest_str, hour_str)
+    ).fetchall()
+
+    def _agg(rows):
+        visitors = sum(r["visitors"] or 0 for r in rows)
+        sales = sum(r["sales"] or 0 for r in rows)
+        orders = sum(r["orders"] or 0 for r in rows)
+        return {
+            "visitors": visitors,
+            "sales": round(sales, 2),
+            "orders": orders,
+            "conversion_rate": round(orders / visitors * 100, 2) if visitors else 0.0,
+        }
+
+    cur = _agg(cur_rows)
+    prev = _agg(prev_rows)
+    pcur = db.execute(
+        "SELECT * FROM promo_realtime WHERE data_date = ? AND hour = ?", (date_str, hour_str)
+    ).fetchall()
+    pp = db.execute(
+        "SELECT * FROM promo_realtime WHERE data_date = ? AND hour = ?", (yest_str, hour_str)
+    ).fetchall()
+    p_spend = sum(r["spend"] or 0 for r in pcur)
+    p_sales = sum(r["sales"] or 0 for r in pcur)
+    pp_spend = sum(r["spend"] or 0 for r in pp)
+    pp_sales = sum(r["sales"] or 0 for r in pp)
+    p_roi = round(p_sales / p_spend, 2) if p_spend else 0.0
+    pp_roi = round(pp_sales / pp_spend, 2) if pp_spend else 0.0
+
+    item = {
+        "sales": cur["sales"],
+        "visitors": cur["visitors"],
+        "orders": cur["orders"],
+        "conversion_rate": cur["conversion_rate"],
+        "promo_spend": round(p_spend, 2),
+        "promo_roi": p_roi,
+    }
+    cycle = {
+        "sales": _hpct(cur["sales"], prev["sales"]),
+        "visitors": _hpct(cur["visitors"], prev["visitors"]),
+        "orders": _hpct(cur["orders"], prev["orders"]),
+        "conversion_rate": _hpct(cur["conversion_rate"], prev["conversion_rate"]),
+        "promo_roi": _hpct(p_roi, pp_roi),
+    }
+    messages = []
+    for r in rules:
+        field = r["field"]
+        op = r["operator"]
+        threshold = abs(r["threshold"])
+        label = HOURLY_LABELS.get(field, field)
+        if op == "cycle_drop_pct":
+            v = cycle.get(field)
+            if v is not None and v <= -threshold:
+                messages.append(f"{hour_str} {label}较昨日同时段跌 {abs(v):.0f}%（阈值 {threshold}%）")
+        elif op == "cycle_up_pct":
+            v = cycle.get(field)
+            if v is not None and v >= threshold:
+                messages.append(f"{hour_str} {label}较昨日同时段涨 {v:.0f}%（阈值 {threshold}%）")
+        elif op == "lt":
+            v = item.get(field)
+            if v is not None and v < threshold:
+                val = f"{v:.2f}" if field == "conversion_rate" else f"{v:,.0f}"
+                messages.append(f"{hour_str} {label} {val} 低于阈值 {threshold}")
+        elif op == "gt":
+            v = item.get(field)
+            if v is not None and v > threshold:
+                val = f"{v:.2f}" if field == "conversion_rate" else f"{v:,.0f}"
+                messages.append(f"{hour_str} {label} {val} 超过阈值 {threshold}")
+    return messages
+
+
+@router.post("/hourly-push/test")
+def hourly_push_test(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """测试 pushplus 推送。"""
+    cfg = _hourly_push_config(db)
+    if not cfg.get("token"):
+        raise HTTPException(status_code=400, detail="还没有配置 pushplus token")
+    try:
+        send_pushplus(cfg["token"], "店铺小时异常提醒 - 测试", "这是一条测试消息，收到说明配置成功。")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"推送失败：{exc}") from exc
+    return {"ok": True}
+
+
+@router.post("/hourly-push/check")
+def hourly_push_check(
+    push: int = 0,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """手动检查上个小时的数据（push=1 时同时推送到微信）。"""
+    cfg = _hourly_push_config(db)
+    messages = check_hourly_rules(db, cfg)
+    pushed = False
+    if messages and push and cfg.get("enabled") and cfg.get("token"):
+        try:
+            send_pushplus(cfg["token"], "店铺小时异常提醒", "\n".join(messages))
+            pushed = True
+        except Exception:  # noqa: BLE001
+            pass
+    return {"messages": messages, "pushed": pushed}
