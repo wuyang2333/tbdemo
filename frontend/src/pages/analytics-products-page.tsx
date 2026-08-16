@@ -1,12 +1,12 @@
 import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Col, Empty, Row, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Empty, Segmented, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { LineChart, StoreScopeSelect, daySwitch, fmtInt, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
-import type { AnalyticsProduct, AnalyticsProductDetail, AnalyticsProducts } from "../types";
+import { StoreScopeSelect, daySwitch, fmtInt, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
+import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
 
@@ -19,7 +19,6 @@ const MODE_OPTIONS = [
 
 export function AnalyticsProductsPage() {
   const [data, setData] = useState<AnalyticsProducts | null>(null);
-  const [detail, setDetail] = useState<AnalyticsProductDetail | null>(null);
   const [mode, setMode] = useState("realtime");
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -28,7 +27,6 @@ export function AnalyticsProductsPage() {
   const load = useCallback(async (m: string, sid?: number) => {
     setLoading(true);
     setData(null);
-    setDetail(null);
     try {
       const params = new URLSearchParams();
       if (m === "realtime") {
@@ -70,17 +68,6 @@ export function AnalyticsProductsPage() {
     }
   };
 
-  const openDetail = async (item: AnalyticsProduct) => {
-    const params = new URLSearchParams({ days: String(mode === "realtime" ? 7 : Number(mode)) });
-    if (storeId) params.set("store_id", String(storeId));
-    try {
-      const { data: res } = await http.get<AnalyticsProductDetail>(`/analytics/products/${encodeURIComponent(item.item_id)}?${params.toString()}`);
-      setDetail({ ...res, item_title: item.item_title || res.item_title });
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    }
-  };
-
   const isRealtime = mode === "realtime";
   const columns: TableColumnsType<AnalyticsProduct> = [
     ...(isRealtime
@@ -92,23 +79,24 @@ export function AnalyticsProductsPage() {
             render: (v: string, row) =>
               row.live ? <Tag color="green">今日实时</Tag> : <Tag>{String(v)}</Tag>,
           },
-          { title: "商品", dataIndex: "item_title", width: 250, ellipsis: true },
+          { title: "商品", dataIndex: "item_title", width: 260, ellipsis: true },
           { title: "访客", dataIndex: "visitors", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "浏览量", dataIndex: "pv", align: "right", width: 80, render: (v: number) => fmtInt(v) },
           { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
           { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
           { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => fmtPct(v) },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 70, render: (v: number) => fmtInt(v) },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "商品", dataIndex: "item_title", width: 280, ellipsis: true },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 100, render: (v: number) => fmtMoney(v) },
-          { title: "销量", dataIndex: "orders", align: "right", width: 70, render: (v: number) => fmtInt(v) },
-          { title: "买家", dataIndex: "buyers", align: "right", width: 70, render: (v: number) => fmtInt(v) },
-          { title: "访客", dataIndex: "visitors", align: "right", width: 80, render: (v: number) => fmtInt(v) },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 80, render: (v: number) => fmtPct(v) },
-          { title: "加购", dataIndex: "add_cart", align: "right", width: 70, render: (v: number) => fmtInt(v) },
-          { title: "占比", dataIndex: "sales_share", align: "right", width: 70, render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
-          { title: "天数", dataIndex: "days", align: "right", width: 60 },
+          { title: "商品", dataIndex: "item_title", width: 300, ellipsis: true },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 110, render: (v: number) => fmtMoney(v) },
+          { title: "销量", dataIndex: "orders", align: "right", width: 80, render: (v: number) => fmtInt(v) },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 80, render: (v: number) => fmtInt(v) },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 90, render: (v: number) => fmtInt(v) },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 90, render: (v: number) => fmtPct(v) },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 80, render: (v: number) => fmtInt(v) },
+          { title: "占比", dataIndex: "sales_share", align: "right", width: 80, render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "天数", dataIndex: "days", align: "right", width: 70 },
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
@@ -135,10 +123,10 @@ export function AnalyticsProductsPage() {
       />
 
       <Space style={{ marginBottom: 12 }} wrap>
-        <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setDetail(null); setMode(String(v)); }} />
+        <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setMode(String(v)); }} />
         {!isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>统计范围</Text>}
         {!isRealtime && daySwitch(Number(mode), (d) => setMode(String(d)))}
-        {isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>全量商品（含最近一日数据），有今日实时活动的标绿，按销售额排序</Text>}
+        {isRealtime && <Text type="secondary" style={{ fontSize: 12 }}>全量商品今日实时，按销售额排序</Text>}
       </Space>
 
       {loading && !data ? (
@@ -150,48 +138,21 @@ export function AnalyticsProductsPage() {
           <Empty description={`暂无${isRealtime ? "实时" : ""}商品数据，点「${isRealtime ? "同步实时商品" : "同步商品数据"}」抓取`} />
         </Card>
       ) : (
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={13}>
-            <Card
-              variant="borderless"
-              title={isRealtime ? "实时商品榜（今日）" : `商品销售排行 TOP（近 ${mode} 天）`}
-              style={{ boxShadow: "var(--ops-shadow-sm)" }}
-              extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
-            >
-              <Table<AnalyticsProduct>
-                rowKey="item_id"
-                size="small"
-                columns={columns}
-                dataSource={data.items}
-                pagination={{ pageSize: 10, showTotal: () => `共 ${data.total} 个商品` }}
-                scroll={{ x: 880 }}
-                onRow={(record) => ({ onClick: () => openDetail(record), style: { cursor: "pointer" } })}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} lg={11}>
-            <Card
-              variant="borderless"
-              title={detail ? `单品趋势 · ${detail.item_title.slice(0, 24)}${detail.item_title.length > 24 ? "…" : ""}` : "单品趋势"}
-              style={{ boxShadow: "var(--ops-shadow-sm)" }}
-            >
-              {!detail ? (
-                <Empty description="点击左侧商品查看单品每日趋势（含今日实时）" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 24 }} />
-              ) : (
-                <>
-                  <LineChart
-                    labels={detail.series.map((p) => p.date)}
-                    series={[
-                      { name: "销售额", color: "#ff5000", values: detail.series.map((p) => p.sales), format: fmtMoney },
-                      { name: "销量", color: "#1677ff", values: detail.series.map((p) => p.orders) },
-                    ]}
-                  />
-                  <Tag style={{ marginTop: 8 }} color="blue">最后一天为今日实时数据</Tag>
-                </>
-              )}
-            </Card>
-          </Col>
-        </Row>
+        <Card
+          variant="borderless"
+          title={isRealtime ? "实时商品榜（今日）" : `商品销售排行 TOP（近 ${mode} 天）`}
+          style={{ boxShadow: "var(--ops-shadow-sm)" }}
+          extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
+        >
+          <Table<AnalyticsProduct>
+            rowKey="item_id"
+            size="small"
+            columns={columns}
+            dataSource={data.items}
+            pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
+            scroll={{ x: 900 }}
+          />
+        </Card>
       )}
     </div>
   );
