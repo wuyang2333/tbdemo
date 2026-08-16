@@ -80,13 +80,13 @@ def _run_hourly_sync() -> None:
 
 
 async def _hourly_sync_loop() -> None:
-    """分时自动同步：每 6 小时跑一次，保持今日分时新鲜并积累昨日。"""
+    """实时数据自动同步：每 3 分钟同步一次推广实时分时 + 店铺分时（今日/昨日），保持实时数据新鲜。"""
     while True:
         try:
             await asyncio.to_thread(_run_hourly_sync)
         except Exception:
             pass
-        await asyncio.sleep(21600)
+        await asyncio.sleep(180)
 
 
 @asynccontextmanager
