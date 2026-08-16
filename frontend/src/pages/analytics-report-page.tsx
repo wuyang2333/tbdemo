@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsReport } from "../types";
@@ -36,6 +37,7 @@ export function AnalyticsReportPage() {
   useEffect(() => {
     load();
   }, [load]);
+  useAutoRefresh(load);
 
   const { syncing, syncAll } = useSyncStores(load);
 

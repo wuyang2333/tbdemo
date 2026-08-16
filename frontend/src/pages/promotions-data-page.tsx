@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { LineChart, MODE_OPTIONS, SceneTable, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoData } from "../types";
@@ -32,6 +33,7 @@ export function PromotionsDataPage() {
   useEffect(() => {
     load(mode);
   }, [mode, load]);
+  useAutoRefresh(() => load(mode));
 
   const sync = async () => {
     setSyncing(true);

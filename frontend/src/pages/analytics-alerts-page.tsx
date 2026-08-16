@@ -4,6 +4,7 @@ import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { ChangeBadge, StoreScopeSelect, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsAlert, AnalyticsAlertsConfig } from "../types";
@@ -33,6 +34,7 @@ export function AnalyticsAlertsPage() {
   useEffect(() => {
     load();
   }, [load]);
+  useAutoRefresh(load);
 
   const { syncing, syncAll } = useSyncStores(load);
 

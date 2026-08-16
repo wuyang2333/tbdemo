@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { BucketCard, StoreBars, StoreScopeSelect, TrendChart, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsSummary } from "../types";
@@ -33,6 +34,7 @@ export function AnalyticsOverviewPage() {
   useEffect(() => {
     load();
   }, [load]);
+  useAutoRefresh(load);
 
   const { syncing, syncAll } = useSyncStores(load);
   const [syncingHistory, setSyncingHistory] = useState(false);

@@ -23,12 +23,13 @@ import {
   UserSwitchOutlined,
 } from "@ant-design/icons";
 import { Button, Col, Row, Space, Tag, Typography } from "antd";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import http from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useAuth } from "../lib/auth";
 import { BRAND } from "../lib/brand";
 import { canAccessModule, MAIN_MODULES, MODULES } from "../lib/modules";
@@ -106,20 +107,15 @@ export function DashboardPage() {
   const displayName = user?.nickname || user?.username || "运营者";
   const quickModules = MAIN_MODULES.filter((module) => canAccessModule(user, module.id));
 
-  useEffect(() => {
-    let cancelled = false;
-    http
-      .get<DashboardStats>("/dashboard")
-      .then((response) => {
-        if (!cancelled) setStats(response.data);
-      })
-      .catch(() => {
-        if (!cancelled) setStatsFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
+  const loadStats = useCallback(async () => {
+    try {
+      const { data } = await http.get<DashboardStats>("/dashboard");
+      setStats(data);
+    } catch {
+      setStatsFailed(true);
+    }
   }, []);
+  useAutoRefresh(loadStats);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);

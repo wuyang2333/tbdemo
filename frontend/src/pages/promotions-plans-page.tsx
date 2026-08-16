@@ -4,6 +4,7 @@ import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { MODE_OPTIONS, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoPlan } from "../types";
@@ -33,6 +34,7 @@ export function PromotionsPlansPage() {
   useEffect(() => {
     load(scene, mode);
   }, [scene, mode, load]);
+  useAutoRefresh(() => load(scene, mode));
 
   const periodTitle = mode === "realtime" ? "实时" : mode === "yesterday" ? "昨天" : "近七天";
   const sync = async () => {

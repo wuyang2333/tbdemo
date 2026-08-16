@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
 import type { AnalyticsHourPoint, AnalyticsHours } from "../types";
@@ -183,6 +184,7 @@ export function AnalyticsHoursPage() {
   useEffect(() => {
     load(storeId);
   }, [load, storeId]);
+  useAutoRefresh(() => load(storeId));
 
   const syncHourly = async () => {
     setSyncing(true);

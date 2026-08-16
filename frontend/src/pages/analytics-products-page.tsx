@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
 import type { AnalyticsProduct, AnalyticsProducts } from "../types";
@@ -146,7 +147,6 @@ export function AnalyticsProductsPage() {
       return;
     }
     setLoading(true);
-    setData(null);
     try {
       const params = new URLSearchParams();
       if (view === "realtime") {
@@ -172,6 +172,7 @@ export function AnalyticsProductsPage() {
   useEffect(() => {
     load();
   }, [load]);
+  useAutoRefresh(load);
 
   const syncAll = async () => {
     setSyncing(true);
