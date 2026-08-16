@@ -68,14 +68,25 @@ const ANALYTICS_CHILDREN = [
   { key: "/analytics/alerts", label: "异常提醒" },
 ];
 
+const PROMOTIONS_CHILDREN = [
+  { key: "/promotions/data", label: "推广数据" },
+  { key: "/promotions/plans", label: "推广计划" },
+];
+
+const SUBMENU_ITEMS: Record<string, { key: string; label: string }[]> = {
+  analytics: ANALYTICS_CHILDREN,
+  promotions: PROMOTIONS_CHILDREN,
+};
+
 function toItems(modules: ModuleMeta[]): MenuProps["items"] {
   return modules.map((module) => {
-    if (module.id === "analytics") {
+    const children = SUBMENU_ITEMS[module.id];
+    if (children) {
       return {
-        key: "/analytics",
+        key: `/${module.id}`,
         icon: ICONS[module.icon],
         label: module.name,
-        children: ANALYTICS_CHILDREN,
+        children,
       };
     }
     return {
@@ -113,16 +124,18 @@ export function AppShell() {
   const { stores, currentStore, setCurrent } = useStores();
   const [collapsed, setCollapsed] = useState(false);
   const [keyword, setKeyword] = useState("");
-  const [openKeys, setOpenKeys] = useState<string[]>(() =>
-    location.pathname.startsWith("/analytics") ? ["analytics"] : []
-  );
+  const [openKeys, setOpenKeys] = useState<string[]>(() => {
+    const seg = location.pathname.split("/")[1];
+    return seg === "analytics" || seg === "promotions" ? [seg] : [];
+  });
   const backendOk = useBackendStatus();
 
   const current = getModule(location.pathname.split("/")[1] || "");
   const selectedKeys = [location.pathname];
   useEffect(() => {
-    if (location.pathname.startsWith("/analytics")) {
-      setOpenKeys((keys) => (keys.includes("analytics") ? keys : [...keys, "analytics"]));
+    const seg = location.pathname.split("/")[1];
+    if (seg === "analytics" || seg === "promotions") {
+      setOpenKeys((keys) => (keys.includes(seg) ? keys : [...keys, seg]));
     }
   }, [location.pathname]);
   const siderWidth = collapsed ? 72 : 236;

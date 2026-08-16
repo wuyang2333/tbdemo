@@ -20,6 +20,7 @@ import {
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
@@ -352,8 +353,13 @@ function PromoPlansTab({
   );
 }
 
+const VALID_TABS = ["data", "plans"];
+
 export function PromotionsPage() {
-  const [active, setActive] = useState("data");
+  const navigate = useNavigate();
+  const { tab } = useParams<{ tab?: string }>();
+  const validTab = tab && VALID_TABS.includes(tab) ? tab : "data";
+  const [active, setActive] = useState(validTab);
   const [data, setData] = useState<PromoData | null>(null);
   const [plans, setPlans] = useState<PromoPlan[]>([]);
   const [mode, setMode] = useState("realtime");
@@ -361,6 +367,10 @@ export function PromotionsPage() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    setActive(validTab);
+  }, [validTab]);
 
   const loadData = useCallback(async (m: string) => {
     const { data: res } = await http.get<PromoData>(`/promotions/data?mode=${encodeURIComponent(m)}`);
@@ -438,7 +448,10 @@ export function PromotionsPage() {
       <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
         <Tabs
           activeKey={active}
-          onChange={setActive}
+          onChange={(key) => {
+            setActive(String(key));
+            navigate(`/promotions/${key}`, { replace: true });
+          }}
           items={[
             {
               key: "data",

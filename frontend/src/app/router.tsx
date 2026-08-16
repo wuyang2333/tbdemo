@@ -108,8 +108,9 @@ export function AppRouter() {
             </RequireModule>
           }
         />
+        <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
         <Route
-          path="/promotions"
+          path="/promotions/:tab"
           element={
             <RequireModule id="promotions">
               <PromotionsPage />
