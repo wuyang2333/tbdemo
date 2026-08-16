@@ -382,6 +382,8 @@ export type AnalyticsHourPoint = {
   promo_roi: number;
   visitors_cycle?: number | null;
   sales_cycle?: number | null;
+  orders_cycle?: number | null;
+  conversion_cycle?: number | null;
 };
 
 export type AnalyticsHours = {
@@ -390,8 +392,13 @@ export type AnalyticsHours = {
   end: string;
   label: string;
   items: AnalyticsHourPoint[];
-  prev_items: { hour: string; visitors: number; sales: number }[];
+  prev_items: { hour: string; visitors: number; sales: number; orders: number; conversion_rate: number }[];
   prev_promo_items: { hour: string; spend: number; sales: number }[];
+  promo_by_scene: Record<
+    string,
+    { scene: string; scene_name: string; items: Record<string, { spend: number; sales: number; roi: number }> }
+  >;
+  recommended_hours: string[];
   summary: {
     visitors: number;
     pv: number;
@@ -410,6 +417,8 @@ export type AnalyticsHours = {
     promo_spend: number;
     promo_sales: number;
     promo_roi: number;
+    sales_pct: number;
+    visitors_pct: number;
   }[];
   peak_hour: string;
   peak_sales: number;

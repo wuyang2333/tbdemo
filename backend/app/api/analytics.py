@@ -1330,16 +1330,7 @@ def _promo_hours_agg(db, sf, sp, start: date_cls, end: date_cls) -> dict[str, di
     return out
 
 
-@router.get("/hours")
-def analytics_hours(
-    date: str = "",
-    start: str = "",
-    end: str = "",
-    store_id: int | None = None,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    """时段分析：支持单日或日期区间，叠加推广分时、环比与时段分组。"""
+def _resolve_hours_range(date: str, start: str, end: str) -> tuple[date_cls, date_cls]:
     today = date_cls.today()
     if start and end:
         try:
@@ -1354,13 +1345,32 @@ def analytics_hours(
         s = e = d
     else:
         s = e = today
-    sf, sp = _store_filter(store_id)
+    return s, e
 
+
+def _hours_dataset(db, sf, sp, s: date_cls, e: date_cls) -> dict:
+    """聚合某日期区间的时段数据：24h指标 + 推广分时 + 环比 + 分段占比 + 按场景。"""
+    today = date_cls.today()
     hour_map = _hours_agg(db, sf, sp, s, e)
     promo_map = _promo_hours_agg(db, sf, sp, s, e)
     prev_end = s - timedelta(days=1)
     prev_start = prev_end - timedelta(days=(e - s).days)
     prev_hour_map = _hours_agg(db, sf, sp, prev_start, prev_end)
+    prev_promo_map = _promo_hours_agg(db, sf, sp, prev_start, prev_end)
+
+    scene_rows = db.execute(
+        "SELECT scene, scene_name, hour, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_realtime "
+        "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY scene, hour",
+        [s.isoformat(), e.isoformat()] + sp,
+    ).fetchall()
+    promo_by_scene: dict[str, dict] = {}
+    for r in scene_rows:
+        sc = promo_by_scene.setdefault(r["scene"], {"scene": r["scene"], "scene_name": r["scene_name"] or r["scene"], "items": {}})
+        sc["items"][r["hour"]] = {"spend": round(r["spend"] or 0, 2), "sales": round(r["sales"] or 0, 2)}
+    for sc in promo_by_scene.values():
+        for h in range(24):
+            it = sc["items"].setdefault(f"{h:02d}:00", {"spend": 0.0, "sales": 0.0})
+            it["roi"] = round(it["sales"] / it["spend"], 2) if it["spend"] else 0.0
 
     items: list[dict] = []
     for h in range(24):
@@ -1378,23 +1388,36 @@ def analytics_hours(
         prev = prev_hour_map.get(key)
         row["visitors_cycle"] = round((row["visitors"] - prev["visitors"]) / prev["visitors"] * 100, 1) if prev and prev["visitors"] else None
         row["sales_cycle"] = round((row["sales"] - prev["sales"]) / prev["sales"] * 100, 1) if prev and prev["sales"] else None
+        row["orders_cycle"] = round((row["orders"] - prev["orders"]) / prev["orders"] * 100, 1) if prev and prev["orders"] else None
+        row["conversion_cycle"] = round(row["conversion_rate"] - (round(prev["buyers"] / prev["visitors"] * 100, 2) if prev and prev["visitors"] else 0.0), 2) if prev and prev["visitors"] else None
         items.append(row)
 
+    total_visitors = sum(i["visitors"] for i in items)
+    total_sales = sum(i["sales"] for i in items)
     summary = {
-        "visitors": sum(i["visitors"] for i in items),
+        "visitors": total_visitors,
         "pv": sum(i["pv"] for i in items),
-        "sales": round(sum(i["sales"] for i in items), 2),
+        "sales": round(total_sales, 2),
         "orders": sum(i["orders"] for i in items),
         "promo_spend": round(sum(i["promo_spend"] for i in items), 2),
         "promo_sales": round(sum(i["promo_sales"] for i in items), 2),
     }
     summary["promo_roi"] = round(summary["promo_sales"] / summary["promo_spend"], 2) if summary["promo_spend"] else 0.0
 
-    prev_items = [
-        {"hour": f"{h:02d}:00", "visitors": (prev_hour_map.get(f"{h:02d}:00") or {}).get("visitors", 0), "sales": (prev_hour_map.get(f"{h:02d}:00") or {}).get("sales", 0)}
-        for h in range(24)
-    ]
-    prev_promo_map = _promo_hours_agg(db, sf, sp, prev_start, prev_end)
+    def _prev_point(h: int) -> dict:
+        key = f"{h:02d}:00"
+        pm = prev_hour_map.get(key)
+        if not pm:
+            return {"hour": key, "visitors": 0, "sales": 0.0, "orders": 0, "conversion_rate": 0.0}
+        return {
+            "hour": key,
+            "visitors": pm["visitors"],
+            "sales": pm["sales"],
+            "orders": pm["orders"],
+            "conversion_rate": round(pm["buyers"] / pm["visitors"] * 100, 2) if pm["visitors"] else 0.0,
+        }
+
+    prev_items = [_prev_point(h) for h in range(24)]
     prev_promo_items = [
         {"hour": f"{h:02d}:00", "spend": (prev_promo_map.get(f"{h:02d}:00") or {}).get("spend", 0), "sales": (prev_promo_map.get(f"{h:02d}:00") or {}).get("sales", 0)}
         for h in range(24)
@@ -1414,15 +1437,20 @@ def analytics_hours(
         seg["promo_spend"] = round(seg["promo_spend"], 2)
         seg["promo_sales"] = round(seg["promo_sales"], 2)
         seg["promo_roi"] = round(seg["promo_sales"] / seg["promo_spend"], 2) if seg["promo_spend"] else 0.0
+        seg["sales_pct"] = round(seg["sales"] / total_sales * 100, 1) if total_sales else 0.0
+        seg["visitors_pct"] = round(seg["visitors"] / total_visitors * 100, 1) if total_visitors else 0.0
         segments.append(seg)
 
     peak = max(items, key=lambda x: x["sales"]) if items else {"hour": "", "sales": 0}
+    recommended_hours = [it["hour"] for it in items if it["promo_spend"] > 0 and it["promo_roi"] >= 2]
+
     if s == e == today:
         label = "今日"
     elif s == e == today - timedelta(days=1):
         label = "昨日"
     else:
         label = f"{s.strftime('%m-%d')} ~ {e.strftime('%m-%d')}"
+
     return {
         "date": s.isoformat(),
         "start": s.isoformat(),
@@ -1433,8 +1461,77 @@ def analytics_hours(
         "prev_promo_items": prev_promo_items,
         "summary": summary,
         "segments": segments,
+        "promo_by_scene": promo_by_scene,
+        "recommended_hours": recommended_hours,
         "peak_hour": peak["hour"],
         "peak_sales": peak["sales"],
+    }
+
+
+@router.get("/hours")
+def analytics_hours(
+    date: str = "",
+    start: str = "",
+    end: str = "",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """时段分析：支持单日或日期区间，叠加推广分时、环比与时段分组。"""
+    s, e = _resolve_hours_range(date, start, end)
+    sf, sp = _store_filter(store_id)
+    return _hours_dataset(db, sf, sp, s, e)
+
+
+def _build_hours_prompt(d: dict) -> str:
+    summary = d["summary"]
+    lines = [
+        f"数据范围：{d['label']}",
+        f"访客 {summary['visitors']}，销售额 {summary['sales']:.0f} 元，订单 {summary['orders']}，推广花费 {summary['promo_spend']:.0f} 元，推广成交 {summary['promo_sales']:.0f} 元，推广ROI {summary['promo_roi']}",
+        "逐小时（访客/销售额/推广花费/ROI）：" + "、".join(
+            f"{it['hour']}:{it['visitors']}/{it['sales']:.0f}/{it['promo_spend']:.0f}/{it['promo_roi']}"
+            for it in d["items"]
+        ),
+        "时段分组：" + "、".join(f"{seg['name']}销售{seg['sales']:.0f}占{seg['sales_pct']}%" for seg in d["segments"]),
+    ]
+    if d["recommended_hours"]:
+        lines.append("推广ROI≥2 且有花费的时段：" + "、".join(d["recommended_hours"]))
+    prompt = (
+        "你是淘宝店铺的运营数据分析师。根据以下分时数据输出时段经营解读，严格按格式：\n"
+        "【整体表现】一句话概括（含销售额、访客、推广ROI关键数字）\n"
+        "【高峰】\n- 高峰时段及原因推测（最多2条）\n"
+        "【风险】\n- 时段上的问题（最多2条，如某时段推广ROI过低、转化差）\n"
+        "【建议】\n- 具体可执行的投放/运营建议，明确写\"几点到几点建议投/停投\"（最多3条）\n"
+        "简体中文务实，金额≥1万用X.X万简化；只依据给定数据。\n\n"
+        + "\n".join(lines)
+    )
+    return prompt
+
+
+@router.post("/hours/insight")
+def hours_ai_insight(
+    start: str = "",
+    end: str = "",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    s, e = _resolve_hours_range("", start, end)
+    sf, sp = _store_filter(store_id)
+    d = _hours_dataset(db, sf, sp, s, e)
+    try:
+        reply = chat_completion(cfg, [{"role": "user", "content": _build_hours_prompt(d)}], timeout=120.0)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "sections": _parse_insight_sections(reply),
+        "reply": reply,
+        "range": d["label"],
+        "recommended_hours": d["recommended_hours"],
+        "summary": d["summary"],
     }
 
 

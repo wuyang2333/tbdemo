@@ -1,5 +1,5 @@
-import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, DatePicker, Empty, Segmented, Space, Spin, Switch, Tag, Typography, message } from "antd";
+import { BarChartOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, DatePicker, Drawer, Empty, Segmented, Space, Spin, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
@@ -21,6 +21,15 @@ const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
   { label: "昨日", value: [dayjs().subtract(1, "day").startOf("day"), dayjs().subtract(1, "day").endOf("day")] },
   { label: "过去7天", value: [dayjs().subtract(6, "day").startOf("day"), dayjs().endOf("day")] },
 ];
+
+const METRIC_OPTIONS = [
+  { label: "销售额", value: "sales" },
+  { label: "访客", value: "visitors" },
+  { label: "订单", value: "orders" },
+  { label: "转化率", value: "conversion_rate" },
+];
+
+type MetricKey = "sales" | "visitors" | "orders" | "conversion_rate";
 
 function ChangeBadge({ change }: { change: number | null | undefined }) {
   if (change == null) return <span style={{ color: "rgba(128,128,128,0.55)", fontSize: 11 }}>—</span>;
@@ -125,8 +134,17 @@ export function AnalyticsHoursPage() {
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [compare, setCompare] = useState(true);
   const [comparePromo, setComparePromo] = useState(true);
+  const [metric, setMetric] = useState<MetricKey>("sales");
+  const [scene, setScene] = useState("all");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState<{
+    sections: { overall: string; highlights: string[]; risks: string[]; suggestions: string[] };
+    range: string;
+    recommended_hours: string[];
+  } | null>(null);
 
   const load = useCallback(
     async (sid?: number) => {
@@ -184,13 +202,72 @@ export function AnalyticsHoursPage() {
     }
   };
 
+  const runAI = async () => {
+    setAiOpen(true);
+    setAiLoading(true);
+    setAiResult(null);
+    try {
+      let s: string;
+      let e: string;
+      if (range) {
+        s = range[0];
+        e = range[1];
+      } else if (quick === "yesterday") {
+        const y = dayjs().subtract(1, "day");
+        s = y.format("YYYY-MM-DD");
+        e = y.format("YYYY-MM-DD");
+      } else if (quick === "7") {
+        s = dayjs().subtract(6, "day").format("YYYY-MM-DD");
+        e = dayjs().format("YYYY-MM-DD");
+      } else {
+        s = dayjs().format("YYYY-MM-DD");
+        e = dayjs().format("YYYY-MM-DD");
+      }
+      const params = new URLSearchParams({ start: s, end: e });
+      if (storeId) params.set("store_id", String(storeId));
+      const { data: res } = await http.post(`/analytics/hours/insight?${params.toString()}`);
+      setAiResult(res);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const items = data?.items ?? [];
+  const sceneMap = data?.promo_by_scene ?? {};
+  const sceneOptions = [
+    { label: "全部", value: "all" },
+    ...Object.keys(sceneMap).map((k) => ({ label: sceneMap[k].scene_name || k, value: k })),
+  ];
+  const promoItems = items.map((it) => {
+    if (scene === "all" || !sceneMap[scene]) return it;
+    const si = sceneMap[scene].items[it.hour] || { spend: 0, sales: 0, roi: 0 };
+    return { ...it, promo_spend: si.spend, promo_sales: si.sales, promo_roi: si.roi };
+  });
+
   const maxVisitors = Math.max(1, ...items.map((p) => p.visitors));
   const maxSales = Math.max(1, ...items.map((p) => p.sales));
-  const maxPrev = Math.max(1, ...(data?.prev_items ?? []).map((p) => p.sales));
-  const maxPromo = Math.max(1, ...items.map((p) => p.promo_spend));
+  const maxOrders = Math.max(1, ...items.map((p) => p.orders));
+  const maxConv = Math.max(0.01, ...items.map((p) => p.conversion_rate));
+  const maxPromo = Math.max(1, ...promoItems.map((p) => p.promo_spend));
+  const maxRoi = Math.max(0, ...promoItems.map((p) => p.promo_roi));
   const maxPrevPromo = Math.max(1, ...(data?.prev_promo_items ?? []).map((p) => p.spend));
-  const maxRoi = Math.max(0, ...items.map((p) => p.promo_roi));
+
+  const metricValue = (it: AnalyticsHourPoint) =>
+    metric === "sales" ? it.sales : metric === "visitors" ? it.visitors : metric === "orders" ? it.orders : it.conversion_rate;
+  const metricMax = metric === "sales" ? maxSales : metric === "visitors" ? maxVisitors : metric === "orders" ? maxOrders : maxConv;
+  const metricPrev = (idx: number) => {
+    const p = data?.prev_items?.[idx];
+    if (!p) return 0;
+    return metric === "sales" ? p.sales : metric === "visitors" ? p.visitors : metric === "orders" ? p.orders : p.conversion_rate;
+  };
+  const maxPrevMetric = Math.max(1, ...(data?.prev_items ?? []).map((_, idx) => metricPrev(idx)));
+  const metricCycle = (it: AnalyticsHourPoint) =>
+    metric === "sales" ? it.sales_cycle : metric === "visitors" ? it.visitors_cycle : metric === "orders" ? it.orders_cycle : it.conversion_cycle;
+  const metricPeakHour = items.length ? items.reduce((a, b) => (metricValue(b) > metricValue(a) ? b : a)).hour : undefined;
+  const metricLabel = ({ sales: "销售额", visitors: "访客", orders: "订单", conversion_rate: "转化率" } as Record<MetricKey, string>)[metric];
+  const fmtMetric = (v: number) => (metric === "sales" ? fmtMoney(v) : metric === "conversion_rate" ? `${v.toFixed(2)}%` : fmtInt(v));
 
   return (
     <div>
@@ -201,6 +278,9 @@ export function AnalyticsHoursPage() {
         extra={
           <Space wrap>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
+            <Button icon={<RobotOutlined />} onClick={runAI}>
+              AI 时段解读
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => load(storeId)}>
               刷新
             </Button>
@@ -275,44 +355,47 @@ export function AnalyticsHoursPage() {
 
           <Card
             variant="borderless"
-            title="24 小时 访客 / 销售额分布"
+            title={`24 小时 ${metricLabel}分布`}
             style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
             extra={
-              <Switch checked={compare} onChange={setCompare} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
+              <Space wrap>
+                <Segmented size="small" options={METRIC_OPTIONS} value={metric} onChange={(v) => setMetric(String(v) as MetricKey)} />
+                <Switch checked={compare} onChange={setCompare} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
+              </Space>
             }
           >
             <HourChart
               items={items}
               height={190}
-              peakHour={data.peak_hour}
+              peakHour={metricPeakHour}
               barSlots={(it, idx) => {
-                const prev = data?.prev_items?.[idx]?.sales ?? 0;
+                const prev = metricPrev(idx);
                 return (
                   <>
                     {compare && (
-                      <div style={{ width: "28%", height: `${(prev / maxPrev) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prev ? 2 : 0 }} />
+                      <div style={{ width: "40%", height: `${(prev / maxPrevMetric) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prev ? 2 : 0 }} />
                     )}
-                    <div style={{ width: "28%", height: `${(it.visitors / maxVisitors) * 100}%`, background: "linear-gradient(180deg, #ff8a3d, #ff5000)", borderRadius: "4px 4px 0 0", minHeight: it.visitors ? 2 : 0 }} />
-                    <div style={{ width: "28%", height: `${(it.sales / maxSales) * 100}%`, background: "linear-gradient(180deg, #73d13d, #389e0d)", borderRadius: "4px 4px 0 0", minHeight: it.sales ? 2 : 0 }} />
+                    <div style={{ width: "40%", height: `${(metricValue(it) / metricMax) * 100}%`, background: "linear-gradient(180deg, #ff8a3d, #ff5000)", borderRadius: "4px 4px 0 0", minHeight: metricValue(it) ? 2 : 0 }} />
                   </>
                 );
               }}
               tooltipFor={(it, idx) => (
                 <>
                   <b>{it.hour}</b>
-                  <div>访客 {fmtInt(it.visitors)} · 销售 {fmtMoney(it.sales)}</div>
-                  {compare && <div>上期销售 {fmtMoney(data?.prev_items?.[idx]?.sales ?? 0)}</div>}
                   <div>
-                    销售环比 <ChangeBadge change={it.sales_cycle} />
+                    {metricLabel} {fmtMetric(metricValue(it))}
+                  </div>
+                  {compare && <div>上期 {metricLabel} {fmtMetric(metricPrev(idx))}</div>}
+                  <div>
+                    环比 <ChangeBadge change={metricCycle(it)} />
                   </div>
                 </>
               )}
             />
             <Space style={{ marginTop: 8 }}>
-              <Tag color="var(--ops-accent)">访客</Tag>
-              <Tag color="#52c41a">销售额</Tag>
-              {compare && <Tag>上期销售额</Tag>}
-              <Tag color="#fa8c16">★ 销售高峰</Tag>
+              <Tag color="var(--ops-accent)">{metricLabel}</Tag>
+              {compare && <Tag>上期{metricLabel}</Tag>}
+              <Tag color="#fa8c16">★ {metricLabel}最高</Tag>
             </Space>
           </Card>
 
@@ -321,13 +404,16 @@ export function AnalyticsHoursPage() {
             title="24 小时 推广花费 / ROI"
             style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
             extra={
-              <Switch checked={comparePromo} onChange={setComparePromo} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
+              <Space wrap>
+                <Segmented size="small" options={sceneOptions} value={scene} onChange={(v) => setScene(String(v))} />
+                <Switch checked={comparePromo} onChange={setComparePromo} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
+              </Space>
             }
           >
             <HourChart
-              items={items}
+              items={promoItems}
               height={170}
-              peakHour={items.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
+              peakHour={promoItems.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
               barSlots={(it, idx) => {
                 const prevSpend = data?.prev_promo_items?.[idx]?.spend ?? 0;
                 return (
@@ -371,9 +457,9 @@ export function AnalyticsHoursPage() {
                     {seg.name} <Text type="secondary" style={{ fontSize: 11 }}>{seg.hours}</Text>
                   </Text>
                   <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.9, color: "var(--ops-text-secondary)" }}>
-                    销售 {fmtMoney(seg.sales)}
+                    销售 {fmtMoney(seg.sales)}（占{seg.sales_pct}%）
                     <br />
-                    访客 {fmtInt(seg.visitors)} · 订单 {seg.orders}
+                    访客 {fmtInt(seg.visitors)}（占{seg.visitors_pct}%）· 订单 {seg.orders}
                     <br />
                     推广花费 {fmtMoney(seg.promo_spend)} · ROI {seg.promo_roi.toFixed(2)}
                   </div>
@@ -403,6 +489,71 @@ export function AnalyticsHoursPage() {
           </Card>
         </>
       )}
+
+      <Drawer
+        title="AI 时段解读"
+        width={520}
+        open={aiOpen}
+        onClose={() => setAiOpen(false)}
+        destroyOnClose
+      >
+        {aiLoading ? (
+          <div style={{ textAlign: "center", padding: 60 }}>
+            <Spin tip="AI 正在分析时段数据…" />
+          </div>
+        ) : aiResult ? (
+          <div>
+            <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+              解读范围：{aiResult.range}
+            </Text>
+            {aiResult.recommended_hours.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>建议投放时段（推广ROI≥2）</div>
+                <Space wrap>
+                  {aiResult.recommended_hours.map((h) => (
+                    <Tag key={h} color="green">
+                      {h}
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+            {aiResult.sections.overall && (
+              <div style={{ padding: "12px 14px", borderRadius: 10, background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
+                <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{aiResult.sections.overall}</Text>
+              </div>
+            )}
+            <div style={{ display: "grid", gap: 8 }}>
+              {aiResult.sections.highlights.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "#52c41a" }}>高峰</Text>
+                  {aiResult.sections.highlights.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+              {aiResult.sections.risks.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "#ff4d4f" }}>风险</Text>
+                  {aiResult.sections.risks.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+              {aiResult.sections.suggestions.length > 0 && (
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-accent-light)" }}>建议</Text>
+                  {aiResult.sections.suggestions.map((it, i) => (
+                    <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <Empty description="生成失败或暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
+        )}
+      </Drawer>
     </div>
   );
 }
