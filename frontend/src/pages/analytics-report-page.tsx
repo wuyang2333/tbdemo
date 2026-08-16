@@ -71,7 +71,11 @@ export function AnalyticsReportPage() {
   useEffect(() => {
     load();
   }, [load]);
-  useDailyRefreshAt(load, 9);
+  useDailyRefreshAt(() => {
+    load();
+    // 每天早上 9 点：用完整数据重新生成昨日经营分析和 AI 分析
+    runAnalysis(true, dayjs().subtract(1, "day").format("YYYY-MM-DD"));
+  }, 9);
 
 
   const dayLabel = data?.date === dayjs().format("YYYY-MM-DD") ? "今日" : data?.date === dayjs().subtract(1, "day").format("YYYY-MM-DD") ? "昨日" : (data?.date || "").slice(5) || "";
@@ -161,19 +165,21 @@ export function AnalyticsReportPage() {
     }
   };
 
-  const runAnalysis = async (force = false) => {
-    if (!force && analysisByDate[analysisKey]) return;
+  const runAnalysis = async (force = false, targetDate?: string) => {
+    const d = targetDate ?? date;
+    const key = `${d || ""}|${storeId || ""}`;
+    if (!force && analysisByDate[key]) return;
     setAnalysisLoading(true);
     try {
       const params = new URLSearchParams();
-      if (date) params.set("date", date);
+      if (d) params.set("date", d);
       if (storeId) params.set("store_id", String(storeId));
       const { data: res } = await http.post<{ sections: { 经营分析: string; 推广分析: string; 异常分析: string; 总结: string; 今日行动建议: string }; date: string }>(
         `/analytics/report/analysis?${params.toString()}`,
         undefined,
         { timeout: 180000 }
       );
-      setAnalysisByDate((prev) => ({ ...prev, [analysisKey]: res }));
+      setAnalysisByDate((prev) => ({ ...prev, [key]: res }));
       message.success("分析已生成");
     } catch (error) {
       message.error(getApiErrorMessage(error));
