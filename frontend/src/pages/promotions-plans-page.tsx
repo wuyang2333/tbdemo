@@ -332,9 +332,11 @@ export function PromotionsPlansPage() {
             ) : (
               <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
             )}
-            <Tooltip title={title}>
-              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
-            </Tooltip>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Tooltip title={title}>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+              </Tooltip>
+            </div>
           </div>
         );
       },
@@ -564,6 +566,7 @@ export function PromotionsPlansPage() {
           <Table<PromoPlan>
             rowKey="id"
             size="small"
+            tableLayout="fixed"
             columns={visibleColumns}
             dataSource={filteredPlans}
             onRow={(record) => ({
