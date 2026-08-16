@@ -261,7 +261,21 @@ export function AnalyticsReportPage() {
               allowClear
               placeholder="选择日期回看"
               value={date ? dayjs(date) : null}
-              onChange={(d) => setDate(d ? d.format("YYYY-MM-DD") : null)}
+              disabledDate={(d) => !d || d.isAfter(dayjs().subtract(1, "day"), "day")}
+              onChange={(d) => {
+                const next = d ? d.format("YYYY-MM-DD") : null;
+                if (analysisLoading) {
+                  Modal.confirm({
+                    title: "切换日期",
+                    content: "当前正在生成该日期的 AI 分析，确定要切换日期吗？（正在生成的结果仍会保存）",
+                    okText: "确定切换",
+                    cancelText: "取消",
+                    onOk: () => setDate(next),
+                  });
+                } else {
+                  setDate(next);
+                }
+              }}
             />
             
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
