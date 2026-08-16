@@ -63,7 +63,6 @@ const ICONS: Record<string, ReactNode> = {
 const ANALYTICS_CHILDREN = [
   { key: "/analytics/overview", label: "总览" },
   { key: "/analytics/alerts", label: "异常提醒" },
-  { key: "/analytics/linkage", label: "联动分析" },
   { key: "/analytics/report", label: "经营日报" },
   { key: "/analytics/insight", label: "AI 解读" },
   { key: "/analytics/hours", label: "时段分析" },
