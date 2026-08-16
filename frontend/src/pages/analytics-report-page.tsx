@@ -57,6 +57,8 @@ export function AnalyticsReportPage() {
 
 
   const dayLabel = data?.date === dayjs().format("YYYY-MM-DD") ? "今日" : data?.date === dayjs().subtract(1, "day").format("YYYY-MM-DD") ? "昨日" : (data?.date || "").slice(5) || "";
+  const realRoi = data && data.promo_today.spend > 0 ? data.today.sales / data.promo_today.spend : 0;
+  const prevRealRoi = data && data.promo_yesterday.spend > 0 ? data.yesterday.sales / data.promo_yesterday.spend : 0;
 
   const pct = (cur: number, prev: number): string => {
     if (!prev) return "—";
@@ -79,9 +81,6 @@ export function AnalyticsReportPage() {
     }
     if (data.top_today.length) {
       lines.push("TOP商品：" + data.top_today.slice(0, 3).map((x) => `${x.item_title.slice(0, 12)}${fmt(x.sales)}`).join("、"));
-    }
-    if (data.report_alerts.length) {
-      lines.push("预警：" + data.report_alerts.slice(0, 3).map((a) => a.message).join("；"));
     }
     if (data.goal) lines.push(`${data.month} 目标 ${fmt(data.goal)}，本月已达成 ${fmt(data.month_sales)}`);
     return lines.filter(Boolean).join("\n");
@@ -203,12 +202,6 @@ export function AnalyticsReportPage() {
       </div>
     );
 
-  const weekCompare = (label: string, cur: number, week: number) => (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13 }}>
-      <span style={{ color: "var(--ops-text-secondary)" }}>{label}</span>
-      <span>{fmtInt(cur)} <Text type="secondary" style={{ fontSize: 12 }}>上周 {fmtInt(week)}（{pct(cur, week)}）</Text></span>
-    </div>
-  );
 
   return (
     <div>
@@ -242,17 +235,7 @@ export function AnalyticsReportPage() {
         <Card variant="borderless"><Empty description="暂无数据，先同步店铺与推广数据" /></Card>
       ) : (
         <>
-          {data.report_alerts.length > 0 && (
-            <Card variant="borderless" title="今日预警" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-              <div style={{ display: "grid", gap: 4 }}>
-                {data.report_alerts.map((a, i) => (
-                  <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
-                    {a.level === "error" ? "⚠️ " : "❗ "}[{a.type}] {a.message}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
+
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
@@ -260,7 +243,7 @@ export function AnalyticsReportPage() {
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}订单`} value={data.today.orders} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.orders, data.yesterday.orders)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" valueStyle={{ color: "#1677ff" }} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="复购率" value={data.today.repeat_rate ?? 0} precision={1} suffix="%" valueStyle={{ color: "#52c41a" }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}真实ROI`} value={realRoi} precision={2} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(realRoi, prevRealRoi)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="加购" value={data.add_cart} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{data.add_cart ? "次" : "—"}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" valueStyle={{ color: "#ff4d4f" }} /></Card></Col>
           </Row>
@@ -297,12 +280,6 @@ export function AnalyticsReportPage() {
             <Col xs={24} md={12}>{topCard("前一日 TOP 商品", data.top_yesterday)}</Col>
           </Row>
 
-          <Card variant="borderless" title="较上周同期" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-            {weekCompare("访客", data.today.visitors, data.last_week.visitors)}
-            {weekCompare("销售额", data.today.sales, data.last_week.sales)}
-            {weekCompare("订单", data.today.orders, data.last_week.orders)}
-            {weekCompare("转化率", data.today.conversion_rate, data.last_week.conversion_rate)}
-          </Card>
 
           <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
             <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>月度目标：{data.goal ? `${data.month} 目标 ${fmt(data.goal)}，本月已达成 ${fmt(data.month_sales)}` : "未设置，可到「目标预测」页设置"}</Text>

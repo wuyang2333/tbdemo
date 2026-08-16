@@ -22,16 +22,18 @@ function chgCls(s: string): string {
 export function buildReportHtml(data: AnalyticsReport): string {
   const t = data.today;
   const y = data.yesterday;
-  const w = data.last_week;
   const now = new Date();
   const nowStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
+  const pt = data.promo_today;
+  const py = data.promo_yesterday;
   const metrics = [
     { label: "访客", value: fmtInt(t.visitors), chg: pct(t.visitors, y.visitors) },
     { label: "销售额", value: fmt(t.sales), chg: pct(t.sales, y.sales) },
     { label: "订单", value: fmtInt(t.orders), chg: pct(t.orders, y.orders) },
     { label: "转化率", value: `${t.conversion_rate}%`, chg: pct(t.conversion_rate, y.conversion_rate) },
     { label: "客单价", value: fmt(t.avg_order_value), chg: pct(t.avg_order_value, y.avg_order_value) },
+    { label: "真实ROI", value: `${pt.spend > 0 ? (t.sales / pt.spend).toFixed(2) : "—"}`, chg: pct(t.sales / pt.spend, y.sales / py.spend) },
   ];
   const metricHtml = metrics
     .map(
@@ -44,7 +46,6 @@ export function buildReportHtml(data: AnalyticsReport): string {
     )
     .join("");
 
-  const pt = data.promo_today;
   const sceneRows = data.promo_today_scenes
     .map(
       (s) => `
@@ -69,32 +70,6 @@ export function buildReportHtml(data: AnalyticsReport): string {
     )
     .join("");
 
-  const alertHtml = data.report_alerts
-    .map(
-      (a) => `
-      <div class="alert-item ${a.level === "error" ? "alert-error" : "alert-warn"}">
-        <span class="alert-ico">${a.level === "error" ? "⚠" : "❗"}</span>
-        <span>${esc(a.type)}：${esc(a.message)}</span>
-      </div>`
-    )
-    .join("");
-
-  const weekRows = [
-    ["访客", fmtInt(t.visitors), fmtInt(w.visitors), pct(t.visitors, w.visitors)],
-    ["销售额", fmt(t.sales), fmt(w.sales), pct(t.sales, w.sales)],
-    ["订单", fmtInt(t.orders), fmtInt(w.orders), pct(t.orders, w.orders)],
-    ["转化率", `${t.conversion_rate}%`, `${w.conversion_rate}%`, pct(t.conversion_rate, w.conversion_rate)],
-  ]
-    .map(
-      (r) => `
-      <tr>
-        <td>${r[0]}</td>
-        <td class="num">${r[1]}</td>
-        <td class="num">${r[2]}</td>
-        <td class="num ${chgCls(r[3])}">${r[3]}</td>
-      </tr>`
-    )
-    .join("");
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -169,19 +144,6 @@ export function buildReportHtml(data: AnalyticsReport): string {
     <table>
       <tr><th>#</th><th>商品</th><th class="num">销售额</th><th class="num">订单</th></tr>
       ${topRows || '<tr><td colspan="4">暂无商品数据</td></tr>'}
-    </table>
-  </div>
-
-  ${alertHtml ? `<div class="section">
-    <div class="section-title">今日预警</div>
-    ${alertHtml}
-  </div>` : ""}
-
-  <div class="section">
-    <div class="section-title">较上周同期</div>
-    <table>
-      <tr><th>指标</th><th class="num">本期</th><th class="num">上周同期</th><th class="num">对比</th></tr>
-      ${weekRows}
     </table>
   </div>
 
