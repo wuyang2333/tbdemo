@@ -22,6 +22,7 @@ DEFAULT_ALERT_CONFIG = {
         "visitors_drop_pct": 50.0,
         "conversion_low": 0.5,
         "promo_roi_low": 1.0,
+        "real_roi_low": 1.0,
         "roi_high": 2.0,
         "min_visitors": 50,
     },
