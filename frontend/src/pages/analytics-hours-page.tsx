@@ -331,15 +331,15 @@ export function AnalyticsHoursPage() {
               barSlots={(it, idx) => {
                 const prevSpend = data?.prev_promo_items?.[idx]?.spend ?? 0;
                 return (
-                  <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+                  <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
                     <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
                       {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
                     </div>
-                    <div style={{ flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "70%" }}>
+                    <div style={{ flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "100%" }}>
                       {comparePromo && (
-                        <div style={{ width: "45%", height: `${(prevSpend / maxPrevPromo) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevSpend ? 2 : 0 }} />
+                        <div style={{ width: "28%", height: `${(prevSpend / maxPrevPromo) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevSpend ? 2 : 0 }} />
                       )}
-                      <div style={{ width: "45%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
+                      <div style={{ width: "28%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
                     </div>
                   </div>
                 );
