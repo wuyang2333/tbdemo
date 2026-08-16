@@ -9,4 +9,3 @@ openpyxl
 curl-cffi
 websocket-client
 browser-cookie3
-reportlab
