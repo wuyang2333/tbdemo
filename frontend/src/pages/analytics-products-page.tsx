@@ -102,11 +102,13 @@ export function AnalyticsProductsPage() {
     ...(isRealtime
       ? ([
           {
-            title: "数据",
-            dataIndex: "date_label",
-            width: 90,
-            render: (v: string, row) =>
-              row.live ? <Tag color="green">今日实时</Tag> : <Tag>{String(v)}</Tag>,
+            title: "排名",
+            dataIndex: "rank",
+            width: 70,
+            align: "center",
+            render: (v: number) => (
+              <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span>
+            ),
           },
           { title: "商品", key: "item", width: 320, render: renderItem },
           { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
@@ -117,6 +119,7 @@ export function AnalyticsProductsPage() {
           { title: "加购", dataIndex: "add_cart", align: "right", width: 100, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
+          { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
           { title: "商品", key: "item", width: 340, render: renderItem },
           { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number) => fmtMoney(v) },
           { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number) => fmtInt(v) },
@@ -182,7 +185,7 @@ export function AnalyticsProductsPage() {
             rowKey="item_id"
             size="small"
             columns={columns}
-            dataSource={data.items}
+            dataSource={data.items.map((item, index) => ({ ...item, rank: index + 1 }))}
             pagination={{ pageSize: 20, showTotal: () => `共 ${data.total} 个商品` }}
             scroll={{ x: 900 }}
           />
