@@ -1027,7 +1027,7 @@ def _product_trend_daily(item_id: str, store_id: int | None, days: int, db) -> l
     return [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
 
 
-def _collect_product_data(item_id: str, store_id: int | None, mode: str, db) -> dict:
+def _collect_product_data(item_id: str, store_id: int | None, mode: str, db, start: str = "", end: str = "") -> dict:
     """按模式汇总单个商品的诊断数据。"""
     today = date_cls.today()
     ts = today.isoformat()
@@ -1062,18 +1062,28 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, db) -> 
         range_label = f"今日实时（{ts[5:]}）"
         trend = _product_trend_daily(item_id, store_id, 7, db)
     else:
-        try:
-            days = int(mode)
-        except (TypeError, ValueError):
-            days = 14
-        if not (1 <= days <= 90):
-            days = 14
-        start = today - timedelta(days=days - 1)
-        prev_end = start - timedelta(days=1)
-        prev_start = prev_end - timedelta(days=days - 1)
+        if start and end:
+            try:
+                s = date_cls.fromisoformat(start)
+                e = date_cls.fromisoformat(end)
+            except ValueError:
+                s = e = None
+            if not (s and e and s <= e):
+                s, e = _date_range(int(mode) if str(mode).isdigit() else 14)
+        else:
+            try:
+                days = int(mode)
+            except (TypeError, ValueError):
+                days = 14
+            if not (1 <= days <= 90):
+                days = 14
+            e = today
+            s = today - timedelta(days=days - 1)
+        prev_end = s - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=(e - s).days)
         rows = db.execute(
             "SELECT * FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
-            [item_id, start.isoformat(), today.isoformat()] + sp,
+            [item_id, s.isoformat(), e.isoformat()] + sp,
         ).fetchall()
         prev_rows = db.execute(
             "SELECT * FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf,
@@ -1094,11 +1104,20 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, db) -> 
                 "conversion": round(cur["conversion_rate"] - prev["conversion_rate"], 2) if prev["visitors"] else None,
                 "add_cart": _pct_chg(cur["add_cart"], prev["add_cart"]),
             }
-        rank, share, store_total = _product_rank_days(item_id, store_id, days, db)
-        range_label = f"近 {days} 天（{start.strftime('%m-%d')}~{today.strftime('%m-%d')}）"
+        if start and end:
+            rank, share, store_total = _product_rank_range(item_id, store_id, s, e, db)
+            range_label = f"{s.strftime('%m-%d')} ~ {e.strftime('%m-%d')}"
+        else:
+            rank, share, store_total = _product_rank_days(item_id, store_id, days, db)
+            range_label = f"近 {days} 天（{s.strftime('%m-%d')}~{e.strftime('%m-%d')}）"
         trend = [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
 
-    promo_mode = "realtime" if mode == "realtime" else ("yesterday" if mode == "yesterday" else (str(int(mode)) if str(mode).isdigit() else "7"))
+    if mode == "realtime":
+        promo_mode = "realtime"
+    elif mode == "yesterday":
+        promo_mode = "yesterday"
+    else:
+        promo_mode = _range_promo_mode(s, e)
     prow = db.execute(
         "SELECT * FROM promo_item_stats WHERE item_id = ? AND mode = ?" + sf,
         [item_id, promo_mode] + sp,
@@ -1206,13 +1225,15 @@ def product_ai_insight(
     item_id: str,
     mode: str = "realtime",
     store_id: int | None = None,
+    start: str = "",
+    end: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _collect_product_data(item_id, store_id, mode, db)
+    data = _collect_product_data(item_id, store_id, mode, db, start=start, end=end)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": _build_product_prompt(data)}], timeout=120.0)
     except AIError as exc:
@@ -1231,13 +1252,15 @@ def product_ai_insight(
 def product_ai_insight_chat(
     item_id: str,
     body: ProductChatIn,
+    start: str = "",
+    end: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _collect_product_data(item_id, body.store_id, body.mode, db)
+    data = _collect_product_data(item_id, body.store_id, body.mode, db, start=start, end=end)
     context = (
         "你是淘宝店铺的运营数据分析师。以下是该商品的数据上下文：\n"
         + "\n".join(_product_data_lines(data))
@@ -1422,52 +1445,91 @@ def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
             it["promo_share"] = None
 
 
+def _realtime_product_items(db, sf, sp) -> list[dict]:
+    """今日实时商品列表（实时快照，按销售额排序并算占比）。"""
+    rows = db.execute("SELECT * FROM store_item_realtime WHERE 1=1" + sf, sp).fetchall()
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "item_id": r["item_id"],
+                "item_title": r["item_title"],
+                "image": r["image"],
+                "visitors": r["visitors"] or 0,
+                "pv": r["pv"] or 0,
+                "buyers": r["buyers"] or 0,
+                "orders": r["orders"] or 0,
+                "sales": round(r["sales"] or 0, 2),
+                "conversion_rate": round(r["conversion_rate"] or 0, 2),
+                "add_cart": r["add_cart"] or 0,
+                "refund_amount": round(r["refund_amount"] or 0, 2),
+                "visitors_cycle": round(r["visitors_cycle"] or 0, 2),
+                "pv_cycle": round(r["pv_cycle"] or 0, 2),
+                "buyers_cycle": round(r["buyers_cycle"] or 0, 2),
+                "orders_cycle": round(r["orders_cycle"] or 0, 2),
+                "sales_cycle": round(r["sales_cycle"] or 0, 2),
+                "conversion_cycle": round(r["conversion_cycle"] or 0, 2),
+                "add_cart_cycle": round(r["add_cart_cycle"] or 0, 2),
+                "live": True,
+                "date_label": "今日",
+                "days": 1,
+                "latest_date": date_cls.today().isoformat(),
+            }
+        )
+    items.sort(key=lambda x: x["sales"], reverse=True)
+    total_sales = sum(x["sales"] for x in items) or 1
+    for item in items[:20]:
+        item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+    return items
+
+
+def _range_promo_mode(s: date_cls, e: date_cls) -> str | None:
+    """按日期范围匹配已有的商品推广数据档位（realtime/yesterday/7/14/30），无匹配返回 None。"""
+    today = date_cls.today()
+    if s == e == today:
+        return "realtime"
+    if s == e == today - timedelta(days=1):
+        return "yesterday"
+    length = (e - s).days + 1
+    if length in (7, 14, 30):
+        return str(length)
+    return None
+
+
+def _product_rank_range(item_id: str, store_id: int | None, s: date_cls, e: date_cls, db) -> tuple[int, float, float]:
+    """商品在区间销售榜中的排名、占比与全店区间销售额。"""
+    sf, sp = _store_filter(store_id)
+    rows = db.execute(
+        "SELECT item_id, SUM(sales) AS sales FROM store_item_daily "
+        "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY item_id",
+        [s.isoformat(), e.isoformat()] + sp,
+    ).fetchall()
+    items = sorted(rows, key=lambda r: r["sales"] or 0, reverse=True)
+    store_total = sum(r["sales"] or 0 for r in items)
+    rank = None
+    sales = 0.0
+    for i, r in enumerate(items):
+        if r["item_id"] == item_id:
+            rank = i + 1
+            sales = r["sales"] or 0
+            break
+    share = round(sales / store_total * 100, 1) if store_total else 0.0
+    return (rank or len(items) + 1), share, round(store_total, 2)
+
+
 @router.get("/products")
 def analytics_products(
     days: int = 14,
     mode: str = "days",
     store_id: int | None = None,
+    start: str = "",
+    end: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     if mode == "realtime":
         sf, sp = _store_filter(store_id)
-        rows = db.execute(
-            "SELECT * FROM store_item_realtime WHERE 1=1" + sf,
-            sp,
-        ).fetchall()
-        items = []
-        for r in rows:
-            items.append(
-                {
-                    "item_id": r["item_id"],
-                    "item_title": r["item_title"],
-                    "image": r["image"],
-                    "visitors": r["visitors"] or 0,
-                    "pv": r["pv"] or 0,
-                    "buyers": r["buyers"] or 0,
-                    "orders": r["orders"] or 0,
-                    "sales": round(r["sales"] or 0, 2),
-                    "conversion_rate": round(r["conversion_rate"] or 0, 2),
-                    "add_cart": r["add_cart"] or 0,
-                    "refund_amount": round(r["refund_amount"] or 0, 2),
-                    "visitors_cycle": round(r["visitors_cycle"] or 0, 2),
-                    "pv_cycle": round(r["pv_cycle"] or 0, 2),
-                    "buyers_cycle": round(r["buyers_cycle"] or 0, 2),
-                    "orders_cycle": round(r["orders_cycle"] or 0, 2),
-                    "sales_cycle": round(r["sales_cycle"] or 0, 2),
-                    "conversion_cycle": round(r["conversion_cycle"] or 0, 2),
-                    "add_cart_cycle": round(r["add_cart_cycle"] or 0, 2),
-                    "live": True,
-                    "date_label": "今日",
-                    "days": 1,
-                    "latest_date": date_cls.today().isoformat(),
-                }
-            )
-        items.sort(key=lambda x: x["sales"], reverse=True)
-        total_sales = sum(x["sales"] for x in items) or 1
-        for item in items[:20]:
-            item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
+        items = _realtime_product_items(db, sf, sp)
         _attach_promo(db, items, "realtime", sf, sp)
         fetched = db.execute(
             "SELECT MAX(updated_at) AS m FROM store_item_realtime" + (" WHERE 1=1" + sf),
@@ -1492,19 +1554,32 @@ def analytics_products(
 
     if not (1 <= days <= 90):
         days = 14
-    start, today = _date_range(days)
+    if start and end:
+        try:
+            s = date_cls.fromisoformat(start)
+            e = date_cls.fromisoformat(end)
+        except ValueError:
+            s = e = None
+        if not (s and e and s <= e):
+            s, e = _date_range(days)
+    else:
+        s, e = _date_range(days)
     sf, sp = _store_filter(store_id)
     rows = db.execute(
         "SELECT * FROM store_item_daily WHERE data_date >= ? AND data_date <= ?" + sf,
-        [start.isoformat(), today.isoformat()] + sp,
+        [s.isoformat(), e.isoformat()] + sp,
     ).fetchall()
     items = _aggregate_item_rows(rows)
+    if not items and s == e == date_cls.today():
+        items = _realtime_product_items(db, sf, sp)
+        _attach_promo(db, items, "realtime", sf, sp)
+        return {"items": items[:50], "total": len(items), "days": 1, "mode": "days", "range": f"{s.isoformat()}~{e.isoformat()}", "today_fallback": True}
     items.sort(key=lambda x: x["sales"], reverse=True)
     total_sales = sum(x["sales"] for x in items) or 1
     for item in items[:20]:
         item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
-    _attach_promo(db, items, str(days), sf, sp)
-    return {"items": items[:50], "total": len(items), "days": days, "mode": "days"}
+    _attach_promo(db, items, _range_promo_mode(s, e), sf, sp)
+    return {"items": items[:50], "total": len(items), "days": (e - s).days + 1, "mode": "days", "range": f"{s.isoformat()}~{e.isoformat()}"}
 
 
 @router.get("/products/{item_id}")

@@ -637,17 +637,32 @@ def sync_hourly(
 def sync_items(
     date: str = "",
     days: int = 1,
+    start: str = "",
+    end: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """同步商品销售排行到 store_item_daily：单日（date）或近 N 天（days，默认昨天起往前）。"""
+    """同步商品销售排行到 store_item_daily：单日（date）/ 近 N 天（days）/ 自定义区间（start~end）。"""
     from datetime import date as date_cls
     from backend.app.core.sycm import SycmError, fetch_item_sales
 
     if not (1 <= days <= 30):
         days = 1
     today = date_cls.today()
-    if date:
+    if start and end:
+        try:
+            s = date_cls.fromisoformat(start)
+            e = date_cls.fromisoformat(end)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="日期格式不正确（应为 YYYY-MM-DD）") from exc
+        if s > e:
+            s, e = e, s
+        dates = []
+        cur = s
+        while cur <= e:
+            dates.append(cur.isoformat())
+            cur += timedelta(days=1)
+    elif date:
         dates = [date]
         try:
             date_cls.fromisoformat(date)

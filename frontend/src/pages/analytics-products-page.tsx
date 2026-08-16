@@ -1,5 +1,5 @@
 import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, RobotOutlined, SendOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Card, Drawer, Empty, Input, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Card, DatePicker, Drawer, Empty, Input, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -11,10 +11,30 @@ import type { AnalyticsProduct, AnalyticsProducts } from "../types";
 
 const { Text } = Typography;
 
-const MODE_OPTIONS = [
+const VIEW_OPTIONS = [
   { label: "实时", value: "realtime" },
-  { label: "昨天", value: "yesterday" },
+  { label: "日期范围", value: "range" },
 ];
+
+const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
+  { label: "今日", value: [dayjs().startOf("day"), dayjs().endOf("day")] },
+  { label: "昨日", value: [dayjs().subtract(1, "day").startOf("day"), dayjs().subtract(1, "day").endOf("day")] },
+  { label: "过去7天", value: [dayjs().subtract(6, "day").startOf("day"), dayjs().endOf("day")] },
+  { label: "过去15天", value: [dayjs().subtract(14, "day").startOf("day"), dayjs().endOf("day")] },
+  { label: "过去30天", value: [dayjs().subtract(29, "day").startOf("day"), dayjs().endOf("day")] },
+  { label: "本月", value: [dayjs().startOf("month"), dayjs().endOf("month")] },
+  { label: "上月", value: [dayjs().subtract(1, "month").startOf("month"), dayjs().subtract(1, "month").endOf("month")] },
+];
+
+function rangePromoMode(r: [string, string]): string | null {
+  const s = dayjs(r[0]);
+  const e = dayjs(r[1]);
+  const len = e.diff(s, "day") + 1;
+  if (s.isSame(e, "day") && s.isSame(dayjs(), "day")) return "realtime";
+  if (s.isSame(e, "day") && s.isSame(dayjs().subtract(1, "day"), "day")) return "yesterday";
+  if (len === 7 || len === 14 || len === 30) return String(len);
+  return null;
+}
 
 interface ProductInsightSections {
   overall: string;
@@ -100,7 +120,8 @@ function MetricCell({ value, change }: { value: string; change: number }) {
 
 export function AnalyticsProductsPage() {
   const [data, setData] = useState<AnalyticsProducts | null>(null);
-  const [mode, setMode] = useState("realtime");
+  const [view, setView] = useState<"realtime" | "range">("realtime");
+  const [range, setRange] = useState<[string, string] | null>(null);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -113,20 +134,23 @@ export function AnalyticsProductsPage() {
   const [detailChatInput, setDetailChatInput] = useState("");
   const [detailChatLoading, setDetailChatLoading] = useState(false);
 
-  const load = useCallback(async (m: string, sid?: number) => {
+  const load = useCallback(async () => {
+    if (view === "range" && !range) {
+      setData(null);
+      return;
+    }
     setLoading(true);
     setData(null);
     try {
       const params = new URLSearchParams();
-      if (m === "realtime") {
+      if (view === "realtime") {
         params.set("mode", "realtime");
-      } else if (m === "yesterday") {
-        params.set("mode", "yesterday");
-      } else {
+      } else if (range) {
         params.set("mode", "days");
-        params.set("days", m);
+        params.set("start", range[0]);
+        params.set("end", range[1]);
       }
-      if (sid) params.set("store_id", String(sid));
+      if (storeId) params.set("store_id", String(storeId));
       const { data: res } = await http.get<AnalyticsProducts>(`/analytics/products?${params.toString()}`);
       setData(res);
     } catch (error) {
@@ -135,32 +159,32 @@ export function AnalyticsProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [view, range, storeId]);
 
   useEffect(() => {
-    load(mode, storeId);
-  }, [mode, storeId, load]);
+    load();
+  }, [load]);
 
   const syncAll = async () => {
     setSyncing(true);
     try {
       const storeRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>("/stores/sync-all");
       const itemsUrl =
-        mode === "realtime"
+        view === "realtime"
           ? "/stores/sync-items-realtime"
-          : mode === "yesterday"
-            ? `/stores/sync-items?date=${dayjs().subtract(1, "day").format("YYYY-MM-DD")}`
-            : `/stores/sync-items?days=${mode}`;
+          : range
+            ? `/stores/sync-items?start=${range[0]}&end=${range[1]}`
+            : "/stores/sync-items?days=1";
       const itemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(itemsUrl);
-      const promoMode = mode === "realtime" ? "realtime" : mode === "yesterday" ? "yesterday" : "7";
+      const promoMode = view === "realtime" ? "realtime" : range ? (rangePromoMode(range) ?? "7") : "7";
       const promoRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync?mode=${promoMode}`);
-      const promoItemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync-items?mode=${mode === "realtime" ? "realtime" : mode}`);
-      const label = mode === "realtime" ? "实时商品" : mode === "yesterday" ? "昨日商品" : `近 ${mode} 天商品`;
+      const promoItemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync-items?mode=${promoMode}`);
+      const label = view === "realtime" ? "实时商品" : range ? `${range[0]}~${range[1]} 商品` : "商品";
       message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家，推广 ${promoRes.data.ok}/${promoRes.data.total} 家，商品推广 ${promoItemsRes.data.ok}/${promoItemsRes.data.total} 家`);
       [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok), ...promoRes.data.results.filter((r) => !r.ok), ...promoItemsRes.data.results.filter((r) => !r.ok)]
         .slice(0, 3)
         .forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
-      await load(mode, storeId);
+      await load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -175,7 +199,11 @@ export function AnalyticsProductsPage() {
     setDetailOpen(true);
     setDetailLoading(true);
     try {
-      const params = new URLSearchParams({ mode: isRealtime ? "realtime" : mode });
+      const params = new URLSearchParams({ mode: view === "realtime" ? "realtime" : "days" });
+      if (view === "range" && range) {
+        params.set("start", range[0]);
+        params.set("end", range[1]);
+      }
       if (storeId) params.set("store_id", String(storeId));
       const { data } = await http.post<ProductInsightResult>(
         `/analytics/products/${encodeURIComponent(row.item_id)}/insight?${params.toString()}`
@@ -196,10 +224,16 @@ export function AnalyticsProductsPage() {
     setDetailChatInput("");
     setDetailChatLoading(true);
     try {
+      const chatParams = new URLSearchParams();
+      if (view === "range" && range) {
+        chatParams.set("start", range[0]);
+        chatParams.set("end", range[1]);
+      }
+      const chatSuffix = chatParams.toString() ? `?${chatParams.toString()}` : "";
       const { data } = await http.post<{ reply: string }>(
-        `/analytics/products/${encodeURIComponent(detail.item_id)}/insight/chat`,
+        `/analytics/products/${encodeURIComponent(detail.item_id)}/insight/chat${chatSuffix}`,
         {
-          mode: isRealtime ? "realtime" : mode,
+          mode: view === "realtime" ? "realtime" : "days",
           store_id: storeId,
           messages: [{ role: "assistant", content: detailResult.reply }, ...next],
         }
@@ -212,7 +246,7 @@ export function AnalyticsProductsPage() {
     }
   };
 
-  const isRealtime = mode === "realtime";
+  const isRealtime = view === "realtime";
   const numSorter = (key: keyof AnalyticsProduct) => (a: AnalyticsProduct, b: AnalyticsProduct) =>
     Number(a[key] ?? 0) - Number(b[key] ?? 0);
   const copyItemId = async (id: string) => {
@@ -311,7 +345,29 @@ export function AnalyticsProductsPage() {
       />
 
       <Space style={{ marginBottom: 12 }} wrap>
-        <Segmented options={MODE_OPTIONS} value={mode} onChange={(v) => { setData(null); setMode(String(v)); }} />
+        <Segmented
+          options={VIEW_OPTIONS}
+          value={view}
+          onChange={(v) => {
+            setData(null);
+            setView(String(v) as "realtime" | "range");
+          }}
+        />
+        {view === "range" && (
+          <DatePicker.RangePicker
+            presets={RANGE_PRESETS}
+            value={range ? [dayjs(range[0]), dayjs(range[1])] : null}
+            onChange={(dates) => {
+              setData(null);
+              if (dates && dates[0] && dates[1]) {
+                setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
+              } else {
+                setRange(null);
+              }
+            }}
+            allowClear={false}
+          />
+        )}
         {isRealtime && (
         <Text type="secondary" style={{ fontSize: 12 }}>
           全量商品 · 按销售额排序
@@ -331,7 +387,7 @@ export function AnalyticsProductsPage() {
       ) : (
         <Card
           variant="borderless"
-          title={isRealtime ? "实时商品榜（今日）" : "昨日商品销售排行"}
+          title={isRealtime ? "实时商品榜（今日）" : range ? `商品销售排行（${range[0]} ~ ${range[1]}）` : "商品销售排行"}
           style={{ boxShadow: "var(--ops-shadow-sm)" }}
           extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
         >
