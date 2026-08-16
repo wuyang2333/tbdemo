@@ -121,7 +121,7 @@ export function AnalyticsInsightPage() {
     try {
       const params = new URLSearchParams({ mode });
       if (storeId) params.set("store_id", String(storeId));
-      const { data } = await http.post<InsightResult>(`/analytics/insight?${params.toString()}`);
+      const { data } = await http.post<InsightResult>(`/analytics/insight?${params.toString()}`, undefined, { timeout: 120000 });
       setResult(data);
       setGenMode(mode);
       setGenStoreId(storeId);
@@ -147,7 +147,7 @@ export function AnalyticsInsightPage() {
         mode: genMode,
         store_id: genStoreId,
         messages: [{ role: "assistant", content: result.reply }, ...next],
-      });
+      }, { timeout: 120000 });
       const full = [...next, { role: "assistant" as const, content: data.reply }];
       setChat(full);
       const key = cacheKey(genMode, genStoreId);

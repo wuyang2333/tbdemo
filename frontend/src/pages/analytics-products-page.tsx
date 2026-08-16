@@ -216,7 +216,9 @@ export function AnalyticsProductsPage() {
       }
       if (storeId) params.set("store_id", String(storeId));
       const { data } = await http.post<ProductInsightResult>(
-        `/analytics/products/${encodeURIComponent(row.item_id)}/insight?${params.toString()}`
+        `/analytics/products/${encodeURIComponent(row.item_id)}/insight?${params.toString()}`,
+        undefined,
+        { timeout: 120000 }
       );
       setDetailResult(data);
     } catch (error) {
@@ -246,7 +248,8 @@ export function AnalyticsProductsPage() {
           mode: view === "realtime" ? "realtime" : view === "yesterday" ? "yesterday" : "days",
           store_id: storeId,
           messages: [{ role: "assistant", content: detailResult.reply }, ...next],
-        }
+        },
+        { timeout: 120000 }
       );
       setDetailChat([...next, { role: "assistant" as const, content: data.reply }]);
     } catch (error) {

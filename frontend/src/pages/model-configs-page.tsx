@@ -132,7 +132,7 @@ export function ModelConfigsPage() {
   const testModel = async (item: ModelConfig) => {
     setTestingId(item.id);
     try {
-      const { data } = await http.post<{ reply: string }>("/model-configs/test", { id: item.id });
+      const { data } = await http.post<{ reply: string }>("/model-configs/test", { id: item.id }, { timeout: 120000 });
       message.success(`「${item.name}」连接成功，模型回复：${data.reply}`);
     } catch (error) {
       message.error(getApiErrorMessage(error));

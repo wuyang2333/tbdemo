@@ -63,7 +63,7 @@ export function AiPage() {
       const { data } = await http.post<{ reply: string }>("/ai/chat", {
         messages: next.slice(-10),
         model_id: modelId,
-      });
+      }, { timeout: 120000 });
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
     } catch (error) {
       const msg = getApiErrorMessage(error);

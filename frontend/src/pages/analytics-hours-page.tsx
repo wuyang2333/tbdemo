@@ -225,7 +225,7 @@ export function AnalyticsHoursPage() {
       }
       const params = new URLSearchParams({ start: s, end: e });
       if (storeId) params.set("store_id", String(storeId));
-      const { data: res } = await http.post(`/analytics/hours/insight?${params.toString()}`);
+      const { data: res } = await http.post(`/analytics/hours/insight?${params.toString()}`, undefined, { timeout: 120000 });
       setAiResult(res);
     } catch (error) {
       message.error(getApiErrorMessage(error));
