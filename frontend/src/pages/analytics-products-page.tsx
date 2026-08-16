@@ -1,5 +1,5 @@
-import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, RobotOutlined, SendOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Card, DatePicker, Drawer, Empty, Input, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
+import { Button, Card, Checkbox, DatePicker, Drawer, Empty, Input, Popover, Segmented, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -24,6 +24,23 @@ const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
   { label: "过去30天", value: [dayjs().subtract(29, "day").startOf("day"), dayjs().endOf("day")] },
   { label: "本月", value: [dayjs().startOf("month"), dayjs().endOf("month")] },
   { label: "上月", value: [dayjs().subtract(1, "month").startOf("month"), dayjs().subtract(1, "month").endOf("month")] },
+];
+
+const ALL_COLUMNS = [
+  { key: "rank", label: "排名" },
+  { key: "item", label: "商品" },
+  { key: "visitors", label: "访客" },
+  { key: "pv", label: "浏览量" },
+  { key: "buyers", label: "买家" },
+  { key: "sales", label: "销售额" },
+  { key: "orders", label: "销量" },
+  { key: "conversion_rate", label: "转化率" },
+  { key: "add_cart", label: "加购" },
+  { key: "promo_spend", label: "推广花费" },
+  { key: "promo_roi", label: "推广ROI" },
+  { key: "real_roi", label: "真实ROI" },
+  { key: "promo_share", label: "广告占比" },
+  { key: "sales_share", label: "占比" },
 ];
 
 function rangePromoMode(r: [string, string]): string | null {
@@ -127,6 +144,7 @@ export function AnalyticsProductsPage() {
   const [view, setView] = useState<"realtime" | "yesterday" | "range">("realtime");
   const [range, setRange] = useState<[string, string] | null>(null);
   const [filterItemId, setFilterItemId] = useState("");
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -324,7 +342,7 @@ export function AnalyticsProductsPage() {
           { title: "加购", dataIndex: "add_cart", align: "right", width: 100, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
           { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, sorter: numSorter("promo_spend"), render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
           { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, sorter: numSorter("promo_roi"), render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
-          { title: "真实ROI", align: "right", width: 90, sorter: realRoiSorter, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
+          { title: "真实ROI", key: "real_roi", align: "right", width: 90, sorter: realRoiSorter, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
           { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, sorter: numSorter("promo_share"), render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
@@ -344,6 +362,12 @@ export function AnalyticsProductsPage() {
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
+  const visibleColumns = columns.filter((col) => {
+    const k = (col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string);
+    return !k || !hiddenCols.includes(k);
+  });
+  const tableX = visibleColumns.reduce((sum, col) => sum + ((col.width as number) || 90), 0);
+
   return (
     <div>
       <PageHeader
@@ -353,6 +377,22 @@ export function AnalyticsProductsPage() {
         extra={
           <Space>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
+            <Popover
+              trigger="click"
+              placement="bottomRight"
+              content={
+                <Checkbox.Group
+                  style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", width: 230 }}
+                  value={ALL_COLUMNS.map((c) => c.key).filter((k) => !hiddenCols.includes(k))}
+                  onChange={(vals) =>
+                    setHiddenCols(ALL_COLUMNS.map((c) => c.key).filter((k) => !vals.map(String).includes(k)))
+                  }
+                  options={ALL_COLUMNS.map((c) => ({ label: c.label, value: c.key }))}
+                />
+              }
+            >
+              <Button icon={<SettingOutlined />}>字段设置</Button>
+            </Popover>
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
               同步店铺数据
             </Button>
@@ -418,7 +458,7 @@ export function AnalyticsProductsPage() {
           <Table<AnalyticsProduct>
             rowKey="item_id"
             size="small"
-            columns={columns}
+            columns={visibleColumns}
             dataSource={filteredItems}
             onRow={(record) => ({
               onMouseEnter: () => setHoverKey(record.item_id),
@@ -426,7 +466,7 @@ export function AnalyticsProductsPage() {
             })}
             pagination={{ pageSize: 20, showTotal: () => (filterItemId.trim() ? `匹配 ${filteredItems.length} 个商品` : `共 ${data.total} 个商品`) }}
             tableLayout="fixed"
-            scroll={{ x: isRealtime ? 1310 : 1320 }}
+            scroll={{ x: tableX }}
           />
         </Card>
       )}
