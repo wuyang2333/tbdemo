@@ -7,8 +7,6 @@ import { canAccessModule } from "../lib/modules";
 import { AccountsPage } from "../pages/accounts-page";
 import { AiPage } from "../pages/ai-page";
 import { AnalyticsOverviewPage } from "../pages/analytics-overview-page";
-import { AnalyticsTrendPage } from "../pages/analytics-trend-page";
-import { AnalyticsConversionPage } from "../pages/analytics-conversion-page";
 import { AnalyticsAlertsPage } from "../pages/analytics-alerts-page";
 import { AnalyticsLinkagePage } from "../pages/analytics-linkage-page";
 import { AnalyticsReportPage } from "../pages/analytics-report-page";
@@ -119,8 +117,6 @@ export function AppRouter() {
         />
         <Route path="/analytics" element={<Navigate to="/analytics/overview" replace />} />
         <Route path="/analytics/overview" element={<RequireModule id="analytics"><AnalyticsOverviewPage /></RequireModule>} />
-        <Route path="/analytics/trend" element={<RequireModule id="analytics"><AnalyticsTrendPage /></RequireModule>} />
-        <Route path="/analytics/conversion" element={<RequireModule id="analytics"><AnalyticsConversionPage /></RequireModule>} />
         <Route path="/analytics/alerts" element={<RequireModule id="analytics"><AnalyticsAlertsPage /></RequireModule>} />
         <Route path="/analytics/linkage" element={<RequireModule id="analytics"><AnalyticsLinkagePage /></RequireModule>} />
         <Route path="/analytics/report" element={<RequireModule id="analytics"><AnalyticsReportPage /></RequireModule>} />
