@@ -766,7 +766,7 @@ def promo_alerts(
         if rt_spend > 0 and ye_roi > 0 and 0 < rt_roi < ye_roi * 0.6:
             alerts.append({"level": "warn", "type": "ROI下滑", "message": f"「{name}」今日ROI {rt_roi:.2f} 较昨日 {ye_roi:.2f} 明显下滑"})
     alerts.sort(key=lambda a: 0 if a["level"] == "error" else 1)
-    return {"items": alerts[:20], "count": len(alerts)}
+    return {"items": alerts[:50], "count": len(alerts)}
 
 
 @router.get("/export")

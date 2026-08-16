@@ -206,17 +206,16 @@ export function PromotionsPlansPage() {
 
       {alerts.length > 0 && (
         <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}>
-          <Space direction="vertical" style={{ width: "100%" }} size={4}>
-            {alerts.slice(0, 6).map((a, i) => (
-              <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
-                {a.level === "error" ? "⚠️ " : "❗ "}
-                [{a.type}] {a.message}
-              </div>
-            ))}
-            {alerts.length > 6 && (
-              <Text type="secondary" style={{ fontSize: 12 }}>…还有 {alerts.length - 6} 条预警</Text>
-            )}
-          </Space>
+          <div style={{ maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
+            <Space direction="vertical" style={{ width: "100%" }} size={4}>
+              {alerts.map((a, i) => (
+                <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
+                  {a.level === "error" ? "⚠️ " : "❗ "}
+                  [{a.type}] {a.message}
+                </div>
+              ))}
+            </Space>
+          </div>
         </Card>
       )}
 
