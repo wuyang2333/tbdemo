@@ -335,7 +335,7 @@ export function AnalyticsHoursPage() {
                     <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
                       {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
                     </div>
-                    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "70%" }}>
+                    <div style={{ flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "70%" }}>
                       {comparePromo && (
                         <div style={{ width: "45%", height: `${(prevSpend / maxPrevPromo) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevSpend ? 2 : 0 }} />
                       )}
