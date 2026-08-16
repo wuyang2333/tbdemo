@@ -1287,19 +1287,21 @@ def _store_filter(store_id: int | None) -> tuple[str, list]:
 
 # ---------- 客群分析（新老客/复购） ----------
 
-@router.get("/hours")
-def analytics_hours(
-    date: str = "",
-    store_id: int | None = None,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    d = _to_date(date) or date_cls.today()
-    ds = d.isoformat()
-    sf, sp = _store_filter(store_id)
+HOUR_SEGMENTS = [
+    ("凌晨", range(0, 6)),
+    ("上午", range(6, 12)),
+    ("下午", range(12, 18)),
+    ("晚间", range(18, 22)),
+    ("深夜", range(22, 24)),
+]
+
+
+def _hours_agg(db, sf, sp, start: date_cls, end: date_cls) -> dict[str, dict]:
+    """某日期区间内按小时聚合店铺分时数据。"""
     rows = db.execute(
-        "SELECT * FROM store_hourly_data WHERE data_date = ?" + sf + " ORDER BY hour",
-        [ds] + sp,
+        "SELECT hour, visitors, pv, sales, orders, buyers FROM store_hourly_data "
+        "WHERE data_date >= ? AND data_date <= ?" + sf,
+        [start.isoformat(), end.isoformat()] + sp,
     ).fetchall()
     hour_map: dict[str, dict] = {}
     for r in rows:
@@ -1312,19 +1314,122 @@ def analytics_hours(
         item["sales"] += r["sales"] or 0
         item["orders"] += r["orders"] or 0
         item["buyers"] += r["buyers"] or 0
-    items = []
+    return hour_map
+
+
+def _promo_hours_agg(db, sf, sp, start: date_cls, end: date_cls) -> dict[str, dict]:
+    """某日期区间内按小时聚合万相台推广花费/成交。"""
+    rows = db.execute(
+        "SELECT hour, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_realtime "
+        "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY hour",
+        [start.isoformat(), end.isoformat()] + sp,
+    ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        out[r["hour"]] = {"spend": round(r["spend"] or 0, 2), "sales": round(r["sales"] or 0, 2)}
+    return out
+
+
+@router.get("/hours")
+def analytics_hours(
+    date: str = "",
+    start: str = "",
+    end: str = "",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """时段分析：支持单日或日期区间，叠加推广分时、环比与时段分组。"""
+    today = date_cls.today()
+    if start and end:
+        try:
+            s = date_cls.fromisoformat(start)
+            e = date_cls.fromisoformat(end)
+        except ValueError:
+            s = e = None
+        if not (s and e and s <= e):
+            s = e = today
+    elif date:
+        d = _to_date(date) or today
+        s = e = d
+    else:
+        s = e = today
+    sf, sp = _store_filter(store_id)
+
+    hour_map = _hours_agg(db, sf, sp, s, e)
+    promo_map = _promo_hours_agg(db, sf, sp, s, e)
+    prev_end = s - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=(e - s).days)
+    prev_hour_map = _hours_agg(db, sf, sp, prev_start, prev_end)
+
+    items: list[dict] = []
     for h in range(24):
         key = f"{h:02d}:00"
         row = hour_map.get(key)
         if row:
             row["conversion_rate"] = round(row["buyers"] / row["visitors"] * 100, 2) if row["visitors"] else 0.0
             row["sales"] = round(row["sales"], 2)
-            items.append(row)
         else:
-            items.append({"hour": key, "visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "buyers": 0, "conversion_rate": 0.0})
-    summary = {"visitors": sum(i["visitors"] for i in items), "pv": sum(i["pv"] for i in items), "sales": round(sum(i["sales"] for i in items), 2), "orders": sum(i["orders"] for i in items)}
+            row = {"hour": key, "visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "buyers": 0, "conversion_rate": 0.0}
+        p = promo_map.get(key)
+        row["promo_spend"] = p["spend"] if p else 0.0
+        row["promo_sales"] = p["sales"] if p else 0.0
+        row["promo_roi"] = round(p["sales"] / p["spend"], 2) if p and p["spend"] else 0.0
+        prev = prev_hour_map.get(key)
+        row["visitors_cycle"] = round((row["visitors"] - prev["visitors"]) / prev["visitors"] * 100, 1) if prev and prev["visitors"] else None
+        row["sales_cycle"] = round((row["sales"] - prev["sales"]) / prev["sales"] * 100, 1) if prev and prev["sales"] else None
+        items.append(row)
+
+    summary = {
+        "visitors": sum(i["visitors"] for i in items),
+        "pv": sum(i["pv"] for i in items),
+        "sales": round(sum(i["sales"] for i in items), 2),
+        "orders": sum(i["orders"] for i in items),
+        "promo_spend": round(sum(i["promo_spend"] for i in items), 2),
+        "promo_sales": round(sum(i["promo_sales"] for i in items), 2),
+    }
+    summary["promo_roi"] = round(summary["promo_sales"] / summary["promo_spend"], 2) if summary["promo_spend"] else 0.0
+
+    prev_items = [
+        {"hour": f"{h:02d}:00", "visitors": (prev_hour_map.get(f"{h:02d}:00") or {}).get("visitors", 0), "sales": (prev_hour_map.get(f"{h:02d}:00") or {}).get("sales", 0)}
+        for h in range(24)
+    ]
+
+    segments: list[dict] = []
+    for name, hrs in HOUR_SEGMENTS:
+        seg = {"name": name, "hours": f"{hrs.start:02d}:00-{hrs.stop - 1:02d}:00", "visitors": 0, "sales": 0.0, "orders": 0, "promo_spend": 0.0, "promo_sales": 0.0}
+        for h in hrs:
+            it = items[h]
+            seg["visitors"] += it["visitors"]
+            seg["sales"] += it["sales"]
+            seg["orders"] += it["orders"]
+            seg["promo_spend"] += it["promo_spend"]
+            seg["promo_sales"] += it["promo_sales"]
+        seg["sales"] = round(seg["sales"], 2)
+        seg["promo_spend"] = round(seg["promo_spend"], 2)
+        seg["promo_sales"] = round(seg["promo_sales"], 2)
+        seg["promo_roi"] = round(seg["promo_sales"] / seg["promo_spend"], 2) if seg["promo_spend"] else 0.0
+        segments.append(seg)
+
     peak = max(items, key=lambda x: x["sales"]) if items else {"hour": "", "sales": 0}
-    return {"date": ds, "items": items, "summary": summary, "peak_hour": peak["hour"], "peak_sales": peak["sales"]}
+    if s == e == today:
+        label = "今日"
+    elif s == e == today - timedelta(days=1):
+        label = "昨日"
+    else:
+        label = f"{s.strftime('%m-%d')} ~ {e.strftime('%m-%d')}"
+    return {
+        "date": s.isoformat(),
+        "start": s.isoformat(),
+        "end": e.isoformat(),
+        "label": label,
+        "items": items,
+        "prev_items": prev_items,
+        "summary": summary,
+        "segments": segments,
+        "peak_hour": peak["hour"],
+        "peak_sales": peak["sales"],
+    }
 
 
 # ---------- 预警阈值配置 ----------

@@ -377,12 +377,39 @@ export type AnalyticsHourPoint = {
   orders: number;
   buyers: number;
   conversion_rate: number;
+  promo_spend: number;
+  promo_sales: number;
+  promo_roi: number;
+  visitors_cycle?: number | null;
+  sales_cycle?: number | null;
 };
 
 export type AnalyticsHours = {
   date: string;
+  start: string;
+  end: string;
+  label: string;
   items: AnalyticsHourPoint[];
-  summary: { visitors: number; pv: number; sales: number; orders: number };
+  prev_items: { hour: string; visitors: number; sales: number }[];
+  summary: {
+    visitors: number;
+    pv: number;
+    sales: number;
+    orders: number;
+    promo_spend: number;
+    promo_sales: number;
+    promo_roi: number;
+  };
+  segments: {
+    name: string;
+    hours: string;
+    visitors: number;
+    sales: number;
+    orders: number;
+    promo_spend: number;
+    promo_sales: number;
+    promo_roi: number;
+  }[];
   peak_hour: string;
   peak_sales: number;
 };
