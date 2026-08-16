@@ -4,17 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { LineChart, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
+import { LineChart, StoreScopeSelect, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsDailyPoint } from "../types";
 
 export function AnalyticsConversionPage() {
   const [daily, setDaily] = useState<AnalyticsDailyPoint[]>([]);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await http.get<{ items: AnalyticsDailyPoint[] }>("/analytics/daily?days=30");
+      const { data } = await http.get<{ items: AnalyticsDailyPoint[] }>(`/analytics/daily?days=30${storeId ? `&store_id=${storeId}` : ""}`);
       setDaily(data.items);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -22,7 +23,7 @@ export function AnalyticsConversionPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load();
@@ -39,6 +40,7 @@ export function AnalyticsConversionPage() {
         title="转化分析"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>

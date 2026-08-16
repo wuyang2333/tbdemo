@@ -1,6 +1,6 @@
-import { Button, Empty, Space, Tag, Typography, message } from "antd";
+import { Button, Empty, Select, Space, Tag, Typography, message } from "antd";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../../lib/api";
 import type { AnalyticsStoreAgg, AnalyticsSummary, AnalyticsTrendPoint } from "../../types";
@@ -234,5 +234,30 @@ export function ChangeBadge({ change, prevText }: { change: number | null; prevT
       </span>
       {prevText ? <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>{prevText}</div> : null}
     </div>
+  );
+}
+export function StoreScopeSelect({
+  value,
+  onChange,
+}: {
+  value: number | undefined;
+  onChange: (v: number | undefined) => void;
+}) {
+  const [stores, setStores] = useState<{ id: number; name: string }[]>([]);
+  useEffect(() => {
+    http
+      .get<{ items: { id: number; name: string }[] }>("/stores")
+      .then(({ data }) => setStores(data.items))
+      .catch(() => setStores([]));
+  }, []);
+  return (
+    <Select
+      allowClear
+      placeholder="全部店铺"
+      style={{ width: 160 }}
+      value={value}
+      onChange={(v) => onChange(v ?? undefined)}
+      options={stores.map((s) => ({ value: s.id, label: s.name }))}
+    />
   );
 }

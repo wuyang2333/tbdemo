@@ -362,3 +362,36 @@ export type AnalyticsHealth = {
   items: { key: string; name: string; score: number; detail: string }[];
   days: number;
 };
+
+export type AnalyticsCustomers = {
+  items: { date: string; repeat_rate: number; new_rate: number; repeat_sales: number; old_buyer_cnt: number; sales: number }[];
+  summary: { sales: number; repeat_sales: number; repeat_rate: number; new_rate: number; old_buyer_cnt: number; orders: number };
+  days: number;
+};
+
+export type AnalyticsHourPoint = {
+  hour: string;
+  visitors: number;
+  pv: number;
+  sales: number;
+  orders: number;
+  buyers: number;
+  conversion_rate: number;
+};
+
+export type AnalyticsHours = {
+  date: string;
+  items: AnalyticsHourPoint[];
+  summary: { visitors: number; pv: number; sales: number; orders: number };
+  peak_hour: string;
+  peak_sales: number;
+};
+
+export type AnalyticsAlertsConfig = {
+  baseline_days: number;
+  sales_down: number;
+  sales_up: number;
+  orders_down: number;
+  visitors_down: number;
+  conversion_down: number;
+};

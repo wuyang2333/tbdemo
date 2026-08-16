@@ -18,6 +18,9 @@ import { AnalyticsGoalPage } from "../pages/analytics-goal-page";
 import { AnalyticsReportPage } from "../pages/analytics-report-page";
 import { AnalyticsHealthPage } from "../pages/analytics-health-page";
 import { AnalyticsInsightPage } from "../pages/analytics-insight-page";
+import { AnalyticsCustomersPage } from "../pages/analytics-customers-page";
+import { AnalyticsHoursPage } from "../pages/analytics-hours-page";
+import { BoardPage } from "../pages/board-page";
 import { ContentPage } from "../pages/content-page";
 import { CustomersPage } from "../pages/customers-page";
 import { DashboardPage } from "../pages/dashboard-page";
@@ -61,6 +64,14 @@ export function AppRouter() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/board"
+        element={
+          <RequireAuth>
+            <BoardPage />
+          </RequireAuth>
+        }
+      />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route
         element={
@@ -124,6 +135,8 @@ export function AppRouter() {
         <Route path="/analytics/report" element={<RequireModule id="analytics"><AnalyticsReportPage /></RequireModule>} />
         <Route path="/analytics/health" element={<RequireModule id="analytics"><AnalyticsHealthPage /></RequireModule>} />
         <Route path="/analytics/insight" element={<RequireModule id="analytics"><AnalyticsInsightPage /></RequireModule>} />
+        <Route path="/analytics/customers" element={<RequireModule id="analytics"><AnalyticsCustomersPage /></RequireModule>} />
+        <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />
         <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
         <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
         <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />

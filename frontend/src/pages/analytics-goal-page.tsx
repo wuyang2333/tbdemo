@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { LineChart, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
+import { LineChart, StoreScopeSelect, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsForecast, AnalyticsGoalProgress } from "../types";
 
 const { Text } = Typography;
@@ -17,12 +17,13 @@ export function AnalyticsGoalPage() {
   const [goalInput, setGoalInput] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const [p, f] = await Promise.all([
-        http.get<AnalyticsGoalProgress>(`/analytics/goal/progress?month=${month}`),
+        http.get<AnalyticsGoalProgress>(`/analytics/goal/progress?month=${month}${storeId ? `&store_id=${storeId}` : ""}`),
         http.get<AnalyticsForecast>("/analytics/forecast?days=7"),
       ]);
       setProgress(p.data);
@@ -33,7 +34,7 @@ export function AnalyticsGoalPage() {
     } finally {
       setLoading(false);
     }
-  }, [month]);
+  }, [month, storeId]);
 
   useEffect(() => {
     load();
@@ -66,6 +67,7 @@ export function AnalyticsGoalPage() {
         title="目标预测"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>

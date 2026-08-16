@@ -1,23 +1,26 @@
-import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+import { BarChartOutlined, FullscreenOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Col, Empty, Row, Space, Spin, Statistic, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { BucketCard, StoreBars, TrendChart, useSyncStores } from "../components/analytics/analytics-ui";
+import { BucketCard, StoreBars, StoreScopeSelect, TrendChart, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsSummary } from "../types";
 
 const { Text } = Typography;
 
 export function AnalyticsOverviewPage() {
+  const navigate = useNavigate();
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await http.get<AnalyticsSummary>("/analytics/summary?days=14");
+      const { data } = await http.get<AnalyticsSummary>(`/analytics/summary?days=14${storeId ? `&store_id=${storeId}` : ""}`);
       setSummary(data);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -25,7 +28,7 @@ export function AnalyticsOverviewPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load();
@@ -41,6 +44,10 @@ export function AnalyticsOverviewPage() {
         title="总览"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
+            <Button icon={<FullscreenOutlined />} onClick={() => navigate("/board")}>
+              大屏模式
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>

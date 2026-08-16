@@ -5,8 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { LineChart, daySwitch, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
-import type { AnalyticsDailyPoint } from "../types";
+import { LineChart, StoreScopeSelect, daySwitch, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
+import type { AnalyticsDailyPoint, AnalyticsForecast } from "../types";
 
 const { Text } = Typography;
 
@@ -14,11 +14,13 @@ export function AnalyticsTrendPage() {
   const [daily, setDaily] = useState<AnalyticsDailyPoint[]>([]);
   const [days, setDays] = useState(14);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
+  const [forecast, setForecast] = useState<AnalyticsForecast | null>(null);
 
   const load = useCallback(async (d: number) => {
     setLoading(true);
     try {
-      const { data } = await http.get<{ items: AnalyticsDailyPoint[] }>(`/analytics/daily?days=${d}`);
+      const { data } = await http.get<{ items: AnalyticsDailyPoint[] }>(`/analytics/daily?days=${d}${storeId ? `&store_id=${storeId}` : ""}`);
       setDaily(data.items);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -26,10 +28,14 @@ export function AnalyticsTrendPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load(days);
+    http
+      .get<AnalyticsForecast>("/analytics/forecast?days=7")
+      .then(({ data }) => setForecast(data))
+      .catch(() => setForecast(null));
   }, [days, load]);
 
   const { syncing, syncAll } = useSyncStores(() => load(days));
@@ -53,6 +59,7 @@ export function AnalyticsTrendPage() {
         title="趋势分析"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={() => load(days)}>
               刷新
             </Button>
@@ -114,6 +121,18 @@ export function AnalyticsTrendPage() {
             </Card>
           </Col>
         </Row>
+      )}
+
+      {forecast && (
+        <Card variant="borderless" title="趋势预测（近 14 天实际 + 未来 7 天，仅供参考）" style={{ boxShadow: "var(--ops-shadow-sm)", marginTop: 16 }}>
+          <LineChart
+            labels={[...forecast.actual.map((p) => p.date), ...forecast.predicted.map((p) => p.date)]}
+            series={[
+              { name: "实际", color: "#1677ff", values: [...forecast.actual.map((p) => p.sales), ...Array(forecast.predicted.length).fill(null as unknown as number)], format: fmtMoney },
+              { name: "预测", color: "#fa8c16", values: [...Array(forecast.actual.length).fill(null as unknown as number), ...forecast.predicted.map((p) => p.sales)], format: fmtMoney },
+            ]}
+          />
+        </Card>
       )}
     </div>
   );

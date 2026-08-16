@@ -72,6 +72,8 @@ const ANALYTICS_CHILDREN = [
   { key: "/analytics/report", label: "经营日报" },
   { key: "/analytics/health", label: "经营健康" },
   { key: "/analytics/insight", label: "AI 解读" },
+  { key: "/analytics/customers", label: "客群分析" },
+  { key: "/analytics/hours", label: "时段分析" },
 ];
 
 const PROMOTIONS_CHILDREN = [

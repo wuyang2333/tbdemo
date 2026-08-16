@@ -118,6 +118,36 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_analytics(conn: sqlite3.Connection) -> None:
+    """数据洞察扩展字段：新老客占比 / 复购，以及分时数据表。"""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(store_daily_data)")}
+    if "repeat_rate" not in cols:
+        conn.execute("ALTER TABLE store_daily_data ADD COLUMN repeat_rate REAL NOT NULL DEFAULT 0")
+    if "old_buyer_cnt" not in cols:
+        conn.execute("ALTER TABLE store_daily_data ADD COLUMN old_buyer_cnt INTEGER NOT NULL DEFAULT 0")
+    if "repeat_sales" not in cols:
+        conn.execute("ALTER TABLE store_daily_data ADD COLUMN repeat_sales REAL NOT NULL DEFAULT 0")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS store_hourly_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            data_date TEXT NOT NULL,
+            hour TEXT NOT NULL,
+            visitors INTEGER NOT NULL DEFAULT 0,
+            pv INTEGER NOT NULL DEFAULT 0,
+            sales REAL NOT NULL DEFAULT 0,
+            orders INTEGER NOT NULL DEFAULT 0,
+            buyers INTEGER NOT NULL DEFAULT 0,
+            conversion_rate REAL NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(store_id, data_date, hour)
+        )
+        """
+    )
+    conn.commit()
+
+
 def _migrate_sycm(conn: sqlite3.Connection) -> None:
     """店铺生意参谋凭证字段：账号、密码、登录凭证 Cookie。"""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(stores)")}
@@ -485,6 +515,7 @@ def init_db() -> None:
         _migrate(conn)
         _migrate_model_configs(conn)
         _migrate_sycm(conn)
+        _migrate_analytics(conn)
         _migrate_promo_realtime(conn)
         _seed_stores(conn)
         _migrate_logs(conn)

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { LineChart, daySwitch, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
+import { LineChart, StoreScopeSelect, daySwitch, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsLinkage, AnalyticsLinkagePoint } from "../types";
 
 const { Text } = Typography;
@@ -14,11 +14,12 @@ export function AnalyticsLinkagePage() {
   const [data, setData] = useState<AnalyticsLinkage | null>(null);
   const [days, setDays] = useState(14);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async (d: number) => {
     setLoading(true);
     try {
-      const { data: res } = await http.get<AnalyticsLinkage>(`/analytics/linkage?days=${d}`);
+      const { data: res } = await http.get<AnalyticsLinkage>(`/analytics/linkage?days=${d}${storeId ? `&store_id=${storeId}` : ""}`);
       setData(res);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -26,7 +27,7 @@ export function AnalyticsLinkagePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load(days);
@@ -55,6 +56,7 @@ export function AnalyticsLinkagePage() {
         title="联动分析"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={() => load(days)}>
               刷新
             </Button>

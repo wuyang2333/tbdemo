@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { ChangeBadge, LineChart, formatValue, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
+import { ChangeBadge, LineChart, StoreScopeSelect, formatValue, fmtMoney, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsRangeCompare } from "../types";
 
 const { Text } = Typography;
@@ -17,6 +17,7 @@ export function AnalyticsRangePage() {
   const [range1, setRange1] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(6, "day"), dayjs()]);
   const [range2, setRange2] = useState<[dayjs.Dayjs, dayjs.Dayjs]>([dayjs().subtract(13, "day"), dayjs().subtract(7, "day")]);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -27,6 +28,7 @@ export function AnalyticsRangePage() {
         start2: range2[0].format("YYYY-MM-DD"),
         end2: range2[1].format("YYYY-MM-DD"),
       });
+      if (storeId) params.set("store_id", String(storeId));
       const { data: res } = await http.get<AnalyticsRangeCompare>(`/analytics/range?${params.toString()}`);
       setData(res);
     } catch (error) {
@@ -35,7 +37,7 @@ export function AnalyticsRangePage() {
     } finally {
       setLoading(false);
     }
-  }, [range1, range2]);
+  }, [range1, range2, storeId]);
 
   useEffect(() => {
     load();
@@ -58,6 +60,7 @@ export function AnalyticsRangePage() {
         title="区间对比"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>

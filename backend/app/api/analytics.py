@@ -97,13 +97,16 @@ def _buckets(rows) -> dict:
 @router.get("/summary")
 def analytics_summary(
     days: int = 14,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     if not (1 <= days <= 90):
         days = 14
+    sf, sp = _store_filter(store_id)
     rows = db.execute(
-        "SELECT * FROM store_daily_data ORDER BY data_date ASC, store_id ASC"
+        "SELECT * FROM store_daily_data" + (" WHERE 1=1" + sf) + " ORDER BY data_date ASC, store_id ASC",
+        sp,
     ).fetchall()
 
     start, today = _date_range(days)
@@ -169,6 +172,7 @@ def analytics_summary(
 @router.get("/daily")
 def analytics_daily(
     days: int = 30,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -176,9 +180,10 @@ def analytics_daily(
     if not (1 <= days <= 90):
         days = 30
     start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
     rows = db.execute(
-        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date ASC",
-        (start.isoformat(), today.isoformat()),
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date ASC",
+        [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
 
     items = []
@@ -196,6 +201,7 @@ def analytics_daily(
 @router.get("/stores")
 def analytics_stores(
     days: int = 14,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -203,9 +209,10 @@ def analytics_stores(
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
     rows = db.execute(
-        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date ASC",
-        (start.isoformat(), today.isoformat()),
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date ASC",
+        [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
 
     stores_map: dict[int, dict] = {}
@@ -285,12 +292,14 @@ def _cmp_pair(current: float | None, previous: float | None) -> dict:
 
 @router.get("/compare")
 def analytics_compare(
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     """同比环比：今日 vs 昨日 / 近7天 vs 前7天 / 本月 vs 上月同期 / 今日 vs 去年今日。"""
     today = date_cls.today()
-    rows = db.execute("SELECT * FROM store_daily_data ORDER BY data_date ASC").fetchall()
+    sf, sp = _store_filter(store_id)
+    rows = db.execute("SELECT * FROM store_daily_data" + (" WHERE 1=1" + sf) + " ORDER BY data_date ASC", sp).fetchall()
 
     t = _day_sum(rows, today)
     if t is None:
@@ -340,19 +349,21 @@ def analytics_compare(
 def analytics_alerts(
     days: int = 30,
     baseline: int = 7,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     """异常波动：按店铺对比每天指标与前 baseline 日均值，超过阈值生成提醒。"""
     if not (1 <= days <= 90):
         days = 30
-    if not (2 <= baseline <= 30):
-        baseline = 7
+    cfg = _alerts_config(db)
+    baseline = int(cfg["baseline_days"])
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
+    sf, sp = _store_filter(store_id)
     rows = db.execute(
-        "SELECT * FROM store_daily_data WHERE data_date >= ? ORDER BY data_date ASC",
-        (start.isoformat(),),
+        "SELECT * FROM store_daily_data WHERE data_date >= ?" + sf + " ORDER BY data_date ASC",
+        [start.isoformat()] + sp,
     ).fetchall()
     name_map = {s["id"]: s["name"] for s in db.execute("SELECT id, name FROM stores").fetchall()}
 
@@ -377,10 +388,10 @@ def analytics_alerts(
                 return sum(vals) / len(vals)
 
             checks = [
-                ("sales", "销售额", base_avg("sales"), cur["sales"] or 0, -30, 60, "money"),
-                ("orders", "订单数", base_avg("orders"), cur["orders"] or 0, -30, None, "int"),
-                ("visitors", "访客数", base_avg("visitors"), cur["visitors"] or 0, -30, 60, "int"),
-                ("conversion_rate", "转化率", base_avg("conversion_rate"), cur["conversion_rate"] or 0, -20, None, "pct"),
+                ("sales", "销售额", base_avg("sales"), cur["sales"] or 0, cfg["sales_down"], cfg["sales_up"], "money"),
+                ("orders", "订单数", base_avg("orders"), cur["orders"] or 0, cfg["orders_down"], None, "int"),
+                ("visitors", "访客数", base_avg("visitors"), cur["visitors"] or 0, cfg["visitors_down"], 60, "int"),
+                ("conversion_rate", "转化率", base_avg("conversion_rate"), cur["conversion_rate"] or 0, cfg["conversion_down"], None, "pct"),
             ]
             for key, mname, base, val, down_th, up_th, _fmt in checks:
                 if base <= 0:
@@ -428,19 +439,21 @@ def analytics_alerts(
 @router.get("/linkage")
 def analytics_linkage(
     days: int = 14,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
     sd_rows = db.execute(
-        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date",
-        (start.isoformat(), today.isoformat()),
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+        [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
     pd_rows = db.execute(
-        "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date",
-        (start.isoformat(), today.isoformat()),
+        "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+        [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
     sd_map: dict[str, dict] = {}
     pd_map: dict[str, dict] = {}
@@ -503,6 +516,7 @@ def analytics_range(
     end: str = "",
     start2: str = "",
     end2: str = "",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -515,7 +529,8 @@ def analytics_range(
     if r1_start > r1_end or r2_start > r2_end:
         raise HTTPException(status_code=400, detail="区间日期不正确（开始日期不能晚于结束日期）")
 
-    rows = db.execute("SELECT * FROM store_daily_data ORDER BY data_date ASC").fetchall()
+    sf, sp = _store_filter(store_id)
+    rows = db.execute("SELECT * FROM store_daily_data" + (" WHERE 1=1" + sf) + " ORDER BY data_date ASC", sp).fetchall()
 
     def agg(s: date_cls, e: date_cls) -> dict | None:
         in_r = [r for r in rows if s <= _to_date(r["data_date"]) <= e]
@@ -608,6 +623,7 @@ def set_goal(
 @router.get("/goal/progress")
 def goal_progress(
     month: str = "",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -619,9 +635,10 @@ def goal_progress(
     goal, _ = _goal_value(db)
     if month != _current_month():
         goal = 0.0
+    sf, sp = _store_filter(store_id)
     rows = db.execute(
-        "SELECT sales FROM store_daily_data WHERE data_date LIKE ?",
-        (month + "%",),
+        "SELECT sales FROM store_daily_data WHERE data_date LIKE ?" + sf,
+        [month + "%"] + sp,
     ).fetchall()
     sales = round(sum(r["sales"] or 0 for r in rows), 2)
     today = date_cls.today()
@@ -692,6 +709,7 @@ def analytics_forecast(
 
 @router.get("/report")
 def daily_report(
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -699,9 +717,10 @@ def daily_report(
     yesterday = today - timedelta(days=1)
     ts = today.isoformat()
     ys = yesterday.isoformat()
+    sf, sp = _store_filter(store_id)
 
     def sd_sum(d: str) -> dict:
-        rows = db.execute("SELECT * FROM store_daily_data WHERE data_date = ?", (d,)).fetchall()
+        rows = db.execute("SELECT * FROM store_daily_data WHERE data_date = ?" + sf, [d] + sp).fetchall()
         s = _sum_rows(rows)
         if len(rows) == 1 and rows[0]["conversion_rate"]:
             s["conversion_rate"] = round(rows[0]["conversion_rate"], 2)
@@ -781,15 +800,17 @@ def export_analytics(
 @router.get("/health")
 def analytics_health(
     days: int = 14,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
     rows = db.execute(
-        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ? ORDER BY data_date",
-        (start.isoformat(), today.isoformat()),
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+        [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
     if not rows:
         return {"score": 0, "items": [], "days": days}
@@ -872,3 +893,173 @@ def ai_insight(
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"reply": reply, "date": today.isoformat()}
+# ---------- 通用：单店筛选 ----------
+
+def _store_filter(store_id: int | None) -> tuple[str, list]:
+    if store_id:
+        return " AND store_id = ?", [store_id]
+    return "", []
+
+
+# ---------- 客群分析（新老客/复购） ----------
+
+@router.get("/customers")
+def analytics_customers(
+    days: int = 14,
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= days <= 90):
+        days = 14
+    start, today = _date_range(days)
+    sf, sp = _store_filter(store_id)
+    rows = db.execute(
+        "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
+        [start.isoformat(), today.isoformat()] + sp,
+    ).fetchall()
+    items = []
+    totals = {"sales": 0.0, "repeat_sales": 0.0, "old_buyer_cnt": 0, "orders": 0}
+    for i in range(days - 1, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        day_rows = [r for r in rows if r["data_date"] == d]
+        if not day_rows:
+            items.append({"date": d[5:], "repeat_rate": 0.0, "new_rate": 0.0, "repeat_sales": 0.0, "old_buyer_cnt": 0, "sales": 0.0})
+            continue
+        sales = sum(r["sales"] or 0 for r in day_rows)
+        repeat_sales = sum(r["repeat_sales"] or 0 for r in day_rows)
+        old_buyer = sum(r["old_buyer_cnt"] or 0 for r in day_rows)
+        orders = sum(r["orders"] or 0 for r in day_rows)
+        rr = None
+        for r in day_rows:
+            if r["repeat_rate"]:
+                rr = r["repeat_rate"]
+                break
+        totals["sales"] += sales
+        totals["repeat_sales"] += repeat_sales
+        totals["old_buyer_cnt"] += old_buyer
+        totals["orders"] += orders
+        items.append(
+            {
+                "date": d[5:],
+                "repeat_rate": rr or 0.0,
+                "new_rate": round(100 - (rr or 0.0), 1),
+                "repeat_sales": round(repeat_sales, 2),
+                "old_buyer_cnt": old_buyer,
+                "sales": round(sales, 2),
+            }
+        )
+    summary = {
+        "sales": round(totals["sales"], 2),
+        "repeat_sales": round(totals["repeat_sales"], 2),
+        "repeat_rate": round(totals["repeat_sales"] / totals["sales"] * 100, 1) if totals["sales"] else 0.0,
+        "new_rate": round(100 - (totals["repeat_sales"] / totals["sales"] * 100), 1) if totals["sales"] else 0.0,
+        "old_buyer_cnt": totals["old_buyer_cnt"],
+        "orders": totals["orders"],
+    }
+    return {"items": items, "summary": summary, "days": days}
+
+
+# ---------- 时段分析（分时） ----------
+
+@router.get("/hours")
+def analytics_hours(
+    date: str = "",
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    d = _to_date(date) or date_cls.today()
+    ds = d.isoformat()
+    sf, sp = _store_filter(store_id)
+    rows = db.execute(
+        "SELECT * FROM store_hourly_data WHERE data_date = ?" + sf + " ORDER BY hour",
+        [ds] + sp,
+    ).fetchall()
+    hour_map: dict[str, dict] = {}
+    for r in rows:
+        item = hour_map.setdefault(
+            r["hour"],
+            {"hour": r["hour"], "visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "buyers": 0},
+        )
+        item["visitors"] += r["visitors"] or 0
+        item["pv"] += r["pv"] or 0
+        item["sales"] += r["sales"] or 0
+        item["orders"] += r["orders"] or 0
+        item["buyers"] += r["buyers"] or 0
+    items = []
+    for h in range(24):
+        key = f"{h:02d}:00"
+        row = hour_map.get(key)
+        if row:
+            row["conversion_rate"] = round(row["buyers"] / row["visitors"] * 100, 2) if row["visitors"] else 0.0
+            row["sales"] = round(row["sales"], 2)
+            items.append(row)
+        else:
+            items.append({"hour": key, "visitors": 0, "pv": 0, "sales": 0.0, "orders": 0, "buyers": 0, "conversion_rate": 0.0})
+    summary = {"visitors": sum(i["visitors"] for i in items), "pv": sum(i["pv"] for i in items), "sales": round(sum(i["sales"] for i in items), 2), "orders": sum(i["orders"] for i in items)}
+    peak = max(items, key=lambda x: x["sales"]) if items else {"hour": "", "sales": 0}
+    return {"date": ds, "items": items, "summary": summary, "peak_hour": peak["hour"], "peak_sales": peak["sales"]}
+
+
+# ---------- 预警阈值配置 ----------
+
+def _alerts_config(db) -> dict:
+    row = db.execute("SELECT value FROM meta WHERE key = 'analytics_alerts_config'").fetchone()
+    default = {
+        "baseline_days": 7,
+        "sales_down": -30,
+        "sales_up": 60,
+        "orders_down": -30,
+        "visitors_down": -30,
+        "conversion_down": -20,
+    }
+    if not row or not row["value"]:
+        return default
+    try:
+        data = _json.loads(row["value"])
+        for k in default:
+            if k in data and isinstance(data[k], (int, float)):
+                default[k] = data[k]
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
+class AlertsConfigIn(BaseModel):
+    baseline_days: int = 7
+    sales_down: float = -30
+    sales_up: float = 60
+    orders_down: float = -30
+    visitors_down: float = -30
+    conversion_down: float = -20
+
+
+@router.get("/alerts/config")
+def get_alerts_config(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    return _alerts_config(db)
+
+
+@router.put("/alerts/config")
+def set_alerts_config(
+    body: AlertsConfigIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    cfg = {
+        "baseline_days": max(2, min(int(body.baseline_days), 30)),
+        "sales_down": float(body.sales_down),
+        "sales_up": float(body.sales_up),
+        "orders_down": float(body.orders_down),
+        "visitors_down": float(body.visitors_down),
+        "conversion_down": float(body.conversion_down),
+    }
+    db.execute(
+        "INSERT INTO meta (key, value) VALUES ('analytics_alerts_config', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (_json.dumps(cfg, ensure_ascii=False),),
+    )
+    return {"ok": True, **cfg}

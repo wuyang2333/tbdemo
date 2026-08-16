@@ -295,11 +295,13 @@ def sync_store_row(db, row) -> dict:
     data_date = metrics["date"]
     db.execute(
         """
-        INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, conversion_rate, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, conversion_rate, repeat_rate, old_buyer_cnt, repeat_sales, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(store_id, data_date) DO UPDATE SET
             visitors = excluded.visitors, pv = excluded.pv, sales = excluded.sales,
-            orders = excluded.orders, conversion_rate = excluded.conversion_rate
+            orders = excluded.orders, conversion_rate = excluded.conversion_rate,
+            repeat_rate = excluded.repeat_rate, old_buyer_cnt = excluded.old_buyer_cnt,
+            repeat_sales = excluded.repeat_sales
         """,
         (
             row["id"],
@@ -309,6 +311,9 @@ def sync_store_row(db, row) -> dict:
             metrics["sales"],
             metrics["orders"],
             metrics["conversion_rate"],
+            metrics.get("repeat_rate", 0),
+            metrics.get("old_buyer_cnt", 0),
+            metrics.get("repeat_sales", 0),
             _fmt(_now()),
         ),
     )
@@ -544,6 +549,47 @@ def sync_all(
     result = sync_all_stores(db, user)
     _log(db, user, "同步生意参谋", "全部店铺", f"同步完成：成功 {result['ok']} / 共 {result['total']}")
     return result
+
+
+@router.post("/sync-hourly")
+def sync_hourly(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """同步生意参谋今日/昨日分时数据到 store_hourly_data。"""
+    from backend.app.core.sycm import SycmError, fetch_hourly
+
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    results = []
+    for store in stores:
+        try:
+            items = fetch_hourly(store)
+            now = _fmt(_now())
+            for it in items:
+                db.execute(
+                    "INSERT INTO store_hourly_data (store_id, data_date, hour, visitors, pv, sales, orders, buyers, conversion_rate, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(store_id, data_date, hour) DO UPDATE SET "
+                    "visitors = excluded.visitors, pv = excluded.pv, sales = excluded.sales, "
+                    "orders = excluded.orders, buyers = excluded.buyers, conversion_rate = excluded.conversion_rate",
+                    (
+                        store["id"],
+                        it["date"],
+                        it["hour"],
+                        it["visitors"],
+                        it["pv"],
+                        it["sales"],
+                        it["orders"],
+                        it["buyers"],
+                        it["conversion_rate"],
+                        now,
+                    ),
+                )
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
+        except SycmError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+    _log(db, user, "同步分时数据", "", f"成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 
 @router.get("/current")

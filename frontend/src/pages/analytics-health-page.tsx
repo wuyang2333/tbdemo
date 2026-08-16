@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { useSyncStores } from "../components/analytics/analytics-ui";
+import { StoreScopeSelect, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsHealth } from "../types";
 
 const { Text } = Typography;
@@ -18,11 +18,12 @@ function scoreColor(score: number): string {
 export function AnalyticsHealthPage() {
   const [data, setData] = useState<AnalyticsHealth | null>(null);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: res } = await http.get<AnalyticsHealth>("/analytics/health");
+      const { data: res } = await http.get<AnalyticsHealth>(`/analytics/health${storeId ? `?store_id=${storeId}` : ""}`);
       setData(res);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -30,7 +31,7 @@ export function AnalyticsHealthPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load();
@@ -46,6 +47,7 @@ export function AnalyticsHealthPage() {
         title="经营健康分"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>

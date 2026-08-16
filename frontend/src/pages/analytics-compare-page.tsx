@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { StoreBars, daySwitch, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
+import { StoreBars, StoreScopeSelect, daySwitch, fmtMoney, fmtPct, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsStoreAgg } from "../types";
 
 const { Text } = Typography;
@@ -14,11 +14,12 @@ export function AnalyticsComparePage() {
   const [stores, setStores] = useState<AnalyticsStoreAgg[]>([]);
   const [days, setDays] = useState(14);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async (d: number) => {
     setLoading(true);
     try {
-      const { data } = await http.get<{ items: AnalyticsStoreAgg[] }>(`/analytics/stores?days=${d}`);
+      const { data } = await http.get<{ items: AnalyticsStoreAgg[] }>(`/analytics/stores?days=${d}${storeId ? `&store_id=${storeId}` : ""}`);
       setStores(data.items);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -26,7 +27,7 @@ export function AnalyticsComparePage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load(days);
@@ -54,6 +55,7 @@ export function AnalyticsComparePage() {
         title="店铺对比"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={() => load(days)}>
               刷新
             </Button>

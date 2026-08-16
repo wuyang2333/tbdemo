@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
-import { ChangeBadge, formatValue, useSyncStores } from "../components/analytics/analytics-ui";
+import { ChangeBadge, StoreScopeSelect, formatValue, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsCompareMetric } from "../types";
 
 const { Text } = Typography;
@@ -13,11 +13,12 @@ const { Text } = Typography;
 export function AnalyticsYoyPage() {
   const [metrics, setMetrics] = useState<AnalyticsCompareMetric[]>([]);
   const [loading, setLoading] = useState(false);
+  const [storeId, setStoreId] = useState<number | undefined>(undefined);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await http.get<{ metrics: AnalyticsCompareMetric[] }>("/analytics/compare");
+      const { data } = await http.get<{ metrics: AnalyticsCompareMetric[] }>(`/analytics/compare${storeId ? `?store_id=${storeId}` : ""}`);
       setMetrics(data.metrics);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -25,7 +26,7 @@ export function AnalyticsYoyPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storeId]);
 
   useEffect(() => {
     load();
@@ -50,6 +51,7 @@ export function AnalyticsYoyPage() {
         title="同比环比"
         extra={
           <Space>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>

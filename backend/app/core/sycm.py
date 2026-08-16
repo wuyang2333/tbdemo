@@ -1,4 +1,4 @@
-﻿"""生意参谋数据抓取：通过专用 Chrome 的登录态调用生意参谋接口。
+"""生意参谋数据抓取：通过专用 Chrome 的登录态调用生意参谋接口。
 
 - 今天（实时）：调用 portal/live/new/index/overview/v3.json?dateType=today
   （与生意参谋首页「数据概览」实时卡一致，返回 支付金额/访客/浏览量/支付买家数/支付订单数/转化率）
@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 # 项目内内置的 sycm-cli（MIT 协议，见 backend/sycm_cli/LICENSE）
@@ -175,6 +175,7 @@ def _parse_live_overview(payload: dict) -> dict:
         "sales": round(_to_num(_take(today, "payAmt")), 2),
         "orders": int(_to_num(_take(today, "payOrdCnt") or _take(today, "payByrCnt"))),
         "conversion_rate": round(_to_num(_take(today, "payRate")) * 100, 2),
+        "repeat_rate": round(_to_num(_take(today, "reVisitAmtRatio")) * 100, 1),
         "update_time": (data.get("data") or {}).get("updateTime") or (data.get("updateTime") or ""),
     }
 
@@ -212,6 +213,9 @@ def _parse_day_overview(payload: dict) -> dict:
         "sales": round(_to_num(_take(self_, "payAmt")), 2),
         "orders": int(_to_num(_take(self_, "payOrdCnt") or _take(self_, "payByrCnt"))),
         "conversion_rate": round(_to_num(_take(self_, "payRate")) * 100, 2),
+        "repeat_rate": round(_to_num(_take(self_, "reVisitAmtRatio")) * 100, 1),
+        "old_buyer_cnt": int(_to_num(_take(self_, "payOldByrCnt"))),
+        "repeat_sales": round(_to_num(_take(self_, "rePurchasePayAmount") or _take(self_, "olderPayAmt")), 2),
     }
 
 
@@ -269,3 +273,56 @@ def bind_login(store: dict, wait_seconds: int | None = None) -> dict:
         last_error
         or "等待登录超时，请确认已在 Chrome 窗口完成登录后重试"
     )
+def fetch_hourly(store: dict, timeout: float = 120) -> list[dict]:
+    """拉取生意参谋今日/昨日分时数据（累计序列，转每小时增量）。"""
+    payload = _run_api_json(
+        [
+            "--store",
+            profile_name(store["id"]),
+            "api",
+            "/portal/live/new/index/trend/v3.json",
+            "-p",
+            "dateType=today",
+            "--referer",
+            _HOME_REFERER,
+        ],
+        timeout=timeout,
+    )
+    content = payload.get("content") or {}
+    data = (content.get("data") or {}).get("data") or {}
+    today = date.today()
+    out: list[dict] = []
+    for label, offset in (("today", 0), ("yesterday", 1)):
+        block = data.get(label) or {}
+        if not block:
+            continue
+        ds = (today - timedelta(days=offset)).isoformat()
+        uv = block.get("uv") or []
+        pv = block.get("pv") or []
+        pay = block.get("payAmt") or []
+        byr = block.get("payByrCnt") or []
+        ord_ = block.get("payOrdCnt") or []
+        prev = {"uv": 0, "pv": 0, "pay": 0.0, "byr": 0, "ord": 0}
+        for h in range(24):
+            cur = {
+                "uv": int(_to_num(uv[h])) if h < len(uv) else 0,
+                "pv": int(_to_num(pv[h])) if h < len(pv) else 0,
+                "pay": _to_num(pay[h]) if h < len(pay) else 0.0,
+                "byr": int(_to_num(byr[h])) if h < len(byr) else 0,
+                "ord": int(_to_num(ord_[h])) if h < len(ord_) else 0,
+            }
+            duv = max(cur["uv"] - prev["uv"], 0)
+            out.append(
+                {
+                    "date": ds,
+                    "hour": f"{h:02d}:00",
+                    "visitors": duv,
+                    "pv": max(cur["pv"] - prev["pv"], 0),
+                    "sales": round(max(cur["pay"] - prev["pay"], 0), 2),
+                    "orders": max(cur["ord"] - prev["ord"], 0),
+                    "buyers": max(cur["byr"] - prev["byr"], 0),
+                    "conversion_rate": round(max(cur["byr"] - prev["byr"], 0) / duv * 100, 2) if duv else 0.0,
+                }
+            )
+            prev = cur
+    return out
