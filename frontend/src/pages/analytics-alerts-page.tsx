@@ -130,7 +130,7 @@ export function AnalyticsAlertsPage() {
             size="small"
             columns={columns}
             dataSource={alerts}
-            pagination={{ pageSize: 10, showTotal: (c) => `共 ${c} 条` }}
+            pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (c) => `共 ${c} 条` }}
             scroll={{ x: 760 }}
           />
         )}

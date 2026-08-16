@@ -514,7 +514,7 @@ export function AnalyticsProductsPage() {
               onMouseEnter: () => setHoverKey(record.item_id),
               onMouseLeave: () => setHoverKey((k) => (k === record.item_id ? null : k)),
             })}
-            pagination={{ pageSize: 20, showTotal: () => (filterItemId.trim() ? `匹配 ${filteredItems.length} 个商品` : `共 ${data.total} 个商品`) }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: () => (filterItemId.trim() ? `匹配 ${filteredItems.length} 个商品` : `共 ${data.total} 个商品`) }}
             tableLayout="fixed"
             scroll={{ x: tableX }}
           />

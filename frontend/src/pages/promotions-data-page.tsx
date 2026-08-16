@@ -216,7 +216,7 @@ export function PromotionsDataPage() {
             rowKey={(r, i) => `${r.word}-${i}`}
             size="small"
             dataSource={kwItems}
-            pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 个关键词` }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (t) => `共 ${t} 个关键词` }}
             columns={[
               { title: "关键词", dataIndex: "word", width: 180, ellipsis: true },
               { title: "计划/商品", dataIndex: "promotion", width: 220, ellipsis: true },

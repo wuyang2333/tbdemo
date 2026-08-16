@@ -152,19 +152,20 @@ export function PromotionsPlansPage() {
   };
 
   const columns: TableColumnsType<PromoPlan> = [
-    { title: "场景", dataIndex: "scene_name", width: 120 },
-    { title: "计划名", dataIndex: "plan_name", width: 200, ellipsis: true },
-    { title: "商品", key: "item", width: 200, ellipsis: true, render: (_, row: PromoPlan) => planItems[row.campaign_id]?.item_title || "—" },
-    { title: "状态", dataIndex: "status", width: 80, render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
-    { title: "日预算", dataIndex: "day_budget", align: "right", width: 90, render: (v: number) => (v ? fmtMoney(v) : "—") },
-    { title: "出价", key: "bid", width: 110, render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
-    { title: "花费", dataIndex: "spend", align: "right", width: 110, render: (v: number) => (v ? fmtMoney(v) : "—") },
-    { title: "成交", dataIndex: "sales", align: "right", width: 120, render: (v: number) => (v ? fmtMoney(v) : "—") },
+    { title: "场景", dataIndex: "scene_name", width: 120, sorter: (a, b) => a.scene_name.localeCompare(b.scene_name, "zh") },
+    { title: "计划名", dataIndex: "plan_name", width: 200, ellipsis: true, sorter: (a, b) => a.plan_name.localeCompare(b.plan_name, "zh") },
+    { title: "商品", key: "item", width: 200, ellipsis: true, render: (_, row: PromoPlan) => planItems[row.campaign_id]?.item_title || "—", sorter: (a, b) => (planItems[a.campaign_id]?.item_title || "").localeCompare(planItems[b.campaign_id]?.item_title || "", "zh") },
+    { title: "状态", dataIndex: "status", width: 80, sorter: (a, b) => a.status.localeCompare(b.status, "zh"), render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
+    { title: "日预算", dataIndex: "day_budget", align: "right", width: 90, sorter: (a, b) => a.day_budget - b.day_budget, render: (v: number) => (v ? fmtMoney(v) : "—") },
+    { title: "出价", key: "bid", width: 110, sorter: (a, b) => (a.bid_value || 0) - (b.bid_value || 0), render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
+    { title: "花费", dataIndex: "spend", align: "right", width: 110, sorter: (a, b) => a.spend - b.spend, render: (v: number) => (v ? fmtMoney(v) : "—") },
+    { title: "成交", dataIndex: "sales", align: "right", width: 120, sorter: (a, b) => a.sales - b.sales, render: (v: number) => (v ? fmtMoney(v) : "—") },
     {
       title: "ROI",
       dataIndex: "roi",
       align: "right",
       width: 80,
+      sorter: (a, b) => a.roi - b.roi,
       render: (v: number, row: PromoPlan) => {
         const d = diag(row);
         const color = d.color === "green" ? "#52c41a" : d.color === "orange" ? "#fa8c16" : d.color === "red" ? "#ff4d4f" : undefined;
@@ -180,12 +181,11 @@ export function PromotionsPlansPage() {
         return <Tag color={d.color}>{d.label}</Tag>;
       },
     },
-    { title: "点击", dataIndex: "clicks", align: "right", width: 90, render: (v: number) => (v ? fmtInt(v) : "—") },
+    { title: "点击", dataIndex: "clicks", align: "right", width: 90, sorter: (a, b) => a.clicks - b.clicks, render: (v: number) => (v ? fmtInt(v) : "—") },
     {
       title: "操作",
       key: "op",
       width: 96,
-      fixed: "right",
       render: (_, row: PromoPlan) =>
         row.scene === "content" ? (
           <Text type="secondary" style={{ fontSize: 12 }}>不支持</Text>
@@ -279,7 +279,12 @@ export function PromotionsPlansPage() {
             size="small"
             columns={columns}
             dataSource={filteredPlans}
-            pagination={{ pageSize: 20, showTotal: (c) => `共 ${c} 个计划` }}
+            pagination={{
+              defaultPageSize: 20,
+              showSizeChanger: true,
+              pageSizeOptions: [10, 20, 50, 100],
+              showTotal: (c) => `共 ${c} 个计划`,
+            }}
             scroll={{ x: 1250 }}
           />
         </Card>

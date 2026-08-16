@@ -383,7 +383,7 @@ export function AccountsPage() {
           loading={loading}
           columns={columns}
           dataSource={items}
-          pagination={{ pageSize: 10, showTotal: (total) => `共 ${total} 个账号` }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (total) => `共 ${total} 个账号` }}
           scroll={{ x: 1200 }}
         />
       </Card>

@@ -101,7 +101,7 @@ export function LogsPage() {
           loading={loading}
           columns={columns}
           dataSource={items}
-          pagination={{ pageSize: 20, showTotal: (count) => `共 ${count} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (count) => `共 ${count} 条` }}
           scroll={{ x: 900 }}
         />
       </Card>
