@@ -711,11 +711,8 @@ def sync_items(
 
 
 @router.post("/sync-items-realtime")
-def sync_items_realtime(
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    """同步今日实时商品排行到 store_item_realtime。"""
+def sync_items_realtime_all(db) -> dict:
+    """同步今日实时商品排行到 store_item_realtime（后台定时与接口共用）。"""
     from backend.app.core.sycm import SycmError, fetch_item_realtime
 
     stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
@@ -742,8 +739,18 @@ def sync_items_realtime(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
         except SycmError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    _log(db, user, "同步实时商品", "", f"成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+
+
+@router.post("/sync-items-realtime")
+def sync_items_realtime(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """同步今日实时商品排行到 store_item_realtime。"""
+    result = sync_items_realtime_all(db)
+    _log(db, user, "同步实时商品", "", f"成功 {result['ok']} / 共 {result['total']} 家")
+    return result
 
 
 @router.get("/current")

@@ -536,6 +536,44 @@ def sync_promo_realtime_all(db) -> dict:
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 
+def sync_promo_items_realtime_all(db) -> dict:
+    """同步商品级实时推广数据到 promo_item_stats（后台定时与接口共用）。
+
+    走「计划→商品」口径（全站推广+关键词+人群，不含内容营销）。
+    """
+    from backend.app.core.alimama import AlimamaError, fetch_item_promo_plan_based, fetch_promo_item_fallback
+
+    today = date_cls.today().isoformat()
+    now = _now()
+    results = []
+    for store in _bound_stores(db):
+        try:
+            rows = fetch_item_promo_plan_based(store, today, today, realtime=True)
+            source = "plan_scene"
+            if not rows:
+                rows = fetch_promo_item_fallback(store, today, today, realtime=True)
+                source = "plan"
+            for it in rows:
+                db.execute(
+                    "INSERT INTO promo_item_stats (store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(store_id, item_id, mode) DO UPDATE SET "
+                    "item_title = excluded.item_title, spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
+                    "clicks = excluded.clicks, orders = excluded.orders, impressions = excluded.impressions, "
+                    "source = excluded.source, updated_at = excluded.updated_at",
+                    (
+                        store["id"], it["item_id"], it.get("item_title") or "", "realtime",
+                        it.get("spend") or 0, it.get("sales") or 0, it.get("roi") or 0,
+                        it.get("clicks") or 0, it.get("orders") or 0, it.get("impressions") or 0,
+                        source, now,
+                    ),
+                )
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(rows)})
+        except AlimamaError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+
+
 @router.post("/sync-hourly")
 def sync_promo_hourly(
     days: int = 7,
