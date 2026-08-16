@@ -526,3 +526,58 @@ def fetch_item_promo_plan_based(store: dict, start: str, end: str, realtime: boo
         row["roi"] = round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0
         out.append(row)
     return out
+
+
+_SCENE_HOURLY_FIELDS = ["adPv", "charge", "click", "alipayInshopAmt", "alipayInshopNum"]
+
+
+def fetch_scene_hourly(store: dict, target_date: str, timeout: float = 180) -> list[dict]:
+    """拉取某天各推广场景的 24 小时分时数据（splitType=hour，支持历史日期）。"""
+    body = {
+        "bizCode": "universalBP",
+        "fromRealTime": False,
+        "source": "baseReport",
+        "from": "pcBaseReport",
+        "byPage": True,
+        "totalTag": True,
+        "needCountAccelerate": True,
+        "rptType": "account",
+        "queryDomains": ["date"],
+        "queryFieldIn": _SCENE_HOURLY_FIELDS,
+        "startTime": target_date,
+        "endTime": target_date,
+        "splitType": "hour",
+        "effectEqual": 15,
+        "havingList": [],
+        "pageSize": 50,
+        "pageNo": 1,
+        "orderField": "charge",
+        "orderBy": "desc",
+        "unifyType": "zhai",
+        "offset": 0,
+    }
+    body_json = json.dumps(body, ensure_ascii=False)
+    out: list[dict] = []
+    for key, biz, name in SCENES:
+        payload = _run_json(store, ["api", f"/report/query.json?bizCode={biz}", "--body", body_json], timeout=timeout)
+        for row in (payload.get("data") or {}).get("list") or []:
+            if not isinstance(row, dict):
+                continue
+            thedate = str(row.get("thedate") or "")
+            hour = thedate[-5:] if len(thedate) >= 5 else ""
+            if not hour:
+                continue
+            out.append(
+                {
+                    "date": target_date,
+                    "hour": hour,
+                    "scene": key,
+                    "scene_name": name,
+                    "impressions": int(_num(row.get("adPv"))),
+                    "clicks": int(_num(row.get("click"))),
+                    "spend": round(_num(row.get("charge")), 2),
+                    "sales": round(_num(row.get("alipayInshopAmt")), 2),
+                    "orders": int(_num(row.get("alipayInshopNum"))),
+                }
+            )
+    return out

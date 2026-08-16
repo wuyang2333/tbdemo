@@ -27,7 +27,8 @@ from backend.app.api import (
     tasks,
 )
 from backend.app.api.auth import get_current_user, require_admin, require_module
-from backend.app.api.stores import run_inspect_once, sync_all_stores
+from backend.app.api.promotions import sync_promo_realtime_all
+from backend.app.api.stores import run_inspect_once, sync_all_stores, sync_hourly_all
 from backend.app.core.db import DB_PATH, init_db
 from backend.app.core.modules import get_modules
 
@@ -64,13 +65,39 @@ async def _sycm_sync_loop() -> None:
         await asyncio.sleep(1800)
 
 
+def _run_hourly_sync() -> None:
+    """每天自动同步分时：店铺分时（今日/昨日）+ 推广实时分时（今日）。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        sync_hourly_all(conn)
+        sync_promo_realtime_all(conn)
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+async def _hourly_sync_loop() -> None:
+    """分时自动同步：每 6 小时跑一次，保持今日分时新鲜并积累昨日。"""
+    while True:
+        try:
+            await asyncio.to_thread(_run_hourly_sync)
+        except Exception:
+            pass
+        await asyncio.sleep(21600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task = asyncio.create_task(_inspect_loop())
     sycm_task = asyncio.create_task(_sycm_sync_loop())
+    hourly_task = asyncio.create_task(_hourly_sync_loop())
     yield
     task.cancel()
     sycm_task.cancel()
+    hourly_task.cancel()
 
 
 def create_app() -> FastAPI:

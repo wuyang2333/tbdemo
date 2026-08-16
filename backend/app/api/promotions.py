@@ -23,6 +23,7 @@ from backend.app.core.alimama import (
     fetch_promo_item_fallback,
     fetch_realtime,
     fetch_scene_daily,
+    fetch_scene_hourly,
 )
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
@@ -95,9 +96,16 @@ def _store_daily_rows(db, store_id: int, items: list[dict], now: str) -> int:
     return len(items)
 
 
-def _store_realtime_rows(db, store_id: int, items: list[dict], now: str) -> int:
-    today = date_cls.today().isoformat()
+def _store_realtime_rows(db, store_id: int, items: list[dict], now: str, data_date: str | None = None) -> int:
+    today = data_date or date_cls.today().isoformat()
     for it in items:
+        imp = int(it.get("impressions") or 0)
+        clicks = int(it.get("clicks") or 0)
+        spend = round(it.get("spend") or 0, 2)
+        sales = round(it.get("sales") or 0, 2)
+        ctr = it.get("ctr") if it.get("ctr") is not None else (round(clicks / imp * 100, 2) if imp else 0.0)
+        roi = it.get("roi") if it.get("roi") is not None else (round(sales / spend, 2) if spend else 0.0)
+        conv = it.get("conversion_rate") if it.get("conversion_rate") is not None else 0.0
         db.execute(
             "INSERT INTO promo_realtime (store_id, scene, scene_name, data_date, hour, impressions, clicks, ctr, spend, sales, roi, orders, conversion_rate, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -111,14 +119,14 @@ def _store_realtime_rows(db, store_id: int, items: list[dict], now: str) -> int:
                 it["scene_name"],
                 today,
                 it["hour"],
-                it["impressions"],
-                it["clicks"],
-                it["ctr"],
-                it["spend"],
-                it["sales"],
-                it["roi"],
-                it["orders"],
-                it["conversion_rate"],
+                imp,
+                clicks,
+                ctr,
+                spend,
+                sales,
+                roi,
+                int(it.get("orders") or 0),
+                conv,
                 now,
             ),
         )
@@ -510,6 +518,52 @@ def sync_items(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
     _log(db, user, "同步商品推广数据", "", f"模式={db_mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "mode": db_mode}
+
+
+def sync_promo_realtime_all(db) -> dict:
+    """同步万相台今日实时分时数据到 promo_realtime（后台定时与接口共用）。"""
+    from backend.app.core.alimama import AlimamaError, fetch_realtime
+
+    now = _now()
+    results = []
+    for store in _bound_stores(db):
+        try:
+            items = fetch_realtime(store)
+            count = _store_realtime_rows(db, store["id"], items, now)
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
+        except AlimamaError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+
+
+@router.post("/sync-hourly")
+def sync_promo_hourly(
+    days: int = 7,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """补拉最近 N 天（不含今天）各推广场景的 24 小时分时数据到 promo_realtime。"""
+    from backend.app.core.alimama import AlimamaError, fetch_scene_hourly
+
+    if not (1 <= days <= 30):
+        days = 7
+    today = date_cls.today()
+    dates = [(today - timedelta(days=i)).isoformat() for i in range(1, days + 1)]
+    now = _now()
+    results = []
+    for store in _bound_stores(db):
+        total = 0
+        err = None
+        for d in dates:
+            try:
+                items = fetch_scene_hourly(store, d)
+                total += _store_realtime_rows(db, store["id"], items, now, data_date=d)
+            except AlimamaError as exc:
+                err = str(exc)
+                break
+        results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total, "error": err})
+    _log(db, user, "补推广分时", "", f"近 {days} 天 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
 
 @router.put("/plans/{plan_id}")
