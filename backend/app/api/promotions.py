@@ -779,6 +779,7 @@ def promo_alerts(
     budget_over = float(pcfg.get("budget_over") or 1.0)
     budget_warn = float(pcfg.get("budget_warn") or 0.8)
     roi_drop_ratio = float(pcfg.get("roi_drop_ratio") or 0.6)
+    roi_low = float(pcfg.get("roi_low") or 1.0)
     alerts = []
     rows = db.execute(
         "SELECT p.plan_name, p.scene_name, p.status, p.day_budget, "
@@ -803,6 +804,8 @@ def promo_alerts(
                 alerts.append({"level": "warn", "type": "接近预算", "message": f"「{name}」今日花费已达日预算 {ratio * 100:.0f}%（{rt_spend:.0f}/{budget:.0f} 元）"})
         if rt_spend > 0 and ye_roi > 0 and 0 < rt_roi < ye_roi * roi_drop_ratio:
             alerts.append({"level": "warn", "type": "ROI下滑", "message": f"「{name}」今日ROI {rt_roi:.2f} 较昨日 {ye_roi:.2f} 明显下滑"})
+        if rt_spend > 0 and 0 < rt_roi < roi_low:
+            alerts.append({"level": "warn", "type": "ROI偏低", "message": f"「{name}」今日ROI {rt_roi:.2f} 低于 {roi_low:.2f}，建议关注"})
     alerts.sort(key=lambda a: 0 if a["level"] == "error" else 1)
     return {"items": alerts[:50], "count": len(alerts)}
 

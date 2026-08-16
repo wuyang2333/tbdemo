@@ -829,6 +829,7 @@ export function PromotionsPlansPage() {
           { group: "plan", key: "budget_over", label: "预算超限比例", hint: "花费/日预算 ≥ 该比例时红色提醒（1=刚好超预算）", min: 0.5, max: 3, step: 0.05 },
           { group: "plan", key: "budget_warn", label: "接近预算比例", hint: "花费/日预算 ≥ 该比例时橙色提醒", min: 0.1, max: 1, step: 0.05 },
           { group: "plan", key: "roi_drop_ratio", label: "ROI 下滑提醒比例", hint: "今日ROI < 昨日ROI × 该比例时提醒（0.6=下滑40%）", min: 0.1, max: 1, step: 0.05 },
+          { group: "plan", key: "roi_low", label: "ROI 偏低阈值", hint: "今日实时ROI低于该值提醒（默认1=保本线）", min: 0.1, max: 10, step: 0.1 },
         ]}
       />
       <Modal

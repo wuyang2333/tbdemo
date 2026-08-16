@@ -22,9 +22,10 @@ DEFAULT_ALERT_CONFIG = {
         "visitors_drop_pct": 50.0,
         "conversion_low": 0.5,
         "promo_roi_low": 1.0,
+        "roi_high": 2.0,
         "min_visitors": 50,
     },
-    "plan": {"budget_over": 1.0, "budget_warn": 0.8, "roi_drop_ratio": 0.6},
+    "plan": {"budget_over": 1.0, "budget_warn": 0.8, "roi_low": 1.0, "roi_drop_ratio": 0.6},
 }
 
 
