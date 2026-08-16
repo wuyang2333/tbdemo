@@ -506,37 +506,3 @@ body[data-theme="light"] .ops-hero::before {
   background: var(--ops-hoverbar-btn-hover);
   color: var(--ops-hoverbar-text-hover);
 }
-
-
-/* ===== 打印/导出 PDF：隐藏外壳、强制浅色 ===== */
-@media print {
-  :root {
-    --ops-bg: #ffffff;
-    --ops-card-bg: #ffffff;
-    --ops-card-bg-2: #fafbfe;
-    --ops-border: #e8e8e8;
-    --ops-border-strong: #d9d9d9;
-    --ops-text: #1f1f1f;
-    --ops-text-secondary: #6b6b6b;
-    --ops-shadow-sm: none;
-    --ops-shadow: none;
-  }
-  body, .ant-layout, .ant-layout-content { background: #ffffff !important; }
-  .ant-layout-sider, .ant-layout-header { display: none !important; }
-  .ant-layout-content { padding: 0 !important; margin: 0 !important; }
-  /* 隐藏顶部操作按钮/日期选择 */
-  .ops-page-head button, .ops-page-head .ant-picker, .ops-page-head .ant-select { display: none !important; }
-  /* 卡片浅色 */
-  .ant-card {
-    background: #ffffff !important;
-    box-shadow: none !important;
-    border: 1px solid #e8e8e8 !important;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-  .ant-card-head-title, .ant-typography, .ant-statistic-content, .ant-statistic-content-value,
-  .ant-descriptions-item-content, .ant-descriptions-title { color: #1f1f1f !important; }
-  .ant-statistic-title, .ant-descriptions-item-label, .ant-typography-secondary { color: #6b6b6b !important; }
-  .ant-tag { background: #f5f5f5 !important; color: #1f1f1f !important; border-color: #e8e8e8 !important; }
-  .ant-descriptions-item-label { background: #fafafa !important; }
-}

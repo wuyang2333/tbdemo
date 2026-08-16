@@ -8,6 +8,7 @@ import { useDailyRefreshAt } from "../lib/use-daily-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect } from "../components/analytics/analytics-ui";
 import type { AnalyticsReport } from "../types";
+import { buildReportHtml } from "../lib/report-html";
 
 const { Text } = Typography;
 
@@ -145,18 +146,24 @@ export function AnalyticsReportPage() {
   };
 
   const exportPdf = () => {
-    // 打印前临时切浅色，打印完恢复
-    const prevTheme = document.body.dataset.theme;
-    document.body.dataset.theme = "light";
-    const restore = () => {
-      if (prevTheme) document.body.dataset.theme = prevTheme;
-      else delete document.body.dataset.theme;
-      window.onafterprint = null;
-    };
-    window.onafterprint = restore;
-    setTimeout(restore, 30000);
-    message.info("请在打印窗口选择「另存为 PDF」");
-    window.print();
+    if (!data) return;
+    const win = window.open("", "_blank", "width=920,height=1100");
+    if (!win) {
+      message.error("浏览器拦截了弹窗，请允许本站弹窗后重试");
+      return;
+    }
+    win.document.open();
+    win.document.write(buildReportHtml(data));
+    win.document.close();
+    setTimeout(() => {
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        // 用户可能已手动关闭窗口
+      }
+    }, 400);
+    message.info("已打开报告，请在打印窗口选择「另存为 PDF」");
   };
 
   const topCard = (title: string, items: { item_id: string; item_title: string; image?: string; sales: number; orders: number }[]) => (
