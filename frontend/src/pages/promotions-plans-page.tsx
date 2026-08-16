@@ -19,6 +19,7 @@ export function PromotionsPlansPage() {
   const [mode, setMode] = useState("realtime");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [alerts, setAlerts] = useState<{ level: string; type: string; message: string }[]>([]);
   const [diagFilter, setDiagFilter] = useState("");
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -34,6 +35,12 @@ export function PromotionsPlansPage() {
       const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}&mode=${encodeURIComponent(m)}`);
       setPlans(data.items);
       setLastUpdated(dayjs().format("HH:mm:ss"));
+      try {
+        const { data: al } = await http.get<{ items: { level: string; type: string; message: string }[] }>("/promotions/alerts");
+        setAlerts(al.items);
+      } catch {
+        setAlerts([]);
+      }
     } catch (error) {
       message.error(getApiErrorMessage(error));
       setPlans([]);
@@ -164,6 +171,22 @@ export function PromotionsPlansPage() {
           <Tag color="red">建议暂停 {counts.low}</Tag> · 显示{periodTitle}数据
         </Text>
       </Space>
+
+      {alerts.length > 0 && (
+        <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}>
+          <Space direction="vertical" style={{ width: "100%" }} size={4}>
+            {alerts.slice(0, 6).map((a, i) => (
+              <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
+                {a.level === "error" ? "⚠️ " : "❗ "}
+                [{a.type}] {a.message}
+              </div>
+            ))}
+            {alerts.length > 6 && (
+              <Text type="secondary" style={{ fontSize: 12 }}>…还有 {alerts.length - 6} 条预警</Text>
+            )}
+          </Space>
+        </Card>
+      )}
 
       {loading && plans.length === 0 ? (
         <div style={{ textAlign: "center", padding: 60 }}>

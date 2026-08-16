@@ -735,6 +735,40 @@ def promo_ai_insight(
     }
 
 
+@router.get("/alerts")
+def promo_alerts(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """推广预警：预算超限/接近预算、ROI较昨日明显下滑。"""
+    alerts = []
+    rows = db.execute(
+        "SELECT p.plan_name, p.scene_name, p.status, p.day_budget, "
+        "COALESCE(rt.spend,0) AS rt_spend, COALESCE(rt.roi,0) AS rt_roi, "
+        "COALESCE(ye.spend,0) AS ye_spend, COALESCE(ye.roi,0) AS ye_roi "
+        "FROM promo_plans p "
+        "LEFT JOIN promo_plan_stats rt ON rt.store_id=p.store_id AND rt.campaign_id=p.campaign_id AND rt.mode='realtime' "
+        "LEFT JOIN promo_plan_stats ye ON ye.store_id=p.store_id AND ye.campaign_id=p.campaign_id AND ye.mode='yesterday' "
+        "WHERE p.status='在投'"
+    ).fetchall()
+    for r in rows:
+        name = r["plan_name"] or "未命名计划"
+        budget = round(r["day_budget"] or 0, 2)
+        rt_spend = round(r["rt_spend"] or 0, 2)
+        rt_roi = r["rt_roi"] or 0
+        ye_roi = r["ye_roi"] or 0
+        if budget > 0 and rt_spend > 0:
+            ratio = rt_spend / budget
+            if ratio >= 1:
+                alerts.append({"level": "error", "type": "预算超限", "message": f"「{name}」今日花费 {rt_spend:.0f} 元已超日预算 {budget:.0f} 元，建议调整"})
+            elif ratio >= 0.8:
+                alerts.append({"level": "warn", "type": "接近预算", "message": f"「{name}」今日花费已达日预算 {ratio * 100:.0f}%（{rt_spend:.0f}/{budget:.0f} 元）"})
+        if rt_spend > 0 and ye_roi > 0 and 0 < rt_roi < ye_roi * 0.6:
+            alerts.append({"level": "warn", "type": "ROI下滑", "message": f"「{name}」今日ROI {rt_roi:.2f} 较昨日 {ye_roi:.2f} 明显下滑"})
+    alerts.sort(key=lambda a: 0 if a["level"] == "error" else 1)
+    return {"items": alerts[:20], "count": len(alerts)}
+
+
 @router.put("/plans/{plan_id}")
 def update_plan(
     plan_id: int,

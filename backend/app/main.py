@@ -74,6 +74,7 @@ def _run_realtime_sync() -> None:
 
 async def _realtime_sync_loop() -> None:
     """数据自动同步：每 3 分钟同步一次所有数据，保持页面实时刷新。"""
+    await asyncio.sleep(30)  # 启动后先等服务就绪，避免开机即抢占资源
     while True:
         try:
             await asyncio.to_thread(_run_realtime_sync)
