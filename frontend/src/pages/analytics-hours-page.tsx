@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
-import type { AnalyticsHours } from "../types";
+import type { AnalyticsHourPoint, AnalyticsHours } from "../types";
 
 const { Text } = Typography;
 
@@ -30,6 +30,91 @@ function ChangeBadge({ change }: { change: number | null | undefined }) {
       {up ? "+" : "-"}
       {Math.abs(change).toFixed(1)}%
     </span>
+  );
+}
+
+function HourChart({
+  items,
+  height,
+  barSlots,
+  tooltipFor,
+  peakHour,
+}: {
+  items: AnalyticsHourPoint[];
+  height: number;
+  barSlots: (item: AnalyticsHourPoint, idx: number) => React.ReactNode;
+  tooltipFor: (item: AnalyticsHourPoint, idx: number) => React.ReactNode;
+  peakHour?: string;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const n = items.length || 1;
+  return (
+    <div style={{ position: "relative", paddingTop: 12 }}>
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          top: 12,
+          bottom: 22,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          pointerEvents: "none",
+        }}
+      >
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} style={{ borderTop: "1px solid var(--ops-border)" }} />
+        ))}
+      </div>
+      <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 2, height }}>
+        {items.map((it, idx) => (
+          <div
+            key={it.hour}
+            onMouseEnter={() => setHover(idx)}
+            onMouseLeave={() => setHover(null)}
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 2,
+              borderRadius: 4,
+              background: hover === idx ? "var(--ops-accent-soft)" : "transparent",
+              transition: "background 0.15s",
+            }}
+          >
+            {peakHour === it.hour && <div style={{ fontSize: 9, color: "#fa8c16", lineHeight: 1 }}>★</div>}
+            <div style={{ width: "100%", flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center" }}>
+              {barSlots(it, idx)}
+            </div>
+            <div style={{ fontSize: 9, color: "rgba(128,128,128,0.8)", whiteSpace: "nowrap" }}>{it.hour.slice(0, 2)}时</div>
+          </div>
+        ))}
+      </div>
+      {hover != null && (
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: `calc(${(hover + 0.5) * (100 / n)}%)`,
+            transform: "translateX(-50%)",
+            background: "rgba(18,21,29,0.96)",
+            border: "1px solid var(--ops-border-strong)",
+            borderRadius: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            lineHeight: 1.7,
+            zIndex: 5,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+            boxShadow: "var(--ops-shadow-sm)",
+          }}
+        >
+          {tooltipFor(items[hover], hover)}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -194,58 +279,66 @@ export function AnalyticsHoursPage() {
               <Switch checked={compare} onChange={setCompare} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
             }
           >
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 190 }}>
-              {items.map((p, idx) => {
+            <HourChart
+              items={items}
+              height={190}
+              peakHour={data.peak_hour}
+              barSlots={(it, idx) => {
                 const prev = data?.prev_items?.[idx]?.sales ?? 0;
                 return (
-                  <div
-                    key={p.hour}
-                    style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}
-                    title={`${p.hour} 访客 ${p.visitors} / 销售 ${fmtMoney(p.sales)}${compare ? ` / 上期 ${fmtMoney(prev)}` : ""}`}
-                  >
-                    <div style={{ width: "100%", flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center" }}>
-                      {compare && (
-                        <div style={{ width: "26%", height: `${(prev / maxPrev) * 100}%`, background: "rgba(128,128,128,0.45)", borderRadius: "3px 3px 0 0", minHeight: prev ? 2 : 0 }} />
-                      )}
-                      <div style={{ width: "26%", height: `${(p.visitors / maxVisitors) * 100}%`, background: "var(--ops-accent)", borderRadius: "3px 3px 0 0", minHeight: p.visitors ? 2 : 0 }} />
-                      <div style={{ width: "26%", height: `${(p.sales / maxSales) * 100}%`, background: "#52c41a", borderRadius: "3px 3px 0 0", minHeight: p.sales ? 2 : 0 }} />
-                    </div>
-                    <div style={{ fontSize: 9, color: "rgba(128,128,128,0.8)", whiteSpace: "nowrap" }}>{p.hour.slice(0, 2)}时</div>
-                  </div>
+                  <>
+                    {compare && (
+                      <div style={{ width: "28%", height: `${(prev / maxPrev) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prev ? 2 : 0 }} />
+                    )}
+                    <div style={{ width: "28%", height: `${(it.visitors / maxVisitors) * 100}%`, background: "linear-gradient(180deg, #ff8a3d, #ff5000)", borderRadius: "4px 4px 0 0", minHeight: it.visitors ? 2 : 0 }} />
+                    <div style={{ width: "28%", height: `${(it.sales / maxSales) * 100}%`, background: "linear-gradient(180deg, #73d13d, #389e0d)", borderRadius: "4px 4px 0 0", minHeight: it.sales ? 2 : 0 }} />
+                  </>
                 );
-              })}
-            </div>
+              }}
+              tooltipFor={(it, idx) => (
+                <>
+                  <b>{it.hour}</b>
+                  <div>访客 {fmtInt(it.visitors)} · 销售 {fmtMoney(it.sales)}</div>
+                  {compare && <div>上期销售 {fmtMoney(data?.prev_items?.[idx]?.sales ?? 0)}</div>}
+                  <div>
+                    销售环比 <ChangeBadge change={it.sales_cycle} />
+                  </div>
+                </>
+              )}
+            />
             <Space style={{ marginTop: 8 }}>
               <Tag color="var(--ops-accent)">访客</Tag>
               <Tag color="#52c41a">销售额</Tag>
               {compare && <Tag>上期销售额</Tag>}
+              <Tag color="#fa8c16">★ 销售高峰</Tag>
             </Space>
           </Card>
 
           <Card variant="borderless" title="24 小时 推广花费 / ROI" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 170 }}>
-              {items.map((p) => {
-                const roi = p.promo_roi;
-                const isTop = roi > 0 && roi >= maxRoi;
-                return (
-                  <div
-                    key={p.hour}
-                    style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}
-                    title={`${p.hour} 花费 ${fmtMoney(p.promo_spend)} / ROI ${roi}`}
-                  >
-                    <div style={{ fontSize: 9, fontWeight: 600, color: roi > 0 ? (roi >= 2 ? "#52c41a" : roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
-                      {isTop ? "★" : ""}
-                      {roi > 0 ? roi.toFixed(1) : ""}
-                    </div>
-                    <div style={{ width: "70%", height: `${(p.promo_spend / maxPromo) * 100}%`, background: isTop ? "#fa8c16" : "#4096ff", borderRadius: "3px 3px 0 0", minHeight: p.promo_spend ? 2 : 0 }} />
-                    <div style={{ fontSize: 9, color: "rgba(128,128,128,0.8)", whiteSpace: "nowrap" }}>{p.hour.slice(0, 2)}时</div>
+            <HourChart
+              items={items}
+              height={170}
+              peakHour={items.find((it) => it.promo_roi > 0 && it.promo_roi >= maxRoi)?.hour}
+              barSlots={(it) => (
+                <>
+                  <div style={{ fontSize: 9, fontWeight: 600, color: it.promo_roi > 0 ? (it.promo_roi >= 2 ? "#52c41a" : it.promo_roi >= 1 ? "#fa8c16" : "#ff4d4f") : "rgba(128,128,128,0.6)" }}>
+                    {it.promo_roi > 0 ? it.promo_roi.toFixed(1) : ""}
                   </div>
-                );
-              })}
-            </div>
+                  <div style={{ width: "70%", height: `${(it.promo_spend / maxPromo) * 100}%`, background: "linear-gradient(180deg, #69b1ff, #1677ff)", borderRadius: "4px 4px 0 0", minHeight: it.promo_spend ? 2 : 0 }} />
+                </>
+              )}
+              tooltipFor={(it) => (
+                <>
+                  <b>{it.hour}</b>
+                  <div>花费 {fmtMoney(it.promo_spend)}</div>
+                  <div>成交 {fmtMoney(it.promo_sales)}</div>
+                  <div>ROI {it.promo_roi.toFixed(2)}</div>
+                </>
+              )}
+            />
             <Space style={{ marginTop: 8 }}>
-              <Tag color="#4096ff">推广花费</Tag>
-              <Tag color="#fa8c16">ROI 最高时段 ★</Tag>
+              <Tag color="#1677ff">推广花费</Tag>
+              <Tag color="#fa8c16">★ ROI 最高时段</Tag>
               <Tag color="#52c41a">ROI≥2</Tag>
               <Tag color="#ff4d4f">ROI&lt;1</Tag>
             </Space>
