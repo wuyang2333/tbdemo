@@ -770,10 +770,40 @@ def _collect_insight(mode: str, store_id: int | None, db) -> dict:
         except Exception:  # noqa: BLE001
             anomalies = []
     ad_share = round(min(promo["sales"] / cur["sales"] * 100, 100.0), 1) if cur["sales"] else 0.0
+    if mode == "realtime":
+        scene_rows = db.execute(
+            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_realtime "
+            "WHERE data_date = ?" + sf + " GROUP BY scene ORDER BY spend DESC",
+            [ts] + sp,
+        ).fetchall()
+    else:
+        scene_rows = db.execute(
+            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
+            "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY scene ORDER BY spend DESC",
+            [start.isoformat(), end.isoformat()] + sp,
+        ).fetchall()
+    promo_scenes = []
+    for r in scene_rows:
+        spend = round(r["spend"] or 0, 2)
+        sales = round(r["sales"] or 0, 2)
+        promo_scenes.append(
+            {
+                "scene": r["scene"],
+                "scene_name": r["scene_name"] or r["scene"],
+                "spend": spend,
+                "sales": sales,
+                "roi": round(sales / spend, 2) if spend else 0.0,
+            }
+        )
+    avg_order_value = round(cur["sales"] / cur["orders"], 2) if cur["orders"] else 0.0
+    value_per_visitor = round(cur["sales"] / cur["visitors"], 2) if cur["visitors"] else 0.0
     return {
         "range_label": range_label,
         "cur": cur,
         "prev": prev,
+        "avg_order_value": avg_order_value,
+        "value_per_visitor": value_per_visitor,
+        "promo_scenes": promo_scenes,
         "chg": {
             "sales": _pct_chg(cur["sales"], prev["sales"]),
             "orders": _pct_chg(cur["orders"], prev["orders"]),
@@ -811,6 +841,10 @@ def _data_lines(d: dict) -> list[str]:
             f"推广ROI {promo['roi']}（较上期 {fmt_pp(pchg['roi'])}），广告成交占比 {promo['ad_share']}%"
         ),
     ]
+    if d.get("avg_order_value") is not None:
+        lines.append(f"客单价 {d['avg_order_value']:.2f} 元，单访客价值 {d['value_per_visitor']:.2f} 元")
+    if d.get("promo_scenes"):
+        lines.append("推广分场景：" + "、".join(f"{s['scene_name']}花费{s['spend']:.0f}元成交{s['sales']:.0f}元ROI{s['roi']}" for s in d["promo_scenes"]))
     if d["trend"]:
         lines.append("逐日销售额：" + "、".join(d["trend"]))
     if d["top_products"]:
@@ -826,13 +860,13 @@ def _data_lines(d: dict) -> list[str]:
 
 def _build_insight_prompt(d: dict) -> str:
     prompt = (
-        "你是淘宝店铺的运营数据分析师。请根据下面数据输出经营解读，要求：\n"
-        "1. 必须严格按以下格式输出，每部分独占一段：\n"
-        "【整体表现】一句话概括本期经营并给出关键数字（销售额、订单、推广ROI）。\n"
-        "【亮点】\n- 亮点1\n- 亮点2\n- 亮点3（最多3条，确实没有就写“本期暂无突出亮点”）\n"
-        "【风险】\n- 风险1\n- 风险2（最多2条，没有就写“暂无明显风险”）\n"
-        "【建议】\n- 建议1\n- 建议2\n- 建议3（最多3条，要具体可执行）\n"
-        "2. 简体中文、语气务实，不客套；金额≥1万用“X.X万”简化；只依据给定数据，不要编造。\n\n"
+        "你是淘宝店铺的运营数据分析师。请根据下面数据输出详细经营解读，严格按格式，每部分独占一段，条目用“- ”开头：\n"
+        "【整体表现】2-3句话概括本期经营（含销售额、订单、访客、转化率、推广ROI关键数字，并说明同比/环比趋势）\n"
+        "【亮点】\n- 销售/流量/转化/推广方面的亮点（3-4条，确实没有就写“本期暂无突出亮点”）\n"
+        "【推广表现】\n- 分场景说明投放效果，点出ROI高/低的场景与原因（2-3条）\n"
+        "【风险】\n- 数据异常、低效投放、转化下滑等（3条，没有就写“暂无明显风险”）\n"
+        "【建议】\n- 具体可执行的运营/投放建议（4-5条，明确到动作或时段）\n"
+        "简体中文务实，金额≥1万用X.X万简化；只依据给定数据，不要编造。\n\n"
         + "\n".join(_data_lines(d))
     )
     return prompt
@@ -841,12 +875,13 @@ def _build_insight_prompt(d: dict) -> str:
 def _parse_insight_sections(reply: str) -> dict:
     """解析【...】标记输出为结构化 sections（支持 5 段时段解读与通用 4 段）。"""
     import re as _re
-    sections = {"overall": "", "highlights": [], "conversion": [], "risks": [], "suggestions": []}
+    sections = {"overall": "", "highlights": [], "conversion": [], "promo": [], "risks": [], "suggestions": []}
     key_map = {
         "整体表现": "overall",
         "销售时段规律": "highlights",
         "亮点": "highlights",
         "流量与转化": "conversion",
+        "推广表现": "promo",
         "风险提醒": "risks",
         "风险": "risks",
         "投放建议": "suggestions",

@@ -20,6 +20,8 @@ const MODE_OPTIONS = [
 interface InsightSections {
   overall: string;
   highlights: string[];
+  conversion: string[];
+  promo: string[];
   risks: string[];
   suggestions: string[];
 }
@@ -237,6 +239,7 @@ export function AnalyticsInsightPage() {
 
             <div style={{ display: "grid", gap: 10 }}>
               <InsightSection icon={<CheckCircleOutlined />} color="#52c41a" title="亮点" items={result.sections.highlights} />
+              <InsightSection icon={<RobotOutlined />} color="#1677ff" title="推广表现" items={result.sections.promo} />
               <InsightSection icon={<WarningOutlined />} color="#ff4d4f" title="风险" items={result.sections.risks} />
               <InsightSection icon={<BulbOutlined />} color="var(--ops-accent-light)" title="建议" items={result.sections.suggestions} />
             </div>
