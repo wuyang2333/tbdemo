@@ -6,6 +6,7 @@ import {
   Empty,
   Input,
   Row,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -26,7 +27,11 @@ import type { PromoData, PromoPlan, PromoSceneAgg } from "../types";
 
 const { Text } = Typography;
 
-const DAY_OPTIONS = [7, 14, 30];
+const MODE_OPTIONS = [
+  { label: "实时", value: "realtime" },
+  { label: "昨天", value: "yesterday" },
+  { label: "近七天", value: "7d" },
+];
 const SCENE_OPTIONS = [
   { value: "", label: "全部场景" },
   { value: "wholesite", label: "货品全站推广" },
@@ -123,49 +128,52 @@ function SceneTable({ scenes, summary }: { scenes: PromoSceneAgg[]; summary: Pro
 
 function PromoDataTab({
   data,
-  days,
-  onDays,
+  mode,
+  onMode,
   syncing,
   onSync,
 }: {
   data: PromoData | null;
-  days: number;
-  onDays: (d: number) => void;
+  mode: string;
+  onMode: (m: string) => void;
   syncing: boolean;
   onSync: () => void;
 }) {
-  const labels = (data?.trend ?? []).map((p) => p.date);
+  const labels = (data?.trend ?? []).map((p) => p.label);
   const trend = data?.trend ?? [];
+  const isRealtime = data?.mode === "realtime";
+  const periodTitle = mode === "realtime" ? "今日实时" : mode === "yesterday" ? "昨天" : "近七天";
   return (
     <>
       <Space style={{ marginBottom: 12 }} wrap>
+        <Segmented options={MODE_OPTIONS} value={mode} onChange={(value) => onMode(String(value))} />
         <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={onSync}>
-          同步万相台数据
+          同步{periodTitle}数据
         </Button>
         <Text type="secondary" style={{ fontSize: 12 }}>
           {data
-            ? `已绑定 ${data.bound_stores} 家店铺 · 最近同步 ${data.last_sync ? dayjs(data.last_sync).format("MM-DD HH:mm") : "—"}`
-            : "先同步万相台数据"}
+            ? `${periodTitle} · 已绑定 ${data.bound_stores} 家店铺 · 最近同步 ${data.last_sync ? dayjs(data.last_sync).format("MM-DD HH:mm") : "—"}`
+            : "先同步数据"}
         </Text>
       </Space>
       {!data ? (
-        <Empty description="暂无推广数据，点「同步万相台数据」从万相台自动抓取" style={{ padding: 24 }} />
+        <Empty description={`暂无${periodTitle}数据，点「同步${periodTitle}数据」从万相台自动抓取`} style={{ padding: 24 }} />
       ) : (
         <>
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={12} sm={4}>
               <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <Statistic title="区间花费" value={data.summary.spend} precision={2} prefix="¥" />
+                <Statistic title={isRealtime ? "今日实时花费" : "区间花费"} value={data.summary.spend} precision={2} prefix="¥" />
               </Card>
             </Col>
             <Col xs={12} sm={4}>
               <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <Statistic title="成交金额" value={data.summary.sales} precision={2} prefix="¥" />
+                <Statistic title={isRealtime ? "今日实时成交" : "成交金额"} value={data.summary.sales} precision={2} prefix="¥" />
               </Card>
             </Col>
             <Col xs={12} sm={4}>
               <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <Statistic title="整体 ROI" value={data.summary.roi} precision={2} valueStyle={{ color: "#1677ff" }} />
+                <Statistic title="ROI" value={data.summary.roi} precision={2} valueStyle={{ color: "#1677ff" }} />
               </Card>
             </Col>
             <Col xs={12} sm={4}>
@@ -175,7 +183,7 @@ function PromoDataTab({
             </Col>
             <Col xs={12} sm={4}>
               <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <Statistic title="平均点击率" value={data.summary.ctr} precision={2} suffix="%" />
+                <Statistic title="点击率" value={data.summary.ctr} precision={2} suffix="%" />
               </Card>
             </Col>
             <Col xs={12} sm={4}>
@@ -185,36 +193,61 @@ function PromoDataTab({
             </Col>
           </Row>
 
-          <Row gutter={[16, 16]}>
-            <Col xs={24} lg={10}>
-              <Card
-                variant="borderless"
-                title={`各推广场景（近 ${days} 天）`}
-                style={{ boxShadow: "var(--ops-shadow-sm)" }}
-                extra={daySwitch(days, onDays)}
-              >
-                <SceneTable scenes={data.scenes} summary={data.summary} />
-              </Card>
-            </Col>
-            <Col xs={24} lg={14}>
-              <Card variant="borderless" title="花费 / 成交金额 趋势" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }} extra={daySwitch(days, onDays)}>
-                <LineChart
-                  labels={labels}
-                  series={[
-                    { name: "花费", color: "#ff5000", values: trend.map((p) => p.spend), format: fmtMoney },
-                    { name: "成交金额", color: "#52c41a", values: trend.map((p) => p.sales), format: fmtMoney },
-                  ]}
-                />
-              </Card>
-              <Card variant="borderless" title="ROI 趋势" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <LineChart
-                  labels={labels}
-                  series={[{ name: "ROI", color: "#1677ff", values: trend.map((p) => p.roi) }]}
-                  height={160}
-                />
-              </Card>
-            </Col>
-          </Row>
+          {isRealtime ? (
+            <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+              <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
+                实时数据为全渠道合计，按小时更新（00:00 起到当前小时）。
+              </Text>
+              <Row gutter={[16, 16]}>
+                <Col xs={24} lg={14}>
+                  <Card variant="borderless" title="今日分时：花费 / 成交金额" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+                    <LineChart
+                      labels={labels}
+                      series={[
+                        { name: "花费", color: "#ff5000", values: trend.map((p) => p.spend), format: fmtMoney },
+                        { name: "成交金额", color: "#52c41a", values: trend.map((p) => p.sales), format: fmtMoney },
+                      ]}
+                    />
+                  </Card>
+                </Col>
+                <Col xs={24} lg={10}>
+                  <Card variant="borderless" title="今日分时 ROI" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                    <LineChart
+                      labels={labels}
+                      series={[{ name: "ROI", color: "#1677ff", values: trend.map((p) => p.roi) }]}
+                      height={170}
+                    />
+                  </Card>
+                </Col>
+              </Row>
+            </Card>
+          ) : (
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={10}>
+                <Card variant="borderless" title={`各推广场景 · ${periodTitle}`} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                  <SceneTable scenes={data.scenes} summary={data.summary} />
+                </Card>
+              </Col>
+              <Col xs={24} lg={14}>
+                <Card variant="borderless" title="花费 / 成交金额 趋势" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+                  <LineChart
+                    labels={labels}
+                    series={[
+                      { name: "花费", color: "#ff5000", values: trend.map((p) => p.spend), format: fmtMoney },
+                      { name: "成交金额", color: "#52c41a", values: trend.map((p) => p.sales), format: fmtMoney },
+                    ]}
+                  />
+                </Card>
+                <Card variant="borderless" title="ROI 趋势" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+                  <LineChart
+                    labels={labels}
+                    series={[{ name: "ROI", color: "#1677ff", values: trend.map((p) => p.roi) }]}
+                    height={160}
+                  />
+                </Card>
+              </Col>
+            </Row>
+          )}
         </>
       )}
     </>
@@ -319,30 +352,18 @@ function PromoPlansTab({
   );
 }
 
-function daySwitch(days: number, onDays: (d: number) => void) {
-  return (
-    <Space>
-      {DAY_OPTIONS.map((option) => (
-        <Button key={option} size="small" type={days === option ? "primary" : "default"} onClick={() => onDays(option)}>
-          {option} 天
-        </Button>
-      ))}
-    </Space>
-  );
-}
-
 export function PromotionsPage() {
   const [active, setActive] = useState("data");
   const [data, setData] = useState<PromoData | null>(null);
   const [plans, setPlans] = useState<PromoPlan[]>([]);
-  const [days, setDays] = useState(7);
+  const [mode, setMode] = useState("realtime");
   const [scene, setScene] = useState("");
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
 
-  const loadData = useCallback(async (d: number) => {
-    const { data: res } = await http.get<PromoData>(`/promotions/data?days=${d}`);
+  const loadData = useCallback(async (m: string) => {
+    const { data: res } = await http.get<PromoData>(`/promotions/data?mode=${encodeURIComponent(m)}`);
     setData(res);
   }, []);
 
@@ -356,7 +377,7 @@ export function PromotionsPage() {
     setLoading(true);
     const run = async () => {
       try {
-        if (active === "data") await loadData(days);
+        if (active === "data") await loadData(mode);
         else await loadPlans(scene);
       } catch (error) {
         if (!cancelled) message.error(getApiErrorMessage(error));
@@ -368,17 +389,17 @@ export function PromotionsPage() {
     return () => {
       cancelled = true;
     };
-  }, [active, days, scene, reloadTick, loadData, loadPlans]);
+  }, [active, mode, scene, reloadTick, loadData, loadPlans]);
 
   const syncData = async () => {
     setSyncing(true);
     try {
       const { data: res } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
-        `/promotions/sync?days=${days}`
+        `/promotions/sync?mode=${encodeURIComponent(mode)}`
       );
       message.success(`同步完成：成功 ${res.ok} / 共 ${res.total} 家`);
       res.results.filter((r) => !r.ok).slice(0, 3).forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
-      await loadData(days);
+      await loadData(mode);
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -422,7 +443,7 @@ export function PromotionsPage() {
             {
               key: "data",
               label: "推广数据",
-              children: <PromoDataTab data={data} days={days} onDays={setDays} syncing={syncing && active === "data"} onSync={syncData} />,
+              children: <PromoDataTab data={data} mode={mode} onMode={setMode} syncing={syncing && active === "data"} onSync={syncData} />,
             },
             {
               key: "plans",

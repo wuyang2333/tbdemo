@@ -1,4 +1,7 @@
-"""推广管理：万相台推广数据（自动抓取，复用店铺登录态）+ 推广计划管理（计划快照 + 本地备注/标记）。"""
+"""推广管理：万相台推广数据（自动抓取，复用店铺登录态）+ 推广计划管理（计划快照 + 本地备注/标记）。
+
+数据模式：realtime（今日实时，按小时） / yesterday（昨天） / 7d（近七天，按天）。
+"""
 
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from backend.app.core.alimama import (
     check_access,
     fetch_plan_reports,
     fetch_plan_snapshots,
+    fetch_realtime,
     fetch_scene_daily,
 )
 from backend.app.core.db import get_db
@@ -21,6 +25,8 @@ from backend.app.core.logs import log_op
 from backend.app.core.sycm import has_profile
 
 router = APIRouter()
+
+MODES = ("realtime", "yesterday", "7d")
 
 
 class PlanNoteIn(BaseModel):
@@ -44,9 +50,73 @@ def _bound_stores(db) -> list[dict]:
     ]
 
 
-def _range(days: int) -> tuple[date_cls, date_cls]:
-    today = date_cls.today()
-    return today - timedelta(days=days - 1), today
+def _mode(value: str) -> str:
+    return value if value in MODES else "realtime"
+
+
+def _finalize(item: dict) -> dict:
+    item["ctr"] = round(item["clicks"] / item["impressions"] * 100, 2) if item["impressions"] else 0.0
+    item["roi"] = round(item["sales"] / item["spend"], 2) if item["spend"] else 0.0
+    item["spend"] = round(item["spend"], 2)
+    item["sales"] = round(item["sales"], 2)
+    return item
+
+
+def _store_daily_rows(db, store_id: int, items: list[dict], now: str) -> int:
+    for it in items:
+        db.execute(
+            "INSERT INTO promo_daily_data (store_id, scene, scene_name, data_date, impressions, clicks, ctr, spend, sales, roi, orders, add_cart, conversion_rate, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(store_id, scene, data_date) DO UPDATE SET "
+            "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
+            "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
+            "orders = excluded.orders, add_cart = excluded.add_cart, conversion_rate = excluded.conversion_rate",
+            (
+                store_id,
+                it["scene"],
+                it["scene_name"],
+                it["date"],
+                it["impressions"],
+                it["clicks"],
+                it["ctr"],
+                it["spend"],
+                it["sales"],
+                it["roi"],
+                it["orders"],
+                it["add_cart"],
+                it["conversion_rate"],
+                now,
+            ),
+        )
+    return len(items)
+
+
+def _store_realtime_rows(db, store_id: int, items: list[dict], now: str) -> int:
+    today = date_cls.today().isoformat()
+    for it in items:
+        db.execute(
+            "INSERT INTO promo_realtime (store_id, data_date, hour, impressions, clicks, ctr, spend, sales, roi, orders, conversion_rate, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(store_id, data_date, hour) DO UPDATE SET "
+            "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
+            "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
+            "orders = excluded.orders, conversion_rate = excluded.conversion_rate",
+            (
+                store_id,
+                today,
+                it["hour"],
+                it["impressions"],
+                it["clicks"],
+                it["ctr"],
+                it["spend"],
+                it["sales"],
+                it["roi"],
+                it["orders"],
+                it["conversion_rate"],
+                now,
+            ),
+        )
+    return len(items)
 
 
 @router.get("")
@@ -87,16 +157,57 @@ def test_promo(
 
 @router.get("/data")
 def promo_data(
-    days: int = 14,
+    mode: str = "realtime",
     scene: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    if not (1 <= days <= 90):
-        days = 14
-    start, today = _range(days)
+    mode = _mode(mode)
+    today = date_cls.today()
+
+    if mode == "realtime":
+        rows = db.execute(
+            "SELECT * FROM promo_realtime WHERE data_date = ? ORDER BY hour ASC",
+            (today.isoformat(),),
+        ).fetchall()
+        summary = {"impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0}
+        trend = []
+        for r in rows:
+            summary["impressions"] += r["impressions"] or 0
+            summary["clicks"] += r["clicks"] or 0
+            summary["spend"] += r["spend"] or 0
+            summary["sales"] += r["sales"] or 0
+            summary["orders"] += r["orders"] or 0
+            trend.append(
+                {
+                    "label": r["hour"],
+                    "impressions": r["impressions"] or 0,
+                    "clicks": r["clicks"] or 0,
+                    "spend": round(r["spend"] or 0, 2),
+                    "sales": round(r["sales"] or 0, 2),
+                    "orders": r["orders"] or 0,
+                    "roi": round((r["sales"] or 0) / (r["spend"] or 0), 2) if r["spend"] else 0.0,
+                }
+            )
+        return {
+            "mode": mode,
+            "summary": _finalize(summary),
+            "scenes": [],
+            "trend": trend,
+            "trend_unit": "hour",
+            "last_sync": _last_sync(db),
+            "bound_stores": len(_bound_stores(db)),
+        }
+
+    # yesterday / 7d：按天报表（分场景）
+    if mode == "yesterday":
+        start = today - timedelta(days=1)
+        end = today - timedelta(days=1)
+    else:
+        start = today - timedelta(days=6)
+        end = today - timedelta(days=1)
     query = "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?"
-    params: list = [start.isoformat(), today.isoformat()]
+    params: list = [start.isoformat(), end.isoformat()]
     if scene:
         query += " AND scene = ?"
         params.append(scene)
@@ -123,30 +234,24 @@ def promo_data(
         for f in totals:
             item[f] += r[f] or 0
             totals[f] += r[f] or 0
-
         d = r["data_date"]
         drow = date_map.setdefault(d, {"date": d, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0})
         for f in ("impressions", "clicks", "spend", "sales", "orders"):
             drow[f] += r[f] or 0
 
-    def finalize(item: dict) -> dict:
-        item["ctr"] = round(item["clicks"] / item["impressions"] * 100, 2) if item["impressions"] else 0.0
-        item["roi"] = round(item["sales"] / item["spend"], 2) if item["spend"] else 0.0
-        item["spend"] = round(item["spend"], 2)
-        item["sales"] = round(item["sales"], 2)
-        return item
-
-    scenes = sorted((finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
+    scenes = sorted((_finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
+    span = (end - start).days + 1
     trend = []
-    for i in range(days - 1, -1, -1):
-        d = (today - timedelta(days=i)).isoformat()
+    for i in range(span - 1, -1, -1):
+        d = (end - timedelta(days=i)).isoformat()
         row = date_map.get(d)
+        label = (end - timedelta(days=i)).strftime("%m-%d")
         if not row:
-            trend.append({"date": (today - timedelta(days=i)).strftime("%m-%d"), "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0})
+            trend.append({"label": label, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0})
             continue
         trend.append(
             {
-                "date": row["date"][5:],
+                "label": label,
                 "impressions": row["impressions"],
                 "clicks": row["clicks"],
                 "spend": round(row["spend"], 2),
@@ -156,63 +261,47 @@ def promo_data(
             }
         )
 
-    summary = finalize(dict(totals))
-    last = db.execute("SELECT value FROM meta WHERE key = 'promo_last_sync'").fetchone()
     return {
-        "summary": summary,
+        "mode": mode,
+        "summary": _finalize(dict(totals)),
         "scenes": scenes,
         "trend": trend,
-        "days": days,
-        "scene": scene,
+        "trend_unit": "day",
+        "last_sync": _last_sync(db),
         "bound_stores": len(_bound_stores(db)),
-        "last_sync": last["value"] if last else None,
     }
+
+
+def _last_sync(db) -> str | None:
+    row = db.execute("SELECT value FROM meta WHERE key = 'promo_last_sync'").fetchone()
+    return row["value"] if row else None
 
 
 @router.post("/sync")
 def sync_promo(
-    days: int = 7,
+    mode: str = "realtime",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    if not (1 <= days <= 30):
-        days = 7
+    mode = _mode(mode)
     today = date_cls.today()
-    start = today - timedelta(days=days - 1)
-    end = today - timedelta(days=1)
     results = []
     for store in _bound_stores(db):
         try:
-            items = fetch_scene_daily(store, start.isoformat(), end.isoformat())
             now = _now()
-            for it in items:
-                db.execute(
-                    "INSERT INTO promo_daily_data (store_id, scene, scene_name, data_date, impressions, clicks, ctr, spend, sales, roi, orders, add_cart, conversion_rate, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(store_id, scene, data_date) DO UPDATE SET "
-                    "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
-                    "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-                    "orders = excluded.orders, add_cart = excluded.add_cart, conversion_rate = excluded.conversion_rate",
-                    (
-                        store["id"],
-                        it["scene"],
-                        it["scene_name"],
-                        it["date"],
-                        it["impressions"],
-                        it["clicks"],
-                        it["ctr"],
-                        it["spend"],
-                        it["sales"],
-                        it["roi"],
-                        it["orders"],
-                        it["add_cart"],
-                        it["conversion_rate"],
-                        now,
-                    ),
-                )
-            results.append(
-                {"store_id": store["id"], "store_name": store["name"], "ok": True, "days": len(items)}
-            )
+            if mode == "realtime":
+                items = fetch_realtime(store)
+                count = _store_realtime_rows(db, store["id"], items, now)
+            elif mode == "yesterday":
+                d = today - timedelta(days=1)
+                items = fetch_scene_daily(store, d.isoformat(), d.isoformat())
+                count = _store_daily_rows(db, store["id"], items, now)
+            else:
+                start = today - timedelta(days=6)
+                end = today - timedelta(days=1)
+                items = fetch_scene_daily(store, start.isoformat(), end.isoformat())
+                count = _store_daily_rows(db, store["id"], items, now)
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
     db.execute(
@@ -220,7 +309,7 @@ def sync_promo(
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (_now(),),
     )
-    _log(db, user, "同步万相台数据", "", f"成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
+    _log(db, user, "同步万相台数据", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 
@@ -306,5 +395,5 @@ def update_plan(
         "UPDATE promo_plans SET note = ?, tag = ?, updated_at = ? WHERE id = ?",
         (body.note.strip(), body.tag.strip(), _now(), plan_id),
     )
-    _log(db, user, "编辑推广计划", row["plan_name"], f"备注/标记更新")
+    _log(db, user, "编辑推广计划", row["plan_name"], "备注/标记更新")
     return {"ok": True}

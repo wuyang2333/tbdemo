@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 from backend.app.core.sycm import has_profile, profile_path
@@ -174,6 +175,30 @@ def fetch_plan_reports(store: dict, start: str, end: str) -> list[dict]:
                 "sales": round(_num(r.get("alipayInshopAmt")), 2),
                 "roi": round(_num(r.get("roi")), 2),
                 "clicks": int(_num(r.get("click"))),
+            }
+        )
+    return out
+def fetch_realtime(store: dict) -> list[dict]:
+    """拉取今天的万相台实时数据（按小时，全渠道合计）。"""
+    today = date.today().isoformat()
+    payload = _run_json(store, ["report-realtime", "--date", today, "--raw"])
+    rows = (payload.get("data") or {}).get("list") or []
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        thedate = row.get("thedate") or ""
+        out.append(
+            {
+                "hour": thedate[-5:] if len(thedate) >= 5 else thedate,
+                "impressions": int(_num(row.get("adPv"))),
+                "clicks": int(_num(row.get("click"))),
+                "ctr": round(_num(row.get("ctr")) * 100, 2),
+                "spend": round(_num(row.get("charge")), 2),
+                "sales": round(_num(row.get("alipayInshopAmt")), 2),
+                "roi": round(_num(row.get("roi")), 2),
+                "orders": int(_num(row.get("alipayInshopNum"))),
+                "conversion_rate": round(_num(row.get("cvr")) * 100, 2),
             }
         )
     return out

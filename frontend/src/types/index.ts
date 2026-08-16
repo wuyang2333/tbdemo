@@ -241,7 +241,7 @@ export type PromoSceneAgg = {
 };
 
 export type PromoTrendPoint = {
-  date: string;
+  label: string;
   impressions: number;
   clicks: number;
   spend: number;
@@ -251,11 +251,11 @@ export type PromoTrendPoint = {
 };
 
 export type PromoData = {
+  mode: "realtime" | "yesterday" | "7d";
   summary: PromoSceneAgg;
   scenes: PromoSceneAgg[];
   trend: PromoTrendPoint[];
-  days: number;
-  scene: string;
+  trend_unit: "hour" | "day";
   bound_stores: number;
   last_sync: string | null;
 };

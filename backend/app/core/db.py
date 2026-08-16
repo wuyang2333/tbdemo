@@ -378,6 +378,27 @@ def init_db() -> None:
             )
             """
         )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promo_realtime (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                data_date TEXT NOT NULL,
+                hour TEXT NOT NULL,
+                impressions INTEGER NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                ctr REAL NOT NULL DEFAULT 0,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                orders INTEGER NOT NULL DEFAULT 0,
+                conversion_rate REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(store_id, data_date, hour)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_promo_daily ON promo_daily_data(store_id, data_date)
