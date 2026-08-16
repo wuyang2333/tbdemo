@@ -419,6 +419,29 @@ def _campaign_item(row: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _campaign_items(row: dict) -> list[tuple[str, str]]:
+    """一个计划下的所有商品 (item_id, title)：每个 adgroup = 一个商品。"""
+    out: list[tuple[str, str]] = []
+    for ag in (row.get("adgroupList") or []):
+        ag = ag or {}
+        mat = ag.get("material") or {}
+        mid = mat.get("materialId")
+        if not mid:
+            continue
+        title = mat.get("title") or mat.get("itemTitle") or ""
+        out.append((str(mid), title))
+    if not out:
+        ag = row.get("lastAdgroup")
+        if isinstance(ag, dict):
+            ag = [ag]
+        if isinstance(ag, list) and ag:
+            mat = (ag[0] or {}).get("material") or {}
+            mid = mat.get("materialId")
+            if mid:
+                out.append((str(mid), mat.get("title") or mat.get("itemTitle") or ""))
+    return out
+
+
 def _promo_item_map(store: dict) -> dict[str, list[dict]]:
     """宝贝↔计划映射：campaign_id -> [{item_id, item_title}]（方案B）。"""
     mapping: dict[str, list[dict]] = {}
@@ -435,10 +458,8 @@ def _promo_item_map(store: dict) -> dict[str, list[dict]]:
                 cid = str(r.get("campaignId") or "").strip()
                 if not cid:
                     continue
-                item_id, item_title = _campaign_item(r)
-                if not item_id:
-                    continue
-                mapping.setdefault(cid, []).append({"item_id": item_id, "item_title": item_title or ""})
+                for item_id, item_title in _campaign_items(r):
+                    mapping.setdefault(cid, []).append({"item_id": item_id, "item_title": item_title or ""})
             offset += len(rows)
             if not rows or offset >= count:
                 break
@@ -474,49 +495,34 @@ def fetch_promo_item_fallback(store: dict, start: str, end: str, realtime: bool 
     return out
 
 
-def fetch_item_promo_wholesite(store: dict, start: str, end: str, realtime: bool = True) -> list[dict]:
-    """货品全站推广计划 → 商品 的推广数据（与万相台「全站推广」口径一致）。
+def fetch_item_promo_plan_based(store: dict, start: str, end: str, realtime: bool = True) -> list[dict]:
+    """推广计划 → 商品 的推广数据（全站推广 + 关键词 + 人群，不含内容营销）。
 
-    货品全站每个计划绑定一个商品，计划实时/按天花费即该商品的全站推广花费。
+    每个计划绑定若干商品，计划花费按商品均摊；同一商品跨多个计划时累加。
     """
-    mapping: dict[str, dict] = {}
-    offset = 0
-    for _ in range(200):
-        payload = _run_json(store, ["promo-wholesite", "--limit", "100", "--page", str(offset // 100 + 1), "--raw"], timeout=180)
-        d = payload.get("data") or {}
-        rows = d.get("list") or []
-        count = int(_num(d.get("count")))
-        for r in rows:
-            if not isinstance(r, dict):
-                continue
-            cid = str(r.get("campaignId") or "").strip()
-            if not cid:
-                continue
-            item_id, item_title = _campaign_item(r)
-            if item_id:
-                mapping[cid] = {"item_id": item_id, "item_title": item_title or ""}
-        offset += len(rows)
-        if not rows or offset >= count:
-            break
+    mapping = _promo_item_map(store)
     stats = fetch_plan_realtime(store) if realtime else fetch_plan_reports(store, start, end)
-    out: list[dict] = []
+    agg: dict[str, dict] = {}
     for st in stats:
         cid = st.get("campaign_id") or ""
-        it = mapping.get(cid)
-        if not it:
+        items = mapping.get(cid) or []
+        if not items:
             continue
-        spend = round(_num(st.get("spend")), 2)
-        sales = round(_num(st.get("sales")), 2)
-        out.append(
-            {
-                "item_id": it["item_id"],
-                "item_title": it["item_title"],
-                "spend": spend,
-                "sales": sales,
-                "roi": round(sales / spend, 2) if spend else 0.0,
-                "clicks": int(_num(st.get("clicks"))),
-                "orders": 0,
-                "impressions": 0,
-            }
-        )
+        n = len(items)
+        for it in items:
+            key = it["item_id"]
+            row = agg.setdefault(
+                key,
+                {"item_id": key, "item_title": it["item_title"] or "", "spend": 0.0, "sales": 0.0, "roi": 0.0, "clicks": 0, "orders": 0, "impressions": 0},
+            )
+            row["spend"] += _num(st.get("spend")) / n
+            row["sales"] += _num(st.get("sales")) / n
+            row["clicks"] += int(_num(st.get("clicks"))) / n
+    out: list[dict] = []
+    for row in agg.values():
+        row["spend"] = round(row["spend"], 2)
+        row["sales"] = round(row["sales"], 2)
+        row["clicks"] = int(row["clicks"])
+        row["roi"] = round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0
+        out.append(row)
     return out
