@@ -82,7 +82,6 @@ export function AnalyticsReportPage() {
     if (data.top_today.length) {
       lines.push("TOP商品：" + data.top_today.slice(0, 3).map((x) => `${x.item_title.slice(0, 12)}${fmt(x.sales)}`).join("、"));
     }
-    if (data.goal) lines.push(`${data.month} 目标 ${fmt(data.goal)}，本月已达成 ${fmt(data.month_sales)}`);
     return lines.filter(Boolean).join("\n");
   };
 
@@ -282,7 +281,6 @@ export function AnalyticsReportPage() {
 
 
           <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-            <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>月度目标：{data.goal ? `${data.month} 目标 ${fmt(data.goal)}，本月已达成 ${fmt(data.month_sales)}` : "未设置，可到「目标预测」页设置"}</Text>
             <Text style={{ whiteSpace: "pre-line" }}>{buildText()}</Text>
           </Card>
         </>

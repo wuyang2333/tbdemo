@@ -147,17 +147,6 @@ export function buildReportHtml(data: AnalyticsReport): string {
     </table>
   </div>
 
-  ${data.goal ? `<div class="section">
-    <div class="section-title">月度目标</div>
-    <div class="goal">
-      <div>
-        <div class="g-label">${data.month} 目标</div>
-        <div class="g-value">${fmt(data.goal)} · 已达成 ${fmt(data.month_sales)}</div>
-      </div>
-      <div class="g-pct">${data.goal ? ((data.month_sales / data.goal) * 100).toFixed(1) : "0"}%</div>
-    </div>
-  </div>` : ""}
-
   <div class="foot">生成时间 ${nowStr} · 数据来源：生意参谋 / 万相台</div>
 </body>
 </html>`;

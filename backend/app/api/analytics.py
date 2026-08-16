@@ -697,8 +697,6 @@ def _report_text_lines(r: dict) -> list[str]:
     if r["top_today"]:
         top = "、".join(f"{x['item_title'][:14]}¥{x['sales']:,.0f}" for x in r["top_today"][:3])
         lines.append("TOP商品：" + top)
-    if r.get("goal"):
-        lines.append(f"{r['month']} 目标 ¥{r['goal']:,.0f}，本月已达成 ¥{r['month_sales']:,.0f}")
     return lines
 
 
