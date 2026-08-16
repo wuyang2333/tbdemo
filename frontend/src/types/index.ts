@@ -152,7 +152,8 @@ export type ModelConfig = {
   configured: boolean;
   created_at: string;
   updated_at: string;
-};
+};
+
 
 export type AnalyticsBucket = {
   visitors: number;
@@ -174,8 +175,17 @@ export type AnalyticsStoreAgg = {
   sales: number;
   orders: number;
   conversion_rate: number;
+  avg_order_value: number;
+  value_per_visitor: number;
   days: number;
   latest_date: string;
+};
+
+export type AnalyticsDailyPoint = AnalyticsBucket & {
+  date: string;
+  date_label: string;
+  avg_order_value: number;
+  value_per_visitor: number;
 };
 
 export type AnalyticsSummary = {
@@ -187,4 +197,5 @@ export type AnalyticsSummary = {
   by_store: AnalyticsStoreAgg[];
   store_count: number;
   last_sync: string | null;
-};
+};
+
