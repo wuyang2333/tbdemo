@@ -959,3 +959,64 @@ def update_plan(
     )
     _log(db, user, "编辑推广计划", row["plan_name"], "备注/标记更新")
     return {"ok": True}
+
+
+class PlanStatusIn(BaseModel):
+    status: str = "pause"
+    execute: bool = False  # 前端二次确认后显式传 true，才会真正操作万相台
+
+
+@router.post("/plans/{plan_id}/status")
+def set_plan_status(
+    plan_id: int,
+    body: PlanStatusIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """暂停/开启某个万相台推广计划（写操作：前端必须二次确认后调用）。
+
+    - execute=False：只预检（列出命中的投放单元），不写万相台。
+    - execute=True：真正暂停/开启，并把本地计划状态同步过来。
+    """
+    from backend.app.core.alimama import _run_json
+
+    if body.status not in ("pause", "start"):
+        raise HTTPException(status_code=400, detail="仅支持 pause（暂停）/ start（开启）")
+    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="推广计划不存在")
+    store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
+    if not store or not has_profile(store["id"]):
+        raise HTTPException(status_code=400, detail="该店铺未绑定万相台登录，无法操作")
+    if row["scene"] not in ("wholesite", "keyword", "crowd"):
+        raise HTTPException(status_code=400, detail="该计划场景暂不支持暂停/开启（内容营销除外）")
+    store = dict(store)
+    target = "暂停" if body.status == "pause" else "开启"
+    label = f"{row['plan_name']}（{row['campaign_id']}）"
+    try:
+        # 先预检：列出命中单元（不写万相台）
+        pre = _run_json(
+            store,
+            ["plan-status", "--campaign", str(row["campaign_id"]), "--scene", row["scene"], "--status", body.status, "--raw"],
+        )
+        count = int(pre.get("count") or 0)
+        if body.execute and count == 0:
+            raise HTTPException(status_code=400, detail="未找到该计划的投放单元，无法操作（可能已暂停或数据未同步）")
+        if not body.execute:
+            _log(db, user, "计划操作(预检)", label, f"{target}，命中 {count} 个单元（未执行）")
+            return {"ok": True, "execute": False, "count": count, "units": pre.get("units", [])}
+        resp = _run_json(
+            store,
+            ["plan-status", "--campaign", str(row["campaign_id"]), "--scene", row["scene"], "--status", body.status, "--execute", "--raw"],
+        )
+    except HTTPException:
+        raise
+    except AlimamaError as exc:
+        raise HTTPException(status_code=502, detail=f"万相台操作失败：{exc}") from exc
+    new_status = "暂停" if body.status == "pause" else "在投"
+    db.execute(
+        "UPDATE promo_plans SET status = ?, updated_at = ? WHERE id = ?",
+        (new_status, _now(), plan_id),
+    )
+    _log(db, user, "计划操作", label, f"{target}（万相台已执行，命中 {count} 个单元）")
+    return {"ok": True, "execute": True, "count": count, "response": str(resp)[:300]}

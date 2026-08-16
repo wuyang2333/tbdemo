@@ -1408,6 +1408,41 @@ def cmd_promo_units(args: argparse.Namespace) -> None:
     print("-" * 70)
 
 
+def cmd_plan_status(args: argparse.Namespace) -> None:
+    """暂停/开启某个计划（默认 dry-run，--execute 才执行）。"""
+    cookies = load_alimama_cookies()
+    biz_code = PROMO_BIZ_CODES[args.scene][0]
+    units: list[dict[str, Any]] = []
+    for ag in fetch_all_adgroups(biz_code, campaign_id=args.campaign, status_list=["start", "pause"], cookies=cookies):
+        u = _adgroup_unit(ag)
+        if u["campaignId"] is not None and str(u["campaignId"]) == str(args.campaign):
+            units.append({"campaignId": u["campaignId"], "adgroupId": u["adgroupId"]})
+    seen: set[tuple] = set()
+    uniq: list[dict[str, Any]] = []
+    for u in units:
+        k = (u["campaignId"], u["adgroupId"])
+        if k not in seen:
+            seen.add(k)
+            uniq.append(u)
+    if getattr(args, "raw", False):
+        print(json.dumps({"scene": args.scene, "campaign": str(args.campaign), "status": args.status, "count": len(uniq), "units": uniq}, ensure_ascii=False))
+    else:
+        print(f"# {args.scene} 计划 {args.campaign} → {args.status}，命中单元 {len(uniq)} 个")
+        for u in uniq:
+            print(f"  campaign={u['campaignId']} adgroup={u['adgroupId']}")
+    if not args.execute:
+        return
+    if not uniq:
+        print("# 无单元可操作")
+        return
+    resp = set_adgroups_status(biz_code, uniq, args.status, cookies)
+    out = json.dumps(resp, ensure_ascii=False)[:800]
+    if getattr(args, "raw", False):
+        print(out)
+    else:
+        print(f"# 已执行：{args.status}，返回 {out}")
+
+
 def cmd_promo_off(args: argparse.Namespace) -> None:
     """按宝贝ID关停：把该商品散落在各计划里、当前【在投】的单元全部 pause。
 
@@ -1802,6 +1837,15 @@ def build_parser() -> argparse.ArgumentParser:
     po.add_argument("--execute", action="store_true",
                     help="真正执行关停（不加=只列清单不动）")
     po.set_defaults(func=cmd_promo_off)
+
+    # ⚠️ 写操作：暂停/开启某个计划。默认 dry-run，--execute 才执行。
+    ps = sp.add_parser("plan-status", help="⚠️写：暂停/开启某个计划（默认dry-run，--execute才执行）")
+    ps.add_argument("--campaign", required=True, help="计划ID")
+    ps.add_argument("--scene", required=True, choices=list(PROMO_BIZ_CODES.keys()), help="场景 wholesite/keyword/crowd")
+    ps.add_argument("--status", required=True, choices=["pause", "start"], help="pause关 / start开")
+    ps.add_argument("--execute", action="store_true", help="真正执行（不加=只列清单不动）")
+    ps.add_argument("--raw", action="store_true")
+    ps.set_defaults(func=cmd_plan_status)
 
     # 推广场景大盘汇总：展现量/点击/花费/成交/ROI/加购…
     ss = sp.add_parser("scene-summary", help="各推广场景大盘汇总（展现量/点击/花费/成交/ROI），默认过去14天")

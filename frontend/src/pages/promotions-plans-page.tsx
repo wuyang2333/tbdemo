@@ -1,5 +1,5 @@
-import { BarChartOutlined, DownloadOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Drawer, Empty, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { BarChartOutlined, DownloadOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, RobotOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, Drawer, Empty, Modal, Segmented, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -29,6 +29,10 @@ export function PromotionsPlansPage() {
     mode: string;
     summary: { total_spend: number; total_sales: number; total_roi: number; high_count: number; mid_count: number; low_count: number };
   } | null>(null);
+
+  const [opPlan, setOpPlan] = useState<PromoPlan | null>(null);
+  const [opStatus, setOpStatus] = useState<"pause" | "start">("pause");
+  const [opLoading, setOpLoading] = useState(false);
 
   const load = useCallback(async (sc: string, m: string) => {
     setLoading(true);
@@ -124,6 +128,29 @@ export function PromotionsPlansPage() {
     }
   };
 
+  const askPlanStatus = (plan: PromoPlan, status: "pause" | "start") => {
+    setOpPlan(plan);
+    setOpStatus(status);
+  };
+  const runPlanStatus = async () => {
+    if (!opPlan) return;
+    setOpLoading(true);
+    try {
+      const { data } = await http.post<{ ok: boolean; count: number; execute: boolean }>(
+        `/promotions/plans/${opPlan.id}/status`,
+        { status: opStatus, execute: true },
+        { timeout: 120000 }
+      );
+      message.success(`已${opStatus === "pause" ? "暂停" : "开启"}计划「${opPlan.plan_name}」（${data.count} 个投放单元），万相台同步完成`);
+      setOpPlan(null);
+      await load(scene, mode);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setOpLoading(false);
+    }
+  };
+
   const columns: TableColumnsType<PromoPlan> = [
     { title: "场景", dataIndex: "scene_name", width: 120 },
     { title: "计划名", dataIndex: "plan_name", width: 200, ellipsis: true },
@@ -154,6 +181,24 @@ export function PromotionsPlansPage() {
       },
     },
     { title: "点击", dataIndex: "clicks", align: "right", width: 90, render: (v: number) => (v ? fmtInt(v) : "—") },
+    {
+      title: "操作",
+      key: "op",
+      width: 96,
+      fixed: "right",
+      render: (_, row: PromoPlan) =>
+        row.scene === "content" ? (
+          <Text type="secondary" style={{ fontSize: 12 }}>不支持</Text>
+        ) : row.status === "在投" ? (
+          <Button size="small" danger icon={<PauseCircleOutlined />} onClick={() => askPlanStatus(row, "pause")}>
+            暂停
+          </Button>
+        ) : (
+          <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />} onClick={() => askPlanStatus(row, "start")}>
+            开启
+          </Button>
+        ),
+    },
     { title: "标记", key: "tag", width: 130, render: (_, row) => <PlanTagCell plan={row} onSaved={() => load(scene, mode)} /> },
     { title: "备注", key: "note", width: 200, render: (_, row) => <PlanNoteCell plan={row} onSaved={() => load(scene, mode)} /> },
   ];
@@ -299,6 +344,31 @@ export function PromotionsPlansPage() {
           <Empty description="生成失败或暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
         )}
       </Drawer>
+      <Modal
+        title={opStatus === "pause" ? "暂停推广计划" : "开启推广计划"}
+        open={!!opPlan}
+        onCancel={() => setOpPlan(null)}
+        onOk={runPlanStatus}
+        okText={opStatus === "pause" ? "确认暂停" : "确认开启"}
+        cancelText="再想想"
+        confirmLoading={opLoading}
+        okButtonProps={{ danger: opStatus === "pause" }}
+        destroyOnClose
+      >
+        {opPlan && (
+          <div>
+            <p style={{ marginBottom: 8 }}>
+              将{opStatus === "pause" ? "暂停" : "开启"}计划：
+              <Text strong>{opPlan.plan_name}</Text>
+            </p>
+            <p style={{ color: "#fa8c16", fontSize: 13, marginBottom: 0, lineHeight: 1.8 }}>
+              ⚠️ 此操作会直接修改万相台后台：{opStatus === "pause" ? "暂停后该计划立即停止投放、不再扣费" : "开启后该计划立即恢复投放"}。
+              <br />
+              确认继续吗？
+            </p>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
