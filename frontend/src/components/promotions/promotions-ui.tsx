@@ -48,8 +48,9 @@ export function LineChart({ labels, series, height = 200 }: { labels: string[]; 
   const n = labels.length;
   const xs = labels.map((_, i) => (n === 1 ? width / 2 : pad + (i * (width - pad * 2)) / (n - 1)));
   const paths = series.map((s) => {
-    const max = Math.max(1, ...s.values);
-    const pts = s.values.map((v, i) => `${xs[i]},${height - pad - (v / max) * (height - pad * 2)}`);
+    const nums = s.values.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : 0));
+    const max = Math.max(1, ...nums);
+    const pts = nums.map((v, i) => `${xs[i]},${height - pad - (v / max) * (height - pad * 2)}`);
     return { ...s, path: pts.join(" ") };
   });
   return (
@@ -57,9 +58,11 @@ export function LineChart({ labels, series, height = 200 }: { labels: string[]; 
       <Space style={{ marginBottom: 8 }} wrap>
         {series.map((s) => {
           const latest = s.values.length ? s.values[s.values.length - 1] : 0;
+          const latestText =
+            latest === null || latest === undefined ? "—" : s.format ? s.format(latest) : latest;
           return (
             <Tag key={s.name} color={s.color}>
-              {s.name} · 最新 {s.format ? s.format(latest) : latest}
+              {s.name} · 最新 {latestText}
             </Tag>
           );
         })}
