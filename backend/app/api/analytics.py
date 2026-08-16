@@ -1545,6 +1545,27 @@ def analytics_products(
             [ys] + sp,
         ).fetchall()
         items = _aggregate_item_rows(rows)
+        prev_rows = db.execute(
+            "SELECT * FROM store_item_daily WHERE data_date = ?" + sf,
+            [(date_cls.today() - timedelta(days=2)).isoformat()] + sp,
+        ).fetchall()
+        prev_map = {it["item_id"]: it for it in _aggregate_item_rows(prev_rows)}
+        for item in items:
+            p = prev_map.get(item["item_id"])
+            if p:
+                item["sales_cycle"] = round((item["sales"] - p["sales"]) / p["sales"] * 100, 1) if p["sales"] else None
+                item["orders_cycle"] = round((item["orders"] - p["orders"]) / p["orders"] * 100, 1) if p["orders"] else None
+                item["buyers_cycle"] = round((item["buyers"] - p["buyers"]) / p["buyers"] * 100, 1) if p["buyers"] else None
+                item["visitors_cycle"] = round((item["visitors"] - p["visitors"]) / p["visitors"] * 100, 1) if p["visitors"] else None
+                item["conversion_cycle"] = round(item["conversion_rate"] - p["conversion_rate"], 2) if p["visitors"] else None
+                item["add_cart_cycle"] = round((item["add_cart"] - p["add_cart"]) / p["add_cart"] * 100, 1) if p["add_cart"] else None
+            else:
+                item["sales_cycle"] = None
+                item["orders_cycle"] = None
+                item["buyers_cycle"] = None
+                item["visitors_cycle"] = None
+                item["conversion_cycle"] = None
+                item["add_cart_cycle"] = None
         items.sort(key=lambda x: x["sales"], reverse=True)
         total_sales = sum(x["sales"] for x in items) or 1
         for item in items[:20]:
@@ -1574,6 +1595,28 @@ def analytics_products(
         items = _realtime_product_items(db, sf, sp)
         _attach_promo(db, items, "realtime", sf, sp)
         return {"items": items[:50], "total": len(items), "days": 1, "mode": "days", "range": f"{s.isoformat()}~{e.isoformat()}", "today_fallback": True}
+    # 涨跌幅：与上一相同长度周期对比（昨日=较前日，7天=较前7天……）
+    prev_rows = db.execute(
+        "SELECT * FROM store_item_daily WHERE data_date >= ? AND data_date <= ?" + sf,
+        [(s - timedelta(days=(e - s).days)).isoformat(), (s - timedelta(days=1)).isoformat()] + sp,
+    ).fetchall()
+    prev_map = {it["item_id"]: it for it in _aggregate_item_rows(prev_rows)}
+    for item in items:
+        p = prev_map.get(item["item_id"])
+        if p:
+            item["sales_cycle"] = round((item["sales"] - p["sales"]) / p["sales"] * 100, 1) if p["sales"] else None
+            item["orders_cycle"] = round((item["orders"] - p["orders"]) / p["orders"] * 100, 1) if p["orders"] else None
+            item["buyers_cycle"] = round((item["buyers"] - p["buyers"]) / p["buyers"] * 100, 1) if p["buyers"] else None
+            item["visitors_cycle"] = round((item["visitors"] - p["visitors"]) / p["visitors"] * 100, 1) if p["visitors"] else None
+            item["conversion_cycle"] = round(item["conversion_rate"] - p["conversion_rate"], 2) if p["visitors"] else None
+            item["add_cart_cycle"] = round((item["add_cart"] - p["add_cart"]) / p["add_cart"] * 100, 1) if p["add_cart"] else None
+        else:
+            item["sales_cycle"] = None
+            item["orders_cycle"] = None
+            item["buyers_cycle"] = None
+            item["visitors_cycle"] = None
+            item["conversion_cycle"] = None
+            item["add_cart_cycle"] = None
     items.sort(key=lambda x: x["sales"], reverse=True)
     total_sales = sum(x["sales"] for x in items) or 1
     for item in items[:20]:
