@@ -1,4 +1,4 @@
-export type ModuleMeta = {
+﻿export type ModuleMeta = {
   id: string;
   name: string;
   description: string;
@@ -16,10 +16,13 @@ export type AuthUser = {
   username: string;
   nickname: string;
   role: "super_admin" | "admin" | "member";
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "pending";
   allowed_modules: string[] | null;
   avatar_url: string | null;
   allowed_store_ids: number[] | null;
+  parent_id: number | null;
+  sub_account_quota: number;
+  store_quota: number;
 };
 
 export type AuthResponse = {

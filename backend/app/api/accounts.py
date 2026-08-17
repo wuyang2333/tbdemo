@@ -1,4 +1,4 @@
-"""账号管理：超级管理员 / 管理员对注册账号的角色、状态、密码、模块可见范围管理。"""
+﻿"""账号管理：超级管理员 / 管理员对注册账号的角色、状态、密码、模块可见范围管理。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from backend.app.api.auth import (
     USERNAME_PATTERN,
+    get_current_user,
     hash_password,
     require_admin,
     require_super_admin,
@@ -23,6 +24,32 @@ from backend.app.core.modules import MODULES
 router = APIRouter()
 
 ROLES = ("member", "admin", "super_admin")
+
+MAX_STORES_PER_TENANT = 3   # 免费套餐：每个主账号最多绑定 3 家店铺
+MAX_SUB_ACCOUNTS = 20       # 每个主账号最多 20 个子账号
+
+
+def require_tenant_owner(user: dict = Depends(get_current_user)) -> dict:
+    """主账号权限：管理员/超管，或普通账号（非子账号）的主账号。"""
+    if user["role"] in ("admin", "super_admin"):
+        return user
+    if user["role"] == "member" and not user.get("parent_id"):
+        return user
+    raise HTTPException(status_code=403, detail="需要主账号权限")
+
+
+def _check_store_quota(db, target_row, new_ids: list[int] | None) -> None:
+    """校验主账号绑定店铺数不超过该账号的店铺配额；超管/管理员/子账号不受限。"""
+    if target_row["role"] in ("admin", "super_admin"):
+        return
+    if target_row["parent_id"]:
+        return
+    quota = target_row["store_quota"] if "store_quota" in target_row.keys() else 3
+    if new_ids is not None and len(new_ids) > quota:
+        raise HTTPException(
+            status_code=400,
+            detail=f"该账号最多绑定 {quota} 家店铺，如需更多请联系平台调整配额",
+        )
 
 
 class RoleIn(BaseModel):
@@ -57,6 +84,21 @@ def _get_user_or_404(db, user_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="账号不存在")
     return row
+
+
+def _invite_payload(row) -> dict:
+    return {
+        "id": row["id"],
+        "code": row["code"],
+        "note": row["note"],
+        "created_by": row["created_by"],
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+        "max_uses": row["max_uses"],
+        "used_count": row["used_count"],
+        "status": row["status"],
+    }
+
 
 
 def _super_admin_count(db) -> int:
@@ -103,10 +145,10 @@ def create_user(
     now = datetime.now(timezone.utc).isoformat()
     cur = db.execute(
         """
-        INSERT INTO users (username, password_hash, salt, nickname, created_at, role, status, allowed_modules, avatar_url)
-        VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, NULL)
+        INSERT INTO users (username, password_hash, salt, nickname, created_at, role, status, allowed_modules, avatar_url, allowed_store_ids)
+        VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?)
         """,
-        (username, hash_password(body.password, salt), salt.hex(), nickname, now, body.role),
+        (username, hash_password(body.password, salt), salt.hex(), nickname, now, body.role, "[]"),
     )
     row = db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
     item = user_payload(row)
@@ -121,8 +163,136 @@ def list_users(actor: dict = Depends(require_admin), db=Depends(get_db)) -> dict
     for row in rows:
         item = user_payload(row)
         item["created_at"] = row["created_at"]
+        item["last_login_at"] = row["last_login_at"]
+        item["last_login_ip"] = row["last_login_ip"]
+        item["expires_at"] = row["expires_at"]
+        item["failed_count"] = row["failed_count"]
+        item["locked_until"] = row["locked_until"]
+        item["parent_id"] = row["parent_id"]
+        item["sub_account_quota"] = row["sub_account_quota"] if "sub_account_quota" in row.keys() else 2
+        item["store_quota"] = row["store_quota"] if "store_quota" in row.keys() else 3
         items.append(item)
     return {"items": items}
+
+
+class InviteIn(BaseModel):
+    note: str = ""
+    max_uses: int = 1
+    expires_at: str = ""
+
+
+@router.post("/invite-codes")
+def create_invite_code(
+    body: InviteIn,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    if not (1 <= body.max_uses <= 100):
+        raise HTTPException(status_code=400, detail="使用次数需为 1-100")
+    expires_at = None
+    if body.expires_at and body.expires_at.strip():
+        try:
+            dt = datetime.fromisoformat(body.expires_at.strip())
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=400, detail="过期时间需晚于当前时间")
+            expires_at = dt.isoformat()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="过期时间格式不正确")
+    code = secrets.token_hex(4).upper()
+    now = datetime.now(timezone.utc).isoformat()
+    cur = db.execute(
+        """
+        INSERT INTO invite_codes (code, note, created_by, created_at, expires_at, max_uses, used_count, status)
+        VALUES (?, ?, ?, ?, ?, ?, 0, 'active')
+        """,
+        (code, body.note.strip(), actor["id"], now, expires_at, body.max_uses),
+    )
+    row = db.execute("SELECT * FROM invite_codes WHERE id = ?", (cur.lastrowid,)).fetchone()
+    log_op(db, actor, "accounts", "生成邀请码", code, f"备注：{body.note.strip() or '无'}，可用 {body.max_uses} 次")
+    return {"item": _invite_payload(row)}
+
+
+@router.get("/invite-codes")
+def list_invite_codes(actor: dict = Depends(require_admin), db=Depends(get_db)) -> dict:
+    rows = db.execute("SELECT * FROM invite_codes ORDER BY id DESC").fetchall()
+    return {"items": [_invite_payload(r) for r in rows]}
+
+
+@router.post("/invite-codes/{code_id}/disable")
+def disable_invite_code(
+    code_id: int,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    row = db.execute("SELECT * FROM invite_codes WHERE id = ?", (code_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    db.execute("UPDATE invite_codes SET status = 'disabled' WHERE id = ?", (code_id,))
+    log_op(db, actor, "accounts", "作废邀请码", row["code"], "")
+    return {"ok": True}
+
+
+@router.delete("/invite-codes/{code_id}")
+def delete_invite_code(
+    code_id: int,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    row = db.execute("SELECT * FROM invite_codes WHERE id = ?", (code_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="邀请码不存在")
+    db.execute("DELETE FROM invite_codes WHERE id = ?", (code_id,))
+    log_op(db, actor, "accounts", "删除邀请码", row["code"], "")
+    return {"ok": True}
+
+
+@router.get("/pending")
+def list_pending(actor: dict = Depends(require_admin), db=Depends(get_db)) -> dict:
+    rows = db.execute("SELECT * FROM users WHERE status = 'pending' ORDER BY created_at ASC").fetchall()
+    items = []
+    for row in rows:
+        item = user_payload(row)
+        item["created_at"] = row["created_at"]
+        item["last_login_at"] = row["last_login_at"]
+        item["last_login_ip"] = row["last_login_ip"]
+        item["expires_at"] = row["expires_at"]
+        item["failed_count"] = row["failed_count"]
+        item["locked_until"] = row["locked_until"]
+        item["parent_id"] = row["parent_id"]
+        item["sub_account_quota"] = row["sub_account_quota"] if "sub_account_quota" in row.keys() else 2
+        item["store_quota"] = row["store_quota"] if "store_quota" in row.keys() else 3
+        items.append(item)
+    return {"items": items}
+
+
+@router.post("/{user_id}/approve")
+def approve_user(
+    user_id: int,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_user_or_404(db, user_id)
+    if row["status"] != "pending":
+        raise HTTPException(status_code=400, detail="该账号不是待审核状态")
+    db.execute("UPDATE users SET status = 'active' WHERE id = ?", (user_id,))
+    log_op(db, actor, "accounts", "审核通过", row["username"], f"账号 {row['username']} 审核通过")
+    return {"ok": True, "username": row["username"]}
+
+
+@router.post("/{user_id}/reject")
+def reject_user(
+    user_id: int,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    row = _get_user_or_404(db, user_id)
+    if row["status"] != "pending":
+        raise HTTPException(status_code=400, detail="该账号不是待审核状态")
+    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    log_op(db, actor, "accounts", "拒绝注册", row["username"], f"账号 {row['username']} 注册被拒绝并删除")
+    return {"ok": True, "username": row["username"]}
 
 
 @router.post("/{user_id}/role")
@@ -216,6 +386,7 @@ def set_store_access(
     target = _get_user_or_404(db, user_id)
     if target["role"] != "member":
         raise HTTPException(status_code=400, detail="管理员和超级管理员默认拥有全部店铺权限")
+    _check_store_quota(db, target, body.store_ids)
     if body.store_ids is not None:
         for store_id in body.store_ids:
             store = db.execute("SELECT id FROM stores WHERE id = ?", (store_id,)).fetchone()
@@ -243,3 +414,246 @@ def delete_user(
     db.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     return {"ok": True}
+
+
+class ExpiryIn(BaseModel):
+    expires_at: str = ""
+
+
+@router.post("/{user_id}/expiry")
+def set_expiry(
+    user_id: int,
+    body: ExpiryIn,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    """设置账号有效期（留空 = 清除有效期，永久有效）。"""
+    target = _get_user_or_404(db, user_id)
+    _ensure_can_manage(actor, target)
+    expires_at = None
+    if body.expires_at and body.expires_at.strip():
+        try:
+            dt = datetime.fromisoformat(body.expires_at.strip())
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt <= datetime.now(timezone.utc):
+                raise HTTPException(status_code=400, detail="有效期需晚于当前时间")
+            expires_at = dt.isoformat()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="有效期格式不正确")
+    db.execute("UPDATE users SET expires_at = ? WHERE id = ?", (expires_at, user_id))
+    log_op(db, actor, "accounts", "设置有效期", target["username"], f"有效期至 {expires_at or '永久'}")
+    return {"ok": True}
+
+
+@router.get("/{user_id}/sessions")
+def list_sessions(
+    user_id: int,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    """查看账号的登录会话（有效 token）。"""
+    _get_user_or_404(db, user_id)
+    rows = db.execute(
+        "SELECT token, created_at, expires_at FROM tokens WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    ).fetchall()
+    return {"items": [{"token": r["token"], "created_at": r["created_at"], "expires_at": r["expires_at"]} for r in rows]}
+
+
+@router.post("/{user_id}/sessions/{token}/revoke")
+def revoke_session(
+    user_id: int,
+    token: str,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    """强制下线指定会话。"""
+    target = _get_user_or_404(db, user_id)
+    db.execute("DELETE FROM tokens WHERE user_id = ? AND token = ?", (user_id, token))
+    log_op(db, actor, "accounts", "强制下线", target["username"], "下线一个登录会话")
+    return {"ok": True}
+
+
+class CopyIn(BaseModel):
+    source_user_id: int
+
+
+@router.post("/{user_id}/copy-permissions")
+def copy_permissions(
+    user_id: int,
+    body: CopyIn,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    """把源账号的模块+店铺权限复制给目标账号。"""
+    target = _get_user_or_404(db, user_id)
+    source = _get_user_or_404(db, body.source_user_id)
+    if target["id"] == source["id"]:
+        raise HTTPException(status_code=400, detail="不能把权限复制给自己")
+    _ensure_can_manage(actor, target)
+    db.execute(
+        "UPDATE users SET allowed_modules = ?, allowed_store_ids = ? WHERE id = ?",
+        (source["allowed_modules"], source["allowed_store_ids"], user_id),
+    )
+    log_op(db, actor, "accounts", "复制权限", target["username"], f"从 {source['username']} 复制模块与店铺权限")
+    return {"ok": True}
+
+
+@router.get("/{user_id}/logs")
+def user_logs(
+    user_id: int,
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+) -> dict:
+    """单个账号的操作日志。"""
+    target = _get_user_or_404(db, user_id)
+    rows = db.execute(
+        "SELECT module, action, target_name, detail, created_at FROM op_logs WHERE user_id = ? ORDER BY id DESC LIMIT 100",
+        (user_id,),
+    ).fetchall()
+    return {"items": [dict(r) for r in rows], "username": target["username"]}
+
+
+@router.get("/login-logs")
+def login_logs(
+    actor: dict = Depends(require_admin),
+    db=Depends(get_db),
+    limit: int = 100,
+) -> dict:
+    """全体登录日志（登录成功/失败/登出）。"""
+    limit = max(1, min(limit, 500))
+    rows = db.execute("SELECT * FROM login_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return {"items": [dict(r) for r in rows]}
+
+
+class SubAccountIn(BaseModel):
+    username: str
+    password: str
+    nickname: str = ""
+    allowed_modules: list[str] | None = None
+
+
+def _sub_payload(row) -> dict:
+    item = user_payload(row)
+    item["created_at"] = row["created_at"]
+    item["last_login_at"] = row["last_login_at"]
+    item["last_login_ip"] = row["last_login_ip"]
+    return item
+
+
+@router.get("/my/sub-accounts")
+def list_sub_accounts(actor: dict = Depends(require_tenant_owner), db=Depends(get_db)) -> dict:
+    """主账号查看自己的子账号列表。"""
+    rows = db.execute(
+        "SELECT * FROM users WHERE parent_id = ? ORDER BY id ASC", (actor["id"],)
+    ).fetchall()
+    return {"items": [_sub_payload(r) for r in rows]}
+
+
+@router.post("/my/sub-accounts")
+def create_sub_account(
+    body: SubAccountIn,
+    actor: dict = Depends(require_tenant_owner),
+    db=Depends(get_db),
+) -> dict:
+    """主账号创建子账号：子账号继承主账号绑定的店铺数据。"""
+    username = body.username.strip()
+    nickname = body.nickname.strip()
+    if not USERNAME_PATTERN.fullmatch(username):
+        raise HTTPException(status_code=400, detail="用户名需以字母开头，仅限英文字母和数字（3-20 位）")
+    if not (6 <= len(body.password) <= 64):
+        raise HTTPException(status_code=400, detail="密码长度需为 6-64 个字符")
+    if not nickname:
+        raise HTTPException(status_code=400, detail="花名不能为空")
+    if len(nickname) > 20:
+        raise HTTPException(status_code=400, detail="花名不能超过 20 个字符")
+    count = db.execute("SELECT COUNT(*) AS c FROM users WHERE parent_id = ?", (actor["id"],)).fetchone()["c"]
+    quota = actor.get("sub_account_quota") or 2
+    if count >= quota:
+        raise HTTPException(status_code=400, detail=f"子账号配额已用完（上限 {quota} 个），如需更多请联系平台调整配额")
+    exists = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+    if exists:
+        raise HTTPException(status_code=400, detail="用户名已存在，换个名字试试")
+    salt = secrets.token_bytes(16)
+    now = datetime.now(timezone.utc).isoformat()
+    modules_json = json.dumps(body.allowed_modules or [], ensure_ascii=False) if body.allowed_modules is not None else None
+    cur = db.execute(
+        """
+        INSERT INTO users (username, password_hash, salt, nickname, created_at, role, status, allowed_modules, allowed_store_ids, parent_id)
+        VALUES (?, ?, ?, ?, ?, 'member', 'active', ?, '[]', ?)
+        """,
+        (username, hash_password(body.password, salt), salt.hex(), nickname, now, modules_json, actor["id"]),
+    )
+    row = db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
+    log_op(db, actor, "accounts", "create_sub", username, "创建子账号")
+    return {"item": _sub_payload(row)}
+
+
+@router.post("/my/sub-accounts/{sub_id}/password")
+def reset_sub_password(
+    sub_id: int,
+    body: PasswordIn,
+    actor: dict = Depends(require_tenant_owner),
+    db=Depends(get_db),
+) -> dict:
+    row = db.execute(
+        "SELECT * FROM users WHERE id = ? AND parent_id = ?", (sub_id, actor["id"])
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="子账号不存在")
+    if not (6 <= len(body.password) <= 64):
+        raise HTTPException(status_code=400, detail="密码长度需为 6-64 个字符")
+    salt = secrets.token_bytes(16)
+    db.execute(
+        "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+        (hash_password(body.password, salt), salt.hex(), sub_id),
+    )
+    db.execute("DELETE FROM tokens WHERE user_id = ?", (sub_id,))
+    log_op(db, actor, "accounts", "sub_password", row["username"], "重置子账号密码")
+    return {"ok": True}
+
+
+@router.delete("/my/sub-accounts/{sub_id}")
+def delete_sub_account(
+    sub_id: int,
+    actor: dict = Depends(require_tenant_owner),
+    db=Depends(get_db),
+) -> dict:
+    row = db.execute(
+        "SELECT * FROM users WHERE id = ? AND parent_id = ?", (sub_id, actor["id"])
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="子账号不存在")
+    db.execute("DELETE FROM tokens WHERE user_id = ?", (sub_id,))
+    db.execute("DELETE FROM users WHERE id = ?", (sub_id,))
+    log_op(db, actor, "accounts", "delete_sub", row["username"], "删除子账号")
+    return {"ok": True}
+
+
+class QuotaIn(BaseModel):
+    sub_account_quota: int | None = None
+    store_quota: int | None = None
+
+
+@router.post("/{user_id}/quota")
+def set_quota(
+    user_id: int,
+    body: QuotaIn,
+    actor: dict = Depends(require_super_admin),
+    db=Depends(get_db),
+) -> dict:
+    """超管设置某账号的子账号配额与店铺配额。"""
+    target = _get_user_or_404(db, user_id)
+    if target["role"] in ("admin", "super_admin"):
+        raise HTTPException(status_code=400, detail="管理员/超管无需配额限制")
+    new_sub = body.sub_account_quota if body.sub_account_quota is not None else (target["sub_account_quota"] if "sub_account_quota" in target.keys() else 2)
+    new_store = body.store_quota if body.store_quota is not None else (target["store_quota"] if "store_quota" in target.keys() else 3)
+    if not (0 <= new_sub <= 100) or not (0 <= new_store <= 100):
+        raise HTTPException(status_code=400, detail="配额需在 0-100 之间")
+    db.execute(
+        "UPDATE users SET sub_account_quota = ?, store_quota = ? WHERE id = ?",
+        (new_sub, new_store, user_id),
+    )
+    log_op(db, actor, "accounts", "quota", target["username"], f"子账号配额 {new_sub}，店铺配额 {new_store}")
+    return {"ok": True, "sub_account_quota": new_sub, "store_quota": new_store}

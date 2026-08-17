@@ -1,9 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
+import shutil
+import sqlite3
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,7 @@ from backend.app.api import (
     ai,
     alerts,
     analytics,
+    announcements,
     auth,
     content,
     customers,
@@ -47,6 +50,115 @@ from backend.app.api.stores import (
 from backend.app.core import loops
 from backend.app.core.db import DB_PATH, connect_db, init_db
 from backend.app.core.modules import get_modules
+
+
+BACKUP_DIR = Path("D:/demo/backups")
+DATA_RETENTION_DAYS = 90
+BACKUP_KEEP = 7
+LOG_RETENTION_DAYS = 7
+
+
+def _run_db_backup_once() -> dict:
+    """在线备份数据库到 D:/demo/backups，保留最近 7 份。"""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest = BACKUP_DIR / f"taobao_{ts}.db"
+    src = sqlite3.connect(str(DB_PATH))
+    dst = sqlite3.connect(str(dest))
+    try:
+        with dst:
+            src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    backups = sorted(BACKUP_DIR.glob("taobao_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in backups[BACKUP_KEEP:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return {"file": dest.name}
+
+
+def _run_data_cleanup_once() -> dict:
+    """数据保留策略：删除超过 90 天的历史数据（实时表不清理）。"""
+    conn = connect_db()
+    try:
+        cutoff = (datetime.now() - timedelta(days=DATA_RETENTION_DAYS)).strftime("%Y-%m-%d")
+        cutoff_iso = (datetime.now() - timedelta(days=DATA_RETENTION_DAYS)).isoformat()
+        total = 0
+        for t in ("store_daily_data", "store_item_daily", "store_hourly_data", "promo_daily_data", "promo_plan_daily", "promo_item_stats"):
+            try:
+                cur = conn.execute(f"DELETE FROM {t} WHERE data_date < ?", (cutoff,))
+                total += cur.rowcount
+            except sqlite3.OperationalError:
+                pass
+        for t in ("op_logs", "login_logs"):
+            try:
+                cur = conn.execute(f"DELETE FROM {t} WHERE created_at < ?", (cutoff_iso,))
+                total += cur.rowcount
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
+        return {"deleted": total, "cutoff": cutoff}
+    finally:
+        conn.close()
+
+
+def _run_log_rotate_once() -> dict:
+    """日志轮转：清理超过 7 天未修改的日志文件。"""
+    removed = 0
+    cutoff_ts = time.time() - LOG_RETENTION_DAYS * 86400
+    for d in (Path("D:/demo/logs"), Path("D:/cpolar")):
+        if not d.exists():
+            continue
+        for f in d.glob("*.log"):
+            try:
+                if f.stat().st_mtime < cutoff_ts:
+                    f.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    return {"removed": removed}
+
+
+async def _backup_loop() -> None:
+    """数据库自动备份：每天一次。"""
+    await asyncio.sleep(60)
+    while True:
+        _start = time.monotonic()
+        try:
+            await asyncio.to_thread(_run_db_backup_once)
+            loops.record_success("backup", time.monotonic() - _start)
+        except Exception as _e:
+            loops.record_error("backup", _e, time.monotonic() - _start)
+        await asyncio.sleep(86400)
+
+
+async def _cleanup_loop() -> None:
+    """数据保留清理：每天一次。"""
+    await asyncio.sleep(120)
+    while True:
+        _start = time.monotonic()
+        try:
+            await asyncio.to_thread(_run_data_cleanup_once)
+            loops.record_success("data_cleanup", time.monotonic() - _start)
+        except Exception as _e:
+            loops.record_error("data_cleanup", _e, time.monotonic() - _start)
+        await asyncio.sleep(86400)
+
+
+async def _log_rotate_loop() -> None:
+    """日志轮转：每天一次。"""
+    await asyncio.sleep(180)
+    while True:
+        _start = time.monotonic()
+        try:
+            await asyncio.to_thread(_run_log_rotate_once)
+            loops.record_success("log_rotate", time.monotonic() - _start)
+        except Exception as _e:
+            loops.record_error("log_rotate", _e, time.monotonic() - _start)
+        await asyncio.sleep(86400)
 
 
 async def _inspect_loop() -> None:
@@ -241,19 +353,25 @@ async def _promo_daily_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for _name in ("inspect", "realtime_sync", "report_push", "hourly_push", "promo_daily"):
+    for _name in ("inspect", "realtime_sync", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
         loops.register(_name)
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
     push_task = asyncio.create_task(_report_push_loop())
     hourly_push_task = asyncio.create_task(_hourly_push_loop())
     promo_task = asyncio.create_task(_promo_daily_loop())
+    backup_task = asyncio.create_task(_backup_loop())
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+    rotate_task = asyncio.create_task(_log_rotate_loop())
     yield
     task.cancel()
     realtime_task.cancel()
     push_task.cancel()
     hourly_push_task.cancel()
     promo_task.cancel()
+    backup_task.cancel()
+    cleanup_task.cancel()
+    rotate_task.cancel()
 
 
 def create_app() -> FastAPI:
@@ -309,6 +427,12 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(
+        announcements.router,
+        prefix="/api/announcements",
+        tags=["announcements"],
+        dependencies=[Depends(get_current_user)],
+    )
+    app.include_router(
         alerts.router,
         prefix="/api/alerts",
         tags=["alerts"],
@@ -330,7 +454,6 @@ def create_app() -> FastAPI:
         accounts.router,
         prefix="/api/accounts",
         tags=["accounts"],
-        dependencies=[Depends(require_admin)],
     )
     app.include_router(
         logs.router,

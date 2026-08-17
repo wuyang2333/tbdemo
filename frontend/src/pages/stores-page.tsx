@@ -1,4 +1,4 @@
-import {
+﻿import {
   CheckOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -29,9 +29,10 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { showSyncFeedback } from "../lib/sync-feedback";
 import { useStores } from "../lib/store";
 import { PageHeader } from "../components/ui/page-header";
@@ -42,6 +43,14 @@ const { Text } = Typography;
 
 type StoreFormValues = {
   name: string;
+};
+
+type MyStoreRow = {
+  id: number;
+  name: string;
+  status: string;
+  configured: boolean;
+  bound: boolean;
 };
 
 function LoginStatusTag({ status, error }: { status: Store["sycm_status"]; error: string | null }) {
@@ -76,6 +85,11 @@ function timeAgo(value: string | null): string {
 
 export function StoresPage() {
   const { stores, currentStore, setCurrent, refresh } = useStores();
+  const { user } = useAuth();
+  const isMember = user?.role === "member";
+  const [myStores, setMyStores] = useState<MyStoreRow[]>([]);
+  const [myStoresLoading, setMyStoresLoading] = useState(false);
+  const [myBindBusy, setMyBindBusy] = useState<number | null>(null);
   const [form] = Form.useForm<StoreFormValues>();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Store | null>(null);
@@ -126,6 +140,50 @@ export function StoresPage() {
     setModalOpen(true);
   };
 
+  const loadMyStores = async () => {
+    setMyStoresLoading(true);
+    try {
+      const { data } = await http.get<{ items: MyStoreRow[] }>("/stores/available");
+      setMyStores(data.items);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setMyStoresLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isMember) loadMyStores();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMember]);
+
+  const bindMyStore = async (row: MyStoreRow) => {
+    setMyBindBusy(row.id);
+    try {
+      await http.post("/stores/bind", { store_id: row.id });
+      message.success(`已绑定店铺「${row.name}」，数据即刻可见`);
+      refresh();
+      loadMyStores();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setMyBindBusy(null);
+    }
+  };
+
+  const unbindMyStore = async (row: MyStoreRow) => {
+    setMyBindBusy(row.id);
+    try {
+      await http.post("/stores/unbind", { store_id: row.id });
+      message.success(`已解绑店铺「${row.name}」`);
+      refresh();
+      loadMyStores();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setMyBindBusy(null);
+    }
+  };
   const submit = async (values: StoreFormValues) => {
     if (!editing) return;
     setSaving(true);
@@ -571,6 +629,73 @@ export function StoresPage() {
           </Card>
         </Col>
       </Row>
+
+      {isMember && (
+        <Card
+          variant="borderless"
+          title="我的店铺"
+          extra={
+            <Space size={8}>
+              <Tag color="blue">已绑定 {myStores.filter((s) => s.bound).length}/{user?.store_quota ?? 3} 家</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                自助绑定平台已接入的店铺，绑定后即可查看该店铺数据
+              </Text>
+            </Space>
+          }
+          style={{ marginBottom: 16 }}
+        >
+          <Table<MyStoreRow>
+            rowKey="id"
+            loading={myStoresLoading}
+            dataSource={myStores}
+            pagination={false}
+            size="small"
+            scroll={{ x: 640 }}
+            columns={[
+              {
+                title: "店铺",
+                dataIndex: "name",
+                render: (name: string) => <Text strong>{name}</Text>,
+              },
+              {
+                title: "状态",
+                dataIndex: "status",
+                render: (status: string) =>
+                  status === "active" ? <Tag color="green">正常</Tag> : <Tag color="orange">停用</Tag>,
+              },
+              {
+                title: "数据接入",
+                dataIndex: "configured",
+                render: (configured: boolean) =>
+                  configured ? <Tag color="green">已接入</Tag> : <Tag>未接入</Tag>,
+              },
+              {
+                title: "操作",
+                key: "actions",
+                width: 120,
+                render: (_, row) =>
+                  row.bound ? (
+                    <Popconfirm title={`解绑店铺「${row.name}」？解绑后将看不到该店数据`} onConfirm={() => unbindMyStore(row)}>
+                      <Button size="small" danger loading={myBindBusy === row.id}>
+                        解绑
+                      </Button>
+                    </Popconfirm>
+                  ) : (
+                    <Button
+                      size="small"
+                      type="primary"
+                      disabled={!row.configured}
+                      loading={myBindBusy === row.id}
+                      onClick={() => bindMyStore(row)}
+                    >
+                      {row.configured ? "绑定" : "未接入"}
+                    </Button>
+                  ),
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       <Card variant="borderless">
         <Table<Store>

@@ -1,11 +1,11 @@
-"""AI 助手：基于已配置的模型提供对话能力，并带上工作台实时数据快照。"""
+﻿"""AI 助手：基于已配置的模型提供对话能力，并带上工作台实时数据快照。"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.auth import get_current_user
+from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.api.model_configs import _get_config_by_id, get_default_config
 from backend.app.core.ai_client import AIError, chat_completion
 from backend.app.core.db import get_db
@@ -26,16 +26,28 @@ class ChatIn(BaseModel):
     model_id: int | None = None
 
 
-def _workbench_snapshot(db) -> str:
-    """把工作台当前状态压缩成一段文字，注入系统提示词。"""
-    store_count = db.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
-    active_stores = db.execute("SELECT COUNT(*) AS c FROM stores WHERE status = 'active'").fetchone()["c"]
-    gift_total = db.execute("SELECT COUNT(*) AS c FROM gifts").fetchone()["c"]
-    gift_pending = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'pending'").fetchone()["c"]
-    gift_shipped = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'shipped'").fetchone()["c"]
-    gift_delivered = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'delivered'").fetchone()["c"]
-    gift_refunded = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'refunded'").fetchone()["c"]
-    top_stores = db.execute("SELECT name, category FROM stores ORDER BY id ASC LIMIT 5").fetchall()
+def _workbench_snapshot(db, user: dict) -> str:
+    """把工作台当前状态压缩成一段文字，注入系统提示词（SaaS：按账号可见店铺隔离）。"""
+    visible = visible_store_ids(user)
+    if visible is not None and not visible:
+        return "当前账号未绑定任何店铺，暂无可查看的数据。"
+    if visible is not None:
+        ids = ",".join(str(i) for i in visible)
+        sf = f" AND id IN ({ids})"
+        gift_sf = f" AND store_id IN ({ids})"
+    else:
+        sf = ""
+        gift_sf = ""
+    store_count = db.execute("SELECT COUNT(*) AS c FROM stores WHERE 1=1" + sf).fetchone()["c"]
+    active_stores = db.execute("SELECT COUNT(*) AS c FROM stores WHERE status = 'active'" + sf).fetchone()["c"]
+    gift_total = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE 1=1" + gift_sf).fetchone()["c"]
+    gift_pending = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'pending'" + gift_sf).fetchone()["c"]
+    gift_shipped = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'shipped'" + gift_sf).fetchone()["c"]
+    gift_delivered = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'delivered'" + gift_sf).fetchone()["c"]
+    gift_refunded = db.execute("SELECT COUNT(*) AS c FROM gifts WHERE status = 'refunded'" + gift_sf).fetchone()["c"]
+    top_stores = db.execute(
+        "SELECT name, category FROM stores WHERE 1=1" + sf + " ORDER BY id ASC LIMIT 5"
+    ).fetchall()
     store_names = "、".join(f"{row['name']}（{row['category']}）" for row in top_stores) or "（暂无店铺）"
     return (
         f"店铺共 {store_count} 家，其中正常营业 {active_stores} 家；"

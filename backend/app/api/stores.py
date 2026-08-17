@@ -1,7 +1,8 @@
-"""店铺管理：多店铺绑定、健康状态、授权管理与当前操作店铺。"""
+﻿"""店铺管理：多店铺绑定、健康状态、授权管理与当前操作店铺。"""
 
 from __future__ import annotations
 
+import json
 import math
 import random
 from datetime import date as date_cls
@@ -10,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.auth import get_current_user
+from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
 from backend.app.core.sycm import (
@@ -77,17 +78,17 @@ def _log(db, user: dict, action: str, target_name: str = "", detail: str = "") -
 
 
 def can_access_store(user: dict, store_id: int) -> bool:
-    if user["role"] in ("admin", "super_admin"):
+    visible = visible_store_ids(user)
+    if visible is None:
         return True
-    allowed = user.get("allowed_store_ids")
-    return allowed is None or store_id in allowed
+    return store_id in visible
 
 
 def _visible_rows(rows, user: dict):
-    if user["role"] in ("admin", "super_admin") or user.get("allowed_store_ids") is None:
+    visible = visible_store_ids(user)
+    if visible is None:
         return list(rows)
-    allowed = set(user["allowed_store_ids"])
-    return [row for row in rows if row["id"] in allowed]
+    return [row for row in rows if row["id"] in visible]
 
 
 def _metrics_for(store_id: int, day: date_cls) -> dict:
@@ -760,3 +761,72 @@ def list_logs(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dic
             for row in rows
         ]
     }
+
+
+class BindIn(BaseModel):
+    store_id: int
+
+
+@router.get("/available")
+def available_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    """可自助绑定的店铺（平台已接入、已配置登录档案的店铺），标注是否已绑定。"""
+    rows = db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
+    visible = visible_store_ids(user)
+    bound = set(visible) if visible is not None else None
+    items = []
+    for row in rows:
+        item = {
+            "id": row["id"],
+            "name": row["name"],
+            "status": row["status"],
+            "configured": has_profile(row["id"]),
+        }
+        item["bound"] = row["id"] in bound if bound is not None else True
+        items.append(item)
+    return {"items": items}
+
+
+@router.post("/bind")
+def bind_store(body: BindIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    """账号自助绑定店铺：验证店铺存在且已配置登录档案，通过即绑定（免审批）。"""
+    if user["role"] in ("admin", "super_admin"):
+        return {"ok": True, "message": "管理员无需绑定店铺"}
+    if user.get("parent_id"):
+        raise HTTPException(status_code=403, detail="子账号继承主账号的店铺，无需自行绑定")
+    row = db.execute("SELECT * FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=400, detail="店铺不存在")
+    if not has_profile(body.store_id):
+        raise HTTPException(status_code=400, detail="该店铺尚未接入平台（未配置登录态），无法绑定")
+    current = list(user.get("allowed_store_ids") or [])
+    if body.store_id not in current:
+        quota = user.get("store_quota") or 3
+        if len(current) >= quota:
+            raise HTTPException(
+                status_code=400,
+                detail=f"该账号最多绑定 {quota} 家店铺，如需更多请联系平台调整配额",
+            )
+        current.append(body.store_id)
+        db.execute(
+            "UPDATE users SET allowed_store_ids = ? WHERE id = ?",
+            (json.dumps(current, ensure_ascii=False), user["id"]),
+        )
+        log_op(db, user, "stores", "bind", row["name"], "账号自助绑定店铺")
+    return {"ok": True, "store_id": body.store_id, "store_name": row["name"]}
+
+
+@router.post("/unbind")
+def unbind_store(body: BindIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    """账号自助解绑店铺。"""
+    if user["role"] in ("admin", "super_admin"):
+        return {"ok": True, "message": "管理员无需解绑店铺"}
+    current = list(user.get("allowed_store_ids") or [])
+    if body.store_id in current:
+        current = [i for i in current if i != body.store_id]
+        db.execute(
+            "UPDATE users SET allowed_store_ids = ? WHERE id = ?",
+            (json.dumps(current, ensure_ascii=False), user["id"]),
+        )
+        row = db.execute("SELECT name FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+        log_op(db, user, "stores", "unbind", (row["name"] if row else ""), "账号自助解绑店铺")
+    return {"ok": True}

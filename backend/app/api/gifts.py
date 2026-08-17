@@ -1,4 +1,4 @@
-"""礼品单：订单台账管理（日期/下单时间/店铺/关键词/规格/金额/佣金/旺旺号/订单号/评论/结款）。"""
+﻿"""礼品单：订单台账管理（日期/下单时间/店铺/关键词/规格/金额/佣金/旺旺号/订单号/评论/结款）。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
 
-from backend.app.api.auth import get_current_user
+from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.core.db import DB_PATH, get_db
 from backend.app.core.logs import log_op
 
@@ -70,6 +70,27 @@ class GiftBatchCreateIn(BaseModel):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _store_clause(user: dict, alias: str = "g") -> tuple[str, list]:
+    """SaaS 隔离：member 只能看到/操作绑定店铺的礼品单；超管/管理员不限。"""
+    visible = visible_store_ids(user)
+    if visible is None:
+        return "", []
+    col = f"{alias}.store_id" if alias else "store_id"
+    if not visible:
+        return f" AND {col} IN (0)", []
+    ids = ",".join(str(i) for i in visible)
+    return f" AND {col} IN ({ids})", []
+
+
+def _ensure_gift_access(user: dict, row) -> None:
+    """校验单条礼品单是否属于用户可见店铺。"""
+    visible = visible_store_ids(user)
+    if visible is None:
+        return
+    if row["store_id"] not in visible:
+        raise HTTPException(status_code=403, detail="无权操作该礼品单")
 
 
 def _get_gift_or_404(db, gift_id: int):
@@ -169,6 +190,9 @@ def list_gifts(
         WHERE 1 = 1
     """
     params: list = []
+    sf, sp = _store_clause(user)
+    query += sf
+    params += sp
     if store_id is not None:
         query += " AND g.store_id = ?"
         params.append(store_id)
@@ -203,6 +227,9 @@ def export_gifts(
         WHERE 1 = 1
     """
     params: list = []
+    sf, sp = _store_clause(user)
+    query += sf
+    params += sp
     if store_id is not None:
         query += " AND g.store_id = ?"
         params.append(store_id)
@@ -323,6 +350,10 @@ def batch_create_gifts(
         else:
             store_id = 0
 
+    visible = visible_store_ids(user)
+    if visible is not None and store_id not in visible:
+        raise HTTPException(status_code=403, detail="只能创建自己绑定店铺的礼品单")
+
     now = datetime.now()
     base_date = now.date()
     if body.date:
@@ -381,14 +412,15 @@ def batch_update_gifts(
     if body.settle_status is not None and body.settle_status not in SETTLE_STATUSES:
         raise HTTPException(status_code=400, detail="结款状态不正确")
     placeholders = ",".join("?" for _ in body.ids)
+    scf, _ = _store_clause(user, alias="")
     if body.review_status is not None:
         db.execute(
-            f"UPDATE gifts SET review_status = ? WHERE id IN ({placeholders})",
+            f"UPDATE gifts SET review_status = ? WHERE id IN ({placeholders})" + scf,
             (body.review_status, *body.ids),
         )
     if body.settle_status is not None:
         db.execute(
-            f"UPDATE gifts SET settle_status = ? WHERE id IN ({placeholders})",
+            f"UPDATE gifts SET settle_status = ? WHERE id IN ({placeholders})" + scf,
             (body.settle_status, *body.ids),
         )
     log_op(db, user, "gifts", "batch", "", f"批量更新 {len(body.ids)} 单")
@@ -404,7 +436,8 @@ def batch_delete_gifts(
     if not body.ids:
         raise HTTPException(status_code=400, detail="请先选择要删除的礼品单")
     placeholders = ",".join("?" for _ in body.ids)
-    db.execute(f"DELETE FROM gifts WHERE id IN ({placeholders})", body.ids)
+    scf, _ = _store_clause(user, alias="")
+    db.execute(f"DELETE FROM gifts WHERE id IN ({placeholders})" + scf, body.ids)
     log_op(db, user, "gifts", "delete", "", f"批量删除 {len(body.ids)} 单")
     return {"ok": True, "count": len(body.ids)}
 
@@ -427,6 +460,9 @@ def create_gift(
         if not gift_store_name:
             raise HTTPException(status_code=400, detail="请选择或输入店铺")
         store_id = 0
+    visible = visible_store_ids(user)
+    if visible is not None and store_id not in visible:
+        raise HTTPException(status_code=403, detail="只能创建自己绑定店铺的礼品单")
     order_no = _resolve_order_no(db, body)
     order_time = body.order_time.strip() or _now()
     cur = db.execute(
@@ -464,6 +500,7 @@ def update_gift(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
     fields = _validate(
         body,
         has_image=bool(body.image.strip() or row["image"]),
@@ -531,6 +568,7 @@ def update_gift_review(
     if body.status not in REVIEW_STATUSES:
         raise HTTPException(status_code=400, detail="评论状态不正确")
     row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
     db.execute("UPDATE gifts SET review_status = ? WHERE id = ?", (body.status, gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "review", row["order_no"], f"评论状态改为「{REVIEW_LABELS[body.status]}」")
@@ -547,6 +585,7 @@ def update_gift_settle(
     if body.status not in SETTLE_STATUSES:
         raise HTTPException(status_code=400, detail="结款状态不正确")
     row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
     db.execute("UPDATE gifts SET settle_status = ? WHERE id = ?", (body.status, gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "settle", row["order_no"], f"结款状态改为「{SETTLE_LABELS[body.status]}」")
@@ -561,6 +600,7 @@ async def upload_gift_image(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="请选择二维码图片")
     ext = Path(file.filename).suffix.lower()
@@ -594,6 +634,7 @@ def clear_gift_image(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
     old = row["image"]
     if old and old.startswith("/api/images/"):
         old_path = DB_PATH.parent / "images" / Path(old.rsplit("/", 1)[-1])
@@ -615,6 +656,7 @@ def delete_gift(
     db=Depends(get_db),
 ) -> dict:
     row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
     db.execute("DELETE FROM gifts WHERE id = ?", (gift_id,))
     log_op(db, user, "gifts", "delete", row["order_no"], f"删除礼品单 {row['order_no']}")
     return {"ok": True}

@@ -1,5 +1,6 @@
-import {
+﻿import {
   BarChartOutlined,
+  KeyOutlined,
   LockOutlined,
   RocketOutlined,
   ShopOutlined,
@@ -22,6 +23,7 @@ type RegisterValues = {
   nickname: string;
   password: string;
   confirm: string;
+  inviteCode: string;
 };
 
 const FEATURES = [
@@ -41,13 +43,19 @@ export function RegisterPage() {
   const handleFinish = async (values: RegisterValues) => {
     setSubmitting(true);
     try {
-      await register({
+      const result = await register({
         username: values.username.trim(),
         password: values.password,
         nickname: values.nickname.trim(),
+        inviteCode: values.inviteCode?.trim() ?? "",
       });
-      message.success("注册成功，已自动登录");
-      navigate("/dashboard", { replace: true });
+      if (result.pending) {
+        message.success("注册申请已提交，请等待管理员审核通过后登录");
+        navigate("/login", { replace: true });
+      } else {
+        message.success("注册成功，已自动登录");
+        navigate("/dashboard", { replace: true });
+      }
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -131,7 +139,7 @@ export function RegisterPage() {
               创建账号
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
-              注册后即可开始使用 {BRAND.name}
+              填邀请码可直接开通；没邀请码可提交申请，等管理员审核
             </Text>
           </div>
 
@@ -153,6 +161,9 @@ export function RegisterPage() {
               ]}
             >
               <Input prefix={<SmileOutlined />} placeholder="花名（必填）" />
+            </Form.Item>
+            <Form.Item name="inviteCode" tooltip="有邀请码可直接开通；没有邀请码可提交申请，等待管理员审核">
+              <Input prefix={<KeyOutlined />} placeholder="邀请码（选填，有则直接开通）" autoComplete="off" />
             </Form.Item>
             <Form.Item
               name="password"
@@ -179,7 +190,7 @@ export function RegisterPage() {
               <Input.Password prefix={<LockOutlined />} placeholder="确认密码" autoComplete="new-password" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block loading={submitting} style={{ marginTop: 6, height: 42 }}>
-              注册并登录
+              提交注册
             </Button>
           </Form>
 

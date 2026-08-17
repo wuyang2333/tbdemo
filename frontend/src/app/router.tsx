@@ -1,4 +1,4 @@
-import { Spin } from "antd";
+﻿import { Spin } from "antd";
 import { Suspense, lazy } from "react";
 import type { ReactNode } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
@@ -32,6 +32,7 @@ const PromotionsPlansPage = lazy(() => import("../pages/promotions-plans-page").
 const RegisterPage = lazy(() => import("../pages/register-page").then((m) => ({ default: m.RegisterPage })));
 const SettingsPage = lazy(() => import("../pages/settings-page").then((m) => ({ default: m.SettingsPage })));
 const StoresPage = lazy(() => import("../pages/stores-page").then((m) => ({ default: m.StoresPage })));
+const TeamPage = lazy(() => import("../pages/team-page").then((m) => ({ default: m.TeamPage })));
 const TasksPage = lazy(() => import("../pages/tasks-page").then((m) => ({ default: m.TasksPage })));
 
 function PageFallback() {
@@ -92,6 +93,14 @@ export function AppRouter() {
               <RequireModule id="stores">
                 <StoresPage />
               </RequireModule>
+            }
+          />
+          <Route
+            path="/team"
+            element={
+              <RequireAuth>
+                <TeamPage />
+              </RequireAuth>
             }
           />
           <Route

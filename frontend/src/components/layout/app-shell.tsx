@@ -1,4 +1,4 @@
-import {
+﻿import {
   ApiOutlined,
   BarChartOutlined,
   BellOutlined,
@@ -23,7 +23,7 @@ import {
   TeamOutlined,
   UserSwitchOutlined,
 } from "@ant-design/icons";
-import { Avatar, Badge, Button, Dropdown, Input, Layout, Menu, Popover, Select, Space, Tag, Tooltip, Typography } from "antd";
+import { Alert, Avatar, Badge, Button, Dropdown, Input, Layout, Menu, Popover, Select, Space, Tag, Tooltip, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -43,6 +43,7 @@ const { Text } = Typography;
 const ICONS: Record<string, ReactNode> = {
   dashboard: <DashboardOutlined />,
   shop: <ShopOutlined />,
+  team: <TeamOutlined />,
   product: <ShoppingOutlined />,
   order: <ProfileOutlined />,
   customer: <TeamOutlined />,
@@ -145,6 +146,19 @@ export function AppShell() {
     const timer = setInterval(loadNotifs, 60000);
     return () => clearInterval(timer);
   }, [loadNotifs]);
+
+  const [announcements, setAnnouncements] = useState<{ id: number; title: string; content: string }[]>([]);
+  const loadAnnouncements = useCallback(async () => {
+    try {
+      const { data } = await http.get<{ items: { id: number; title: string; content: string }[] }>("/announcements/active");
+      setAnnouncements(data.items);
+    } catch {
+      setAnnouncements([]);
+    }
+  }, []);
+  useEffect(() => {
+    loadAnnouncements();
+  }, [loadAnnouncements]);
   const [openKeys, setOpenKeys] = useState<string[]>(() => {
     const seg = location.pathname.split("/")[1];
     return seg === "analytics" || seg === "promotions" ? [seg] : [];
@@ -162,7 +176,10 @@ export function AppShell() {
   const siderWidth = collapsed ? 72 : 236;
   const displayName = user?.nickname || user?.username || "运营者";
 
-  const mainItems = toItems(MAIN_MODULES.filter((module) => canAccessModule(user, module.id)));
+  const mainItems = toItems(MAIN_MODULES.filter((module) => canAccessModule(user, module.id))) ?? [];
+  if (user?.role === "member" && !user?.parent_id) {
+    mainItems.push({ key: "/team", icon: ICONS.team, label: "我的团队" });
+  }
   const footerItems = toItems(FOOTER_MODULES.filter((module) => canAccessModule(user, module.id)));
 
   const handleMenuClick: MenuProps["onClick"] = ({ key }) => navigate(key);
@@ -559,6 +576,16 @@ export function AppShell() {
             width: "100%",
           }}
         >
+          {announcements.length > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              closable
+              message={announcements[0].title}
+              description={announcements[0].content || undefined}
+              style={{ marginBottom: 16 }}
+            />
+          )}
           <div className="ops-fade-in">
             <Outlet />
           </div>

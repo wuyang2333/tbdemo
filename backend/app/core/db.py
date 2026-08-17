@@ -1,4 +1,4 @@
-"""SQLite 数据层：账号、令牌持久化。"""
+﻿"""SQLite 数据层：账号、令牌持久化。"""
 
 from __future__ import annotations
 
@@ -47,6 +47,54 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN current_store_id INTEGER")
     if "allowed_store_ids" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN allowed_store_ids TEXT")
+    if "failed_count" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN failed_count INTEGER NOT NULL DEFAULT 0")
+    if "locked_until" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN locked_until TEXT")
+    if "last_login_at" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+    if "last_login_ip" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN last_login_ip TEXT")
+    if "expires_at" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN expires_at TEXT")
+    if "parent_id" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN parent_id INTEGER")
+    if "sub_account_quota" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN sub_account_quota INTEGER NOT NULL DEFAULT 2")
+    if "store_quota" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN store_quota INTEGER NOT NULL DEFAULT 3")
+    try:
+        tcols = {row[1] for row in conn.execute("PRAGMA table_info(tokens)")}
+        if "expires_at" not in tcols:
+            conn.execute("ALTER TABLE tokens ADD COLUMN expires_at TEXT")
+    except sqlite3.OperationalError:
+        pass
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            ip TEXT NOT NULL DEFAULT '',
+            user_agent TEXT NOT NULL DEFAULT '',
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            created_by INTEGER,
+            created_at TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
     conn.commit()
 
     super_admin = conn.execute("SELECT id FROM users WHERE role = 'super_admin' LIMIT 1").fetchone()
@@ -398,7 +446,15 @@ def init_db() -> None:
                 allowed_modules TEXT,
                 avatar_url TEXT,
                 current_store_id INTEGER,
-                allowed_store_ids TEXT
+                allowed_store_ids TEXT,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                locked_until TEXT,
+                last_login_at TEXT,
+                last_login_ip TEXT,
+                expires_at TEXT,
+                parent_id INTEGER,
+                sub_account_quota INTEGER NOT NULL DEFAULT 2,
+                store_quota INTEGER NOT NULL DEFAULT 3
             )
             """
         )
@@ -408,7 +464,49 @@ def init_db() -> None:
                 token TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
+                expires_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS login_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                ip TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS announcements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                created_by INTEGER,
+                created_at TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                note TEXT NOT NULL DEFAULT '',
+                created_by INTEGER,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                max_uses INTEGER NOT NULL DEFAULT 1,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active'
             )
             """
         )

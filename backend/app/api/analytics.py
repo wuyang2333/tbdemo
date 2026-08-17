@@ -1,4 +1,4 @@
-"""数据洞察：从生意参谋抓取的店铺每日数据（store_daily_data）聚合统计。"""
+﻿"""数据洞察：从生意参谋抓取的店铺每日数据（store_daily_data）聚合统计。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
 
-from backend.app.api.auth import get_current_user
+from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.api.model_configs import get_default_config
 from backend.app.core.ai_client import AIError, chat_completion
 from backend.app.core.db import get_db
@@ -103,7 +103,7 @@ def analytics_summary(
 ) -> dict:
     if not (1 <= days <= 90):
         days = 14
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT * FROM store_daily_data" + (" WHERE 1=1" + sf) + " ORDER BY data_date ASC, store_id ASC",
         sp,
@@ -154,8 +154,12 @@ def analytics_summary(
         by_store.append(_derive(item))
     by_store.sort(key=lambda x: x["sales"], reverse=True)
 
-    store_ids = [s["id"] for s in db.execute("SELECT id FROM stores").fetchall()]
-    configured = sum(1 for sid in store_ids if has_profile(sid))
+    visible = visible_store_ids(user)
+    if visible is None:
+        store_ids = [s["id"] for s in db.execute("SELECT id FROM stores").fetchall()]
+        configured = sum(1 for sid in store_ids if has_profile(sid))
+    else:
+        configured = sum(1 for sid in visible if has_profile(sid))
     last = db.execute(
         "SELECT MAX(created_at) AS m FROM store_daily_data"
     ).fetchone()["m"]
@@ -180,7 +184,7 @@ def analytics_daily(
     if not (1 <= days <= 90):
         days = 30
     start, today = _date_range(days)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date ASC",
         [start.isoformat(), today.isoformat()] + sp,
@@ -213,7 +217,7 @@ def analytics_alerts(
     baseline = int(cfg["baseline_days"])
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT * FROM store_daily_data WHERE data_date >= ?" + sf + " ORDER BY data_date ASC",
         [start.isoformat()] + sp,
@@ -299,7 +303,7 @@ def analytics_linkage(
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     sd_rows = db.execute(
         "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
         [start.isoformat(), today.isoformat()] + sp,
@@ -428,7 +432,7 @@ def goal_progress(
     goal, _ = _goal_value(db)
     if month != _current_month():
         goal = 0.0
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT sales FROM store_daily_data WHERE data_date LIKE ?" + sf,
         [month + "%"] + sp,
@@ -469,9 +473,10 @@ def analytics_forecast(
     if not (1 <= days <= 30):
         days = 7
     today = date_cls.today()
+    sf, sp = _store_filter(None, user)
     rows = db.execute(
-        "SELECT data_date, sales FROM store_daily_data WHERE data_date >= ? ORDER BY data_date",
-        ((today - timedelta(days=13)).isoformat(),),
+        "SELECT data_date, sales FROM store_daily_data WHERE data_date >= ?" + sf + " ORDER BY data_date",
+        [(today - timedelta(days=13)).isoformat()] + sp,
     ).fetchall()
     by_date = {r["data_date"]: r["sales"] or 0 for r in rows}
     actual = []
@@ -631,7 +636,7 @@ def daily_report(
     last_week = today - timedelta(days=7)
     ts, ys, ws = today.isoformat(), yesterday.isoformat(), last_week.isoformat()
     is_realtime = ts == real_today.isoformat()
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
 
     td = _report_day_summary(db, ts, sf, sp)
     yd = _report_day_summary(db, ys, sf, sp)
@@ -654,7 +659,7 @@ def daily_report(
 
     goal, _ = _goal_value(db)
     month = today.strftime("%Y-%m")
-    month_rows = db.execute("SELECT sales FROM store_daily_data WHERE data_date LIKE ?", (month + "%",)).fetchall()
+    month_rows = db.execute("SELECT sales FROM store_daily_data WHERE data_date LIKE ?" + sf, [month + "%"] + sp).fetchall()
     month_sales = round(sum(r["sales"] or 0 for r in month_rows), 2)
 
     ac = _report_add_cart_refund(db, ts, sf, sp, is_realtime)
@@ -945,7 +950,7 @@ def analytics_health(
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT * FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
         [start.isoformat(), today.isoformat()] + sp,
@@ -990,8 +995,8 @@ def analytics_health(
 
     # 4) 推广 ROI（区间平均）
     promo_rows = db.execute(
-        "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?",
-        (start.isoformat(), today.isoformat()),
+        "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?" + sf,
+        [start.isoformat(), today.isoformat()] + sp,
     ).fetchall()
     pspend = sum(r["spend"] or 0 for r in promo_rows)
     psales = sum(r["sales"] or 0 for r in promo_rows)
@@ -1043,10 +1048,10 @@ def _insight_peak(db, sf, sp, start: date_cls, end: date_cls) -> list[dict]:
     return [{"hour": r["hour"], "sales": round(r["sales"] or 0, 2)} for r in rows]
 
 
-def _collect_insight(mode: str, store_id: int | None, db) -> dict:
+def _collect_insight(mode: str, store_id: int | None, user: dict, db) -> dict:
     """按模式汇总 AI 解读所需数据：销售额、推广、趋势、TOP商品、高峰时段、异常。"""
     today = date_cls.today()
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     anomalies: list[str] = []
     if mode == "realtime":
         ts = today.isoformat()
@@ -1284,7 +1289,7 @@ def ai_insight(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _collect_insight(mode, store_id, db)
+    data = _collect_insight(mode, store_id, user, db)
     prompt = _build_insight_prompt(data)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0)
@@ -1318,7 +1323,7 @@ def ai_insight_chat(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _collect_insight(body.mode, body.store_id, db)
+    data = _collect_insight(body.mode, body.store_id, user, db)
     context = (
         "你是淘宝店铺的运营数据分析师。以下是当前数据上下文：\n"
         + "\n".join(_data_lines(data))
@@ -1366,7 +1371,7 @@ def _sum_product_rows(rows) -> dict:
 
 def _product_rank_realtime(item_id: str, store_id: int | None, db) -> tuple[int, float, float]:
     """商品在店铺实时榜中的排名、销售占比与全店实时销售额。"""
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute("SELECT item_id, sales FROM store_item_realtime WHERE 1=1" + sf, sp).fetchall()
     items = sorted(rows, key=lambda r: r["sales"] or 0, reverse=True)
     store_total = sum(r["sales"] or 0 for r in items)
@@ -1381,9 +1386,9 @@ def _product_rank_realtime(item_id: str, store_id: int | None, db) -> tuple[int,
     return (rank or len(items) + 1), share, round(store_total, 2)
 
 
-def _product_rank_days(item_id: str, store_id: int | None, days: int, db) -> tuple[int, float, float]:
+def _product_rank_days(item_id: str, store_id: int | None, days: int, user: dict, db) -> tuple[int, float, float]:
     """商品在店铺区间销售榜中的排名、占比与全店区间销售额。"""
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
     rows = db.execute(
@@ -1404,9 +1409,9 @@ def _product_rank_days(item_id: str, store_id: int | None, days: int, db) -> tup
     return (rank or len(items) + 1), share, round(store_total, 2)
 
 
-def _product_trend_daily(item_id: str, store_id: int | None, days: int, db) -> list[str]:
+def _product_trend_daily(item_id: str, store_id: int | None, days: int, user: dict, db) -> list[str]:
     """商品近 N 天逐日销售额（最多 7 个点）。"""
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
     rows = db.execute(
@@ -1416,11 +1421,11 @@ def _product_trend_daily(item_id: str, store_id: int | None, days: int, db) -> l
     return [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
 
 
-def _collect_product_data(item_id: str, store_id: int | None, mode: str, db, start: str = "", end: str = "") -> dict:
+def _collect_product_data(item_id: str, store_id: int | None, mode: str, user: dict, db, start: str = "", end: str = "") -> dict:
     """按模式汇总单个商品的诊断数据。"""
     today = date_cls.today()
     ts = today.isoformat()
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rt = db.execute("SELECT * FROM store_item_realtime WHERE item_id = ?" + sf, [item_id] + sp).fetchone()
     title = (rt["item_title"] or "") if rt else ""
     image = (rt["image"] or "") if rt else ""
@@ -1449,7 +1454,7 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, db, sta
             chg = {"sales": None, "orders": None, "visitors": None, "conversion": None, "add_cart": None}
         rank, share, store_total = _product_rank_realtime(item_id, store_id, db)
         range_label = f"今日实时（{ts[5:]}）"
-        trend = _product_trend_daily(item_id, store_id, 7, db)
+        trend = _product_trend_daily(item_id, store_id, 7, user, db)
     else:
         if start and end:
             try:
@@ -1497,7 +1502,7 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, db, sta
             rank, share, store_total = _product_rank_range(item_id, store_id, s, e, db)
             range_label = f"{s.strftime('%m-%d')} ~ {e.strftime('%m-%d')}"
         else:
-            rank, share, store_total = _product_rank_days(item_id, store_id, days, db)
+            rank, share, store_total = _product_rank_days(item_id, store_id, days, user, db)
             range_label = f"近 {days} 天（{s.strftime('%m-%d')}~{e.strftime('%m-%d')}）"
         trend = [f"{r['data_date'][5:]}:¥{r['sales'] or 0:.0f}" for r in rows[-7:]]
 
@@ -1622,7 +1627,7 @@ def product_ai_insight(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _collect_product_data(item_id, store_id, mode, db, start=start, end=end)
+    data = _collect_product_data(item_id, store_id, mode, user, db, start=start, end=end)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": _build_product_prompt(data)}], timeout=120.0)
     except AIError as exc:
@@ -1649,7 +1654,7 @@ def product_ai_insight_chat(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _collect_product_data(item_id, body.store_id, body.mode, db, start=start, end=end)
+    data = _collect_product_data(item_id, body.store_id, body.mode, user, db, start=start, end=end)
     context = (
         "你是淘宝店铺的运营数据分析师。以下是该商品的数据上下文：\n"
         + "\n".join(_product_data_lines(data))
@@ -1668,10 +1673,20 @@ def product_ai_insight_chat(
 
 # ---------- 通用：单店筛选 ----------
 
-def _store_filter(store_id: int | None) -> tuple[str, list]:
+def _store_filter(store_id: int | None, user: dict) -> tuple[str, list]:
+    """店铺过滤：先按账号可见店铺（SaaS 隔离），再按请求的 store_id 参数。"""
+    clauses: list[str] = []
+    params: list = []
+    visible = visible_store_ids(user)
+    if visible is not None:
+        if not visible:
+            return " AND 1=0", []
+        ids = ",".join(str(i) for i in visible)
+        clauses.append(f" AND store_id IN ({ids})")
     if store_id:
-        return " AND store_id = ?", [store_id]
-    return "", []
+        clauses.append(" AND store_id = ?")
+        params.append(store_id)
+    return "".join(clauses), params
 
 
 # ---------- 客群分析（新老客/复购） ----------
@@ -1868,7 +1883,7 @@ def analytics_hours(
 ) -> dict:
     """时段分析：支持单日或日期区间，叠加推广分时、环比与时段分组。"""
     s, e = _resolve_hours_range(date, start, end)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     return _hours_dataset(db, sf, sp, s, e)
 
 
@@ -1939,7 +1954,7 @@ def hours_ai_insight(
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
     s, e = _resolve_hours_range("", start, end)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     d = _hours_dataset(db, sf, sp, s, e)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": _build_hours_prompt(d)}], timeout=120.0)
@@ -2125,7 +2140,7 @@ def _range_promo_mode(s: date_cls, e: date_cls) -> str | None:
 
 def _product_rank_range(item_id: str, store_id: int | None, s: date_cls, e: date_cls, db) -> tuple[int, float, float]:
     """商品在区间销售榜中的排名、占比与全店区间销售额。"""
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT item_id, SUM(sales) AS sales FROM store_item_daily "
         "WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY item_id",
@@ -2155,7 +2170,7 @@ def analytics_products(
     db=Depends(get_db),
 ) -> dict:
     if mode == "realtime":
-        sf, sp = _store_filter(store_id)
+        sf, sp = _store_filter(store_id, user)
         items = _realtime_product_items(db, sf, sp)
         _attach_promo(db, items, "realtime", sf, sp)
         fetched = db.execute(
@@ -2165,7 +2180,7 @@ def analytics_products(
         return {"items": items, "total": len(items), "days": 0, "mode": "realtime", "fetched_at": fetched["m"] if fetched and fetched["m"] else None}
 
     if mode == "yesterday":
-        sf, sp = _store_filter(store_id)
+        sf, sp = _store_filter(store_id, user)
         ys = (date_cls.today() - timedelta(days=1)).isoformat()
         rows = db.execute(
             "SELECT * FROM store_item_daily WHERE data_date = ?" + sf,
@@ -2212,7 +2227,7 @@ def analytics_products(
             s, e = _date_range(days)
     else:
         s, e = _date_range(days)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT * FROM store_item_daily WHERE data_date >= ? AND data_date <= ?" + sf,
         [s.isoformat(), e.isoformat()] + sp,
@@ -2263,7 +2278,7 @@ def analytics_product_detail(
     if not (1 <= days <= 90):
         days = 14
     start, today = _date_range(days)
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     rows = db.execute(
         "SELECT * FROM store_item_daily WHERE item_id = ? AND data_date >= ? AND data_date <= ?" + sf + " ORDER BY data_date",
         [item_id, start.isoformat(), today.isoformat()] + sp,
@@ -2280,7 +2295,7 @@ def analytics_product_detail(
         item["visitors"] += r["visitors"] or 0
         item["pv"] += r["pv"] or 0
     # 今天用实时快照补充
-    rsf, rsp = _store_filter(store_id)
+    rsf, rsp = _store_filter(store_id, user)
     rt = db.execute(
         "SELECT * FROM store_item_realtime WHERE item_id = ?" + rsf,
         [item_id] + rsp,
@@ -2333,7 +2348,7 @@ def product_trend(
     """单个商品每日趋势（销售额/订单/访客/转化），从 store_item_daily 读取，缺日期补 0。"""
     if not (1 <= days <= 90):
         days = 7
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
     rows = db.execute(
@@ -2376,7 +2391,7 @@ def product_promo(
 ) -> dict:
     """商品 ↔ 推广联动：这个商品挂在哪些推广计划（含计划表现）+ 这些计划的关键词表现。"""
     mode = mode if mode in ("realtime", "yesterday", "7d") else "realtime"
-    sf, sp = _store_filter(store_id)
+    sf, sp = _store_filter(store_id, user)
     plan_rows = db.execute(
         "SELECT pi.store_id, pi.campaign_id, p.scene_name, p.plan_name, p.status, p.day_budget, p.bid_type, p.bid_value "
         "FROM promo_plan_items pi "

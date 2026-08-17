@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+﻿import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import http, { TOKEN_KEY, USER_KEY } from "./api";
@@ -8,12 +8,15 @@ type RegisterPayload = {
   username: string;
   password: string;
   nickname?: string;
+  inviteCode?: string;
 };
 
 type AuthContextValue = {
   user: AuthUser | null;
   login: (username: string, password: string) => Promise<AuthUser>;
-  register: (payload: RegisterPayload) => Promise<AuthUser>;
+  register: (
+    payload: RegisterPayload
+  ) => Promise<{ pending: true; message: string } | { pending: false; user: AuthUser }>;
   logout: () => void;
   refresh: () => Promise<void>;
 };
@@ -45,9 +48,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const register = useCallback(async (payload: RegisterPayload) => {
-    const { data } = await http.post<AuthResponse>("/auth/register", payload);
-    persist(data.token, data.user);
-    return data.user;
+    const { data } = await http.post<
+      AuthResponse | { ok: true; pending: true; message: string }
+    >("/auth/register", {
+      username: payload.username,
+      password: payload.password,
+      nickname: payload.nickname,
+      invite_code: payload.inviteCode ?? "",
+    });
+    if ("pending" in data && data.pending) {
+      return { pending: true as const, message: data.message };
+    }
+    const authData = data as AuthResponse;
+    persist(authData.token, authData.user);
+    return { pending: false as const, user: authData.user };
   }, []);
 
   const logout = useCallback(() => {

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend.app.api.auth import get_current_user
+from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.core.alimama import (
     AlimamaError,
     check_access,
@@ -45,6 +45,23 @@ def _now() -> str:
 
 def _log(db, user: dict, action: str, target: str = "", detail: str = "") -> None:
     log_op(db, user, "promotions", action, target, detail)
+
+
+def _scope_filter(store_id, user: dict) -> tuple[str, list]:
+    """按当前账号可见店铺生成 SQL 过滤片段；store_id 非空时再叠加指定店铺条件。"""
+    visible = visible_store_ids(user)
+    if visible is None:
+        fragment = ""
+        params: list = []
+    elif not visible:
+        return (" AND 1=0", [])
+    else:
+        fragment = " AND store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
+        params = []
+    if store_id:
+        fragment += " AND store_id = ?"
+        params.append(store_id)
+    return fragment, params
 
 
 def _bound_stores(db) -> list[dict]:
@@ -205,11 +222,17 @@ def promo_data(
 ) -> dict:
     mode = _mode(mode)
     today = date_cls.today()
+    scope_frag, scope_params = _scope_filter(None, user)
+    visible = visible_store_ids(user)
+    if visible is None:
+        bound_store_count = len(_bound_stores(db))
+    else:
+        bound_store_count = sum(1 for s in _bound_stores(db) if s["id"] in visible)
 
     if mode == "realtime":
         rows = db.execute(
-            "SELECT * FROM promo_realtime WHERE data_date = ? ORDER BY hour ASC, scene ASC",
-            (today.isoformat(),),
+            "SELECT * FROM promo_realtime WHERE data_date = ?" + scope_frag + " ORDER BY hour ASC, scene ASC",
+            [today.isoformat()] + scope_params,
         ).fetchall()
         summary = {"impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0}
         scene_map: dict[str, dict] = {}
@@ -253,7 +276,7 @@ def promo_data(
             "trend": trend,
             "trend_unit": "hour",
             "last_sync": _last_sync(db),
-            "bound_stores": len(_bound_stores(db)),
+            "bound_stores": bound_store_count,
         }
 
     # yesterday / 7d：按天报表（分场景）
@@ -263,8 +286,8 @@ def promo_data(
     else:
         start = today - timedelta(days=6)
         end = today - timedelta(days=1)
-    query = "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?"
-    params: list = [start.isoformat(), end.isoformat()]
+    query = "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?" + scope_frag
+    params: list = [start.isoformat(), end.isoformat()] + scope_params
     if scene:
         query += " AND scene = ?"
         params.append(scene)
@@ -325,7 +348,7 @@ def promo_data(
         "trend": trend,
         "trend_unit": "day",
         "last_sync": _last_sync(db),
-        "bound_stores": len(_bound_stores(db)),
+        "bound_stores": bound_store_count,
     }
 
 
@@ -390,9 +413,19 @@ def list_plans(
         "LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
     )
     params: list = [mode]
+    where_parts: list[str] = []
+    visible = visible_store_ids(user)
+    if visible is None:
+        pass
+    elif not visible:
+        where_parts.append("1=0")
+    else:
+        where_parts.append("p.store_id IN (%s)" % ",".join(str(i) for i in sorted(visible)))
     if scene:
-        query += " WHERE p.scene = ?"
+        where_parts.append("p.scene = ?")
         params.append(scene)
+    if where_parts:
+        query += " WHERE " + " AND ".join(where_parts)
     query += " ORDER BY CASE p.status WHEN '在投' THEN 0 ELSE 1 END, stat_spend DESC, p.id ASC"
     rows = db.execute(query, params).fetchall()
     items = []
@@ -681,39 +714,56 @@ def sync_promo_hourly(
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
 
-def _promo_insight_data(mode: str, db) -> dict:
+def _promo_insight_data(mode: str, db, user: dict) -> dict:
     mode = _mode(mode)
     today = date_cls.today()
+    visible = visible_store_ids(user)
+    if visible is None:
+        scope_frag = ""
+        scope_params: list = []
+    elif not visible:
+        scope_frag = " AND 1=0"
+        scope_params = []
+    else:
+        scope_frag = " AND store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
+        scope_params = []
     if mode == "realtime":
         scene_rows = db.execute(
             "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_realtime "
-            "WHERE data_date = ? GROUP BY scene ORDER BY spend DESC",
-            (today.isoformat(),),
+            "WHERE data_date = ?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
+            [today.isoformat()] + scope_params,
         ).fetchall()
     elif mode == "yesterday":
         d = (today - timedelta(days=1)).isoformat()
         scene_rows = db.execute(
             "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
-            "WHERE data_date = ? GROUP BY scene ORDER BY spend DESC",
-            (d,),
+            "WHERE data_date = ?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
+            [d] + scope_params,
         ).fetchall()
     else:
         start = (today - timedelta(days=6)).isoformat()
         scene_rows = db.execute(
             "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
-            "WHERE data_date >= ? AND data_date <= ? GROUP BY scene ORDER BY spend DESC",
-            (start, today.isoformat()),
+            "WHERE data_date >= ? AND data_date <= ?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
+            [start, today.isoformat()] + scope_params,
         ).fetchall()
     scenes = []
     for r in scene_rows:
         spend = round(r["spend"] or 0, 2)
         sales = round(r["sales"] or 0, 2)
         scenes.append({"scene": r["scene"], "scene_name": r["scene_name"] or r["scene"], "spend": spend, "sales": sales, "roi": round(sales / spend, 2) if spend else 0.0})
+    if visible is None:
+        plan_scope = ""
+    elif not visible:
+        plan_scope = " WHERE 1=0"
+    else:
+        plan_scope = " WHERE p.store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
     plans = db.execute(
         "SELECT p.scene, p.scene_name, p.plan_name, p.status, p.day_budget, "
         "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks "
-        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ? "
-        "ORDER BY COALESCE(s.spend,0) DESC",
+        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
+        + plan_scope
+        + " ORDER BY COALESCE(s.spend,0) DESC",
         (mode,),
     ).fetchall()
     plan_list = []
@@ -791,7 +841,7 @@ def promo_ai_insight(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _promo_insight_data(mode, db)
+    data = _promo_insight_data(mode, db, user)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": _build_promo_prompt(data)}], timeout=120.0)
     except AIError as exc:
@@ -826,6 +876,13 @@ def promo_alerts(
     roi_drop_ratio = float(pcfg.get("roi_drop_ratio") or 0.6)
     roi_low = float(pcfg.get("roi_low") or 1.0)
     alerts = []
+    visible = visible_store_ids(user)
+    if visible is None:
+        store_scope = "1=1"
+    elif not visible:
+        store_scope = "1=0"
+    else:
+        store_scope = "p.store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
     rows = db.execute(
         "SELECT p.plan_name, p.scene_name, p.status, p.day_budget, "
         "COALESCE(rt.spend,0) AS rt_spend, COALESCE(rt.roi,0) AS rt_roi, "
@@ -833,7 +890,7 @@ def promo_alerts(
         "FROM promo_plans p "
         "LEFT JOIN promo_plan_stats rt ON rt.store_id=p.store_id AND rt.campaign_id=p.campaign_id AND rt.mode='realtime' "
         "LEFT JOIN promo_plan_stats ye ON ye.store_id=p.store_id AND ye.campaign_id=p.campaign_id AND ye.mode='yesterday' "
-        "WHERE p.status='在投'"
+        "WHERE p.status='在投' AND " + store_scope
     ).fetchall()
     for r in rows:
         name = r["plan_name"] or "未命名计划"
@@ -870,14 +927,15 @@ def export_promo(
 
     mode = _mode(mode)
     today = date_cls.today()
+    scope_frag, scope_params = _scope_filter(None, user)
     wb = Workbook()
     ws = wb.active
     if mode in ("realtime", "yesterday"):
         d = today if mode == "realtime" else today - timedelta(days=1)
         table = "promo_realtime" if mode == "realtime" else "promo_daily_data"
         rows = db.execute(
-            f"SELECT scene, scene_name, SUM(impressions) AS imp, SUM(clicks) AS clicks, SUM(spend) AS spend, SUM(sales) AS sales, SUM(orders) AS orders FROM {table} WHERE data_date=? GROUP BY scene ORDER BY spend DESC",
-            (d.isoformat(),),
+            f"SELECT scene, scene_name, SUM(impressions) AS imp, SUM(clicks) AS clicks, SUM(spend) AS spend, SUM(sales) AS sales, SUM(orders) AS orders FROM {table} WHERE data_date=?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
+            [d.isoformat()] + scope_params,
         ).fetchall()
         ws.append(["场景", "展现", "点击", "花费", "成交", "订单", "ROI"])
         for r in rows:
@@ -889,8 +947,8 @@ def export_promo(
         start = today - timedelta(days=6)
         rows = db.execute(
             "SELECT data_date, scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales, SUM(orders) AS orders "
-            "FROM promo_daily_data WHERE data_date>=? AND data_date<=? GROUP BY data_date, scene ORDER BY data_date, spend DESC",
-            (start.isoformat(), today.isoformat()),
+            "FROM promo_daily_data WHERE data_date>=? AND data_date<=?" + scope_frag + " GROUP BY data_date, scene ORDER BY data_date, spend DESC",
+            [start.isoformat(), today.isoformat()] + scope_params,
         ).fetchall()
         scene_names = {}
         by_date = {}
@@ -933,12 +991,20 @@ def export_plans(
     from openpyxl import Workbook
 
     mode = _mode(mode)
+    visible = visible_store_ids(user)
+    if visible is None:
+        plan_scope = ""
+    elif not visible:
+        plan_scope = " WHERE 1=0"
+    else:
+        plan_scope = " WHERE p.store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
     rows = db.execute(
         "SELECT p.scene_name, p.plan_name, p.status, p.day_budget, p.bid_type, p.bid_value, "
         "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks, "
         "p.note, p.tag "
-        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id=p.store_id AND s.campaign_id=p.campaign_id AND s.mode=? "
-        "ORDER BY COALESCE(s.spend,0) DESC",
+        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id=p.store_id AND s.campaign_id=p.campaign_id AND s.mode=?"
+        + plan_scope
+        + " ORDER BY COALESCE(s.spend,0) DESC",
         (mode,),
     ).fetchall()
     wb = Workbook()
@@ -1005,7 +1071,12 @@ def plan_items(
     """计划 ↔ 商品映射（缓存优先，默认 6 小时刷新一次，refresh=1 强制刷新）。"""
     from backend.app.core.sycm import has_profile
 
-    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    all_stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    visible = visible_store_ids(user)
+    if visible is None:
+        stores = all_stores
+    else:
+        stores = [s for s in all_stores if s["id"] in visible]
     stale_cutoff = (datetime.now() - timedelta(hours=6)).isoformat()
     need: list[dict] = []
     for st in stores:
@@ -1018,7 +1089,8 @@ def plan_items(
         except Exception:  # noqa: BLE001
             continue
     result: dict[str, dict] = {}
-    for r in db.execute("SELECT * FROM promo_plan_items ORDER BY store_id").fetchall():
+    scope_frag, scope_params = _scope_filter(None, user)
+    for r in db.execute("SELECT * FROM promo_plan_items WHERE 1=1" + scope_frag + " ORDER BY store_id", scope_params).fetchall():
         result[r["campaign_id"]] = {
             "item_id": r["item_id"],
             "item_title": r["item_title"],
@@ -1081,12 +1153,16 @@ def update_plan(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    scope_frag, scope_params = _scope_filter(None, user)
+    row = db.execute(
+        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
+        [plan_id] + scope_params,
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
     db.execute(
-        "UPDATE promo_plans SET note = ?, tag = ?, updated_at = ? WHERE id = ?",
-        (body.note.strip(), body.tag.strip(), _now(), plan_id),
+        "UPDATE promo_plans SET note = ?, tag = ?, updated_at = ? WHERE id = ?" + scope_frag,
+        [body.note.strip(), body.tag.strip(), _now(), plan_id] + scope_params,
     )
     _log(db, user, "编辑推广计划", row["plan_name"], "备注/标记更新")
     return {"ok": True}
@@ -1113,7 +1189,11 @@ def set_plan_status(
 
     if body.status not in ("pause", "start"):
         raise HTTPException(status_code=400, detail="仅支持 pause（暂停）/ start（开启）")
-    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    scope_frag, scope_params = _scope_filter(None, user)
+    row = db.execute(
+        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
+        [plan_id] + scope_params,
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
@@ -1146,8 +1226,8 @@ def set_plan_status(
         raise HTTPException(status_code=502, detail=f"万相台操作失败：{exc}") from exc
     new_status = "暂停" if body.status == "pause" else "在投"
     db.execute(
-        "UPDATE promo_plans SET status = ?, updated_at = ? WHERE id = ?",
-        (new_status, _now(), plan_id),
+        "UPDATE promo_plans SET status = ?, updated_at = ? WHERE id = ?" + scope_frag,
+        [new_status, _now(), plan_id] + scope_params,
     )
     _log(db, user, "计划操作", label, f"{target}（万相台已执行，命中 {count} 个单元）")
     return {"ok": True, "execute": True, "count": count, "response": str(resp)[:300]}
@@ -1163,10 +1243,13 @@ class PlanChatBody(BaseModel):
     messages: list[PlanChatIn] = []
 
 
-def _ensure_plan_daily(db, store: dict, start, end) -> None:
+def _ensure_plan_daily(db, store: dict, start, end, user: dict) -> None:
     """懒加载：把 [start,end] 区间内缺失的按天计划报表补齐到 promo_plan_daily。"""
     from backend.app.core.alimama import AlimamaError
 
+    visible = visible_store_ids(user)
+    if visible is not None and store["id"] not in visible:
+        return
     cur = start
     while cur <= end:
         d = cur.isoformat()
@@ -1203,7 +1286,11 @@ def plan_trend(
 ) -> dict:
     """单个计划的每日趋势（花费/成交/ROI/点击），懒加载按天缓存。"""
     days = max(1, min(int(days), 30))
-    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    scope_frag, scope_params = _scope_filter(None, user)
+    row = db.execute(
+        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
+        [plan_id] + scope_params,
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
@@ -1213,7 +1300,7 @@ def plan_trend(
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
     try:
-        _ensure_plan_daily(db, store, start, today)
+        _ensure_plan_daily(db, store, start, today, user)
     except Exception:  # noqa: BLE001
         pass
     rows = db.execute(
@@ -1242,12 +1329,13 @@ def plan_trend(
     }
 
 
-def _collect_plan_data(db, store: dict, plan: dict) -> dict:
+def _collect_plan_data(db, store: dict, plan: dict, user: dict) -> dict:
     """汇总单个计划的静态信息 + 三个模式统计 + 环比 + 最近趋势。"""
+    scope_frag, scope_params = _scope_filter(store["id"], user)
     modes: dict[str, dict] = {}
     for r in db.execute(
-        "SELECT * FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ?",
-        (store["id"], plan["campaign_id"]),
+        "SELECT * FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ?" + scope_frag,
+        [store["id"], plan["campaign_id"]] + scope_params,
     ).fetchall():
         modes[r["mode"]] = dict(r)
 
@@ -1265,8 +1353,8 @@ def _collect_plan_data(db, store: dict, plan: dict) -> dict:
     trend = []
     for r in db.execute(
         "SELECT data_date, spend, sales, roi FROM promo_plan_daily "
-        "WHERE store_id = ? AND campaign_id = ? AND data_date >= ? ORDER BY data_date ASC",
-        (store["id"], plan["campaign_id"], (date_cls.today() - timedelta(days=6)).isoformat()),
+        "WHERE store_id = ? AND campaign_id = ? AND data_date >= ?" + scope_frag + " ORDER BY data_date ASC",
+        [store["id"], plan["campaign_id"], (date_cls.today() - timedelta(days=6)).isoformat()] + scope_params,
     ).fetchall():
         trend.append("%s:花费%.0f/成交%.0f/ROI%.2f" % (r["data_date"][5:], r["spend"], r["sales"], r["roi"]))
 
@@ -1314,13 +1402,17 @@ def plan_ai_insight(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    scope_frag, scope_params = _scope_filter(None, user)
+    row = db.execute(
+        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
+        [plan_id] + scope_params,
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
     if not store:
         raise HTTPException(status_code=400, detail="店铺不存在")
-    data = _collect_plan_data(db, dict(store), dict(row))
+    data = _collect_plan_data(db, dict(store), dict(row), user)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": _build_plan_prompt(data)}], timeout=120.0)
     except AIError as exc:
@@ -1347,13 +1439,17 @@ def plan_ai_insight_chat(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    row = db.execute("SELECT * FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()
+    scope_frag, scope_params = _scope_filter(None, user)
+    row = db.execute(
+        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
+        [plan_id] + scope_params,
+    ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
     if not store:
         raise HTTPException(status_code=400, detail="店铺不存在")
-    data = _collect_plan_data(db, dict(store), dict(row))
+    data = _collect_plan_data(db, dict(store), dict(row), user)
     context = (
         "你是淘宝万相台推广运营专家。以下是这个推广计划的数据上下文：\n"
         + "计划：%s（ID %s）\n" % (row["plan_name"], row["campaign_id"])
