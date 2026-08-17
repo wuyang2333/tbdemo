@@ -127,7 +127,7 @@ export function AiPage() {
           {messages.length === 0 ? (
             <Empty
               style={{ marginTop: 48 }}
-              image={<RobotOutlined style={{ fontSize: 56, color: "var(--ops-primary, #ff5000)" }} />}
+              image={<RobotOutlined style={{ fontSize: 56, color: "var(--ops-accent)" }} />}
               description={
                 <span>
                   <Text strong>我是你的 AI 运营助手</Text>
@@ -165,7 +165,7 @@ export function AiPage() {
                     lineHeight: "22px",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
-                    background: m.role === "user" ? "#ff5000" : "#f5f5f5",
+                    background: m.role === "user" ? "#0066cc" : "var(--ops-card-bg-2)",
                     color: m.role === "user" ? "#fff" : "rgba(0,0,0,0.88)",
                     borderTopRightRadius: m.role === "user" ? 2 : 12,
                     borderTopLeftRadius: m.role === "assistant" ? 2 : 12,

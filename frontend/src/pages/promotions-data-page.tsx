@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
+import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { LineChart, MODE_OPTIONS, SceneTable, fmtMoney } from "../components/promotions/promotions-ui";
@@ -80,8 +81,7 @@ export function PromotionsDataPage() {
       const { data: res } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
         `/promotions/sync?mode=${encodeURIComponent(mode)}`
       );
-      message.success(`同步完成：成功 ${res.ok} / 共 ${res.total} 家`);
-      res.results.filter((r) => !r.ok).slice(0, 3).forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
+      showSyncFeedback("同步", [{ ok: res.ok, total: res.total, results: res.results }]);
       await load(mode);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -150,7 +150,7 @@ export function PromotionsDataPage() {
             </Col>
             <Col xs={12} sm={4}>
               <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <Statistic title="ROI" value={data.summary.roi} precision={2} valueStyle={{ color: "#1677ff" }} />
+                <Statistic title="ROI" value={data.summary.roi} precision={2} styles={{ content: {  color: "#1677ff"  } }} />
               </Card>
             </Col>
             <Col xs={12} sm={4}>
@@ -203,11 +203,11 @@ export function PromotionsDataPage() {
         width={640}
         open={kwOpen}
         onClose={() => setKwOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {kwLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="正在拉取关键词报表…" />
+            <Spin description="正在拉取关键词报表…" />
           </div>
         ) : kwItems.length === 0 ? (
           <Empty description="该范围暂无关键词数据（实时可能没有，试试昨天/近七天）" />

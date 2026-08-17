@@ -6,3 +6,8 @@ __pycache__/
 *.log
 .DS_Store
 dist/
+_staging/
+*.zip
+ChromeSetup64.exe
+.workbuddy/
+logs/

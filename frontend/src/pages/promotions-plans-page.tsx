@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
+import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
@@ -198,8 +199,7 @@ export function PromotionsPlansPage() {
       const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
         `/promotions/sync-plans?mode=${encodeURIComponent(mode)}`
       );
-      message.success(`计划同步完成：成功 ${data.ok} / 共 ${data.total} 家`);
-      data.results.filter((r) => !r.ok).slice(0, 3).forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
+      showSyncFeedback("计划同步", [{ ok: data.ok, total: data.total, results: data.results }]);
       await load(scene, mode);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -587,7 +587,7 @@ export function PromotionsPlansPage() {
           }
         >
           <div style={{ maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
-            <Space direction="vertical" style={{ width: "100%" }} size={4}>
+            <Space orientation="vertical" style={{ width: "100%" }} size={4}>
               {allPlanAlerts.map((a, i) => (
                 <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
                   {a.level === "error" ? "⚠️ " : "❗ "}
@@ -634,11 +634,11 @@ export function PromotionsPlansPage() {
         width={520}
         open={aiOpen}
         onClose={() => setAiOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {aiLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="AI 正在分析推广数据…" />
+            <Spin description="AI 正在分析推广数据…" />
           </div>
         ) : aiResult ? (
           <div>
@@ -694,7 +694,7 @@ export function PromotionsPlansPage() {
         width={640}
         open={trendOpen}
         onClose={() => setTrendOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {trendPlan && (
           <div style={{ marginBottom: 12 }}>
@@ -711,7 +711,7 @@ export function PromotionsPlansPage() {
         />
         {trendLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="加载趋势数据…" />
+            <Spin description="加载趋势数据…" />
           </div>
         ) : trendData.length ? (
           <div>
@@ -746,11 +746,11 @@ export function PromotionsPlansPage() {
         width={560}
         open={planAiOpen}
         onClose={() => setPlanAiOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {planAiLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="AI 正在分析该计划…" />
+            <Spin description="AI 正在分析该计划…" />
           </div>
         ) : planAiResult ? (
           <div>
@@ -857,7 +857,7 @@ export function PromotionsPlansPage() {
         cancelText="再想想"
         confirmLoading={opLoading}
         okButtonProps={{ danger: opStatus === "pause" }}
-        destroyOnClose
+        destroyOnHidden
       >
         {opPlan && (
           <div>

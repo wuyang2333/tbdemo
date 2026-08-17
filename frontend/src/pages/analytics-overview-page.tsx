@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { BucketCard, StoreBars, StoreScopeSelect, TrendChart, useSyncStores } from "../components/analytics/analytics-ui";
@@ -43,8 +44,8 @@ export function AnalyticsOverviewPage() {
   const syncHistory = async (days: number) => {
     setSyncingHistory(true);
     try {
-      const { data } = await http.post<{ ok: number; total: number; days: number }>(`/stores/sync-history?days=${days}`);
-      message.success(`历史数据补拉完成：成功 ${data.ok} / 共 ${data.total} 家，覆盖近 ${data.days} 天`);
+      const { data } = await http.post<{ ok: number; total: number; days: number; results?: { store_name: string; ok: boolean; error?: string }[] }>(`/stores/sync-history?days=${days}`);
+      showSyncFeedback(`历史数据补拉（近 ${data.days} 天）`, [{ ok: data.ok, total: data.total, results: data.results ?? [] }]);
       await load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -120,7 +121,7 @@ export function AnalyticsOverviewPage() {
             </Col>
             <Col xs={12} sm={6}>
               <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
-                <Statistic title="今日转化率" value={summary.today.conversion_rate} precision={2} suffix="%" valueStyle={{ color: "#1677ff" }} />
+                <Statistic title="今日转化率" value={summary.today.conversion_rate} precision={2} suffix="%" styles={{ content: {  color: "#1677ff"  } }} />
               </Card>
             </Col>
           </Row>
@@ -135,7 +136,7 @@ export function AnalyticsOverviewPage() {
             <Col xs={24} lg={15}>
               <Card variant="borderless" title="销售额 / 订单数趋势" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
                 <Space style={{ marginBottom: 8 }}>
-                  <Tag color="#ff5000">销售额</Tag>
+                  <Tag color="#0066cc">销售额</Tag>
                   <Tag color="#1677ff">订单数</Tag>
                 </Space>
                 <TrendChart trend={summary.trend} />

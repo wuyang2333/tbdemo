@@ -195,7 +195,7 @@ export function AnalyticsInsightPage() {
       <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
         {loading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="AI 正在分析数据…" />
+            <Spin description="AI 正在分析数据…" />
           </div>
         ) : result ? (
           <div>

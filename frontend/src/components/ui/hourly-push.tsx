@@ -8,6 +8,13 @@ import { RULE_FIELDS, RULE_OPERATORS, ruleText } from "../../lib/alert-rules";
 const { Text } = Typography;
 
 type HourlyRule = { id: string; field: string; operator: string; threshold: number; compare: string; scene: string; enabled: boolean };
+type HourlyPushCfg = {
+  enabled: boolean;
+  token: string;
+  webhook: string;
+  channel: "pushplus" | "webhook" | "both";
+  rules: HourlyRule[];
+};
 
 const SCENE_OPTIONS = [
   { value: "", label: "全部场景" },
@@ -23,10 +30,22 @@ const COMPARE_OPTIONS = [
   { value: "prev_hour", label: "较上一小时" },
 ];
 
-/** 小时异常推送设置（pushplus → 微信），供经营日报/商品分析/推广计划共用。 */
+const CHANNEL_OPTIONS = [
+  { value: "pushplus", label: "pushplus（微信）" },
+  { value: "webhook", label: "Webhook（群机器人）" },
+  { value: "both", label: "两者同时推送" },
+];
+
+/** 小时异常推送设置（pushplus / Webhook / 同时），供经营日报/商品分析/推广计划共用。 */
 export function HourlyPushButton() {
   const [open, setOpen] = useState(false);
-  const [cfg, setCfg] = useState<{ enabled: boolean; token: string; rules: HourlyRule[] }>({ enabled: false, token: "", rules: [] });
+  const [cfg, setCfg] = useState<HourlyPushCfg>({
+    enabled: false,
+    token: "",
+    webhook: "",
+    channel: "pushplus",
+    rules: [],
+  });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -39,7 +58,7 @@ export function HourlyPushButton() {
   const openModal = async () => {
     setOpen(true);
     try {
-      const { data } = await http.get<{ enabled: boolean; token: string; rules: HourlyRule[] }>("/alerts/hourly-push-config");
+      const { data } = await http.get<HourlyPushCfg>("/alerts/hourly-push-config");
       setCfg(data);
     } catch {}
   };
@@ -63,7 +82,7 @@ export function HourlyPushButton() {
     try {
       await save(true);
       await http.post("/alerts/hourly-push/test", undefined, { timeout: 30000 });
-      message.success("已发送测试消息，请查看微信");
+      message.success("已发送测试消息，请查收");
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -75,7 +94,7 @@ export function HourlyPushButton() {
     try {
       await save(true);
       const { data } = await http.post<{ messages: string[]; pushed: boolean }>("/alerts/hourly-push/check?push=1", undefined, { timeout: 30000 });
-      if (data.messages.length) message.success(`检查到 ${data.messages.length} 条异常，已推送微信`);
+      if (data.messages.length) message.success(`检查到 ${data.messages.length} 条异常，已按渠道推送`);
       else message.info("上个小时暂无触发异常的规则");
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -111,17 +130,29 @@ export function HourlyPushButton() {
         cancelText="取消"
         confirmLoading={saving}
         width={560}
-        destroyOnClose
+        destroyOnHidden
       >
         <div style={{ display: "grid", gap: 14 }}>
           <div>
-            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>启用</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>开启后每小时自动检查上个小时数据，触发规则推送到微信</span></div>
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>启用</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>开启后每小时自动检查上个小时数据，触发规则按所选渠道推送</span></div>
             <Switch checked={cfg.enabled} onChange={(v) => setCfg((p) => ({ ...p, enabled: v }))} checkedChildren="开" unCheckedChildren="关" />
           </div>
           <div>
-            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>pushplus Token</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>pushplus.plus 绑定微信后获取</span></div>
-            <Input placeholder="pushplus token" value={cfg.token} onChange={(e) => setCfg((p) => ({ ...p, token: e.target.value }))} />
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>推送渠道</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>可二选一或同时推送</span></div>
+            <Select style={{ width: "100%" }} options={CHANNEL_OPTIONS} value={cfg.channel} onChange={(channel) => setCfg((p) => ({ ...p, channel }))} />
           </div>
+          {cfg.channel !== "webhook" && (
+            <div>
+              <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>pushplus Token</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>pushplus.plus 绑定微信后获取</span></div>
+              <Input placeholder="pushplus token" value={cfg.token} onChange={(e) => setCfg((p) => ({ ...p, token: e.target.value }))} />
+            </div>
+          )}
+          {cfg.channel !== "pushplus" && (
+            <div>
+              <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>群机器人 Webhook</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>钉钉 / 企业微信通用</span></div>
+              <Input placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." value={cfg.webhook} onChange={(e) => setCfg((p) => ({ ...p, webhook: e.target.value }))} />
+            </div>
+          )}
           <div style={{ borderTop: "1px solid var(--ops-border)", paddingTop: 12 }}>
             <div style={{ fontWeight: 600, marginBottom: 8 }}>小时级推送规则（较昨日同时段 / 阈值）</div>
             {cfg.rules.length === 0 && <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>还没有规则，添加一条试试。</Text>}

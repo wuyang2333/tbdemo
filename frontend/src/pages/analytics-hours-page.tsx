@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
@@ -250,11 +251,10 @@ export function AnalyticsHoursPage() {
     try {
       const h = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>("/stores/sync-hourly");
       const p = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>("/promotions/sync?mode=realtime");
-      message.success(`分时同步完成：店铺分时 ${h.data.ok}/${h.data.total} 家，推广分时 ${p.data.ok}/${p.data.total} 家`);
-      [...h.data.results, ...p.data.results]
-        .filter((r) => !r.ok)
-        .slice(0, 3)
-        .forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
+      showSyncFeedback("分时同步", [
+        { ok: h.data.ok, total: h.data.total, results: h.data.results },
+        { ok: p.data.ok, total: p.data.total, results: p.data.results },
+      ]);
       await load(storeId);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -656,11 +656,11 @@ export function AnalyticsHoursPage() {
         width={520}
         open={aiOpen}
         onClose={() => setAiOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {aiLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="AI 正在分析时段数据…" />
+            <Spin description="AI 正在分析时段数据…" />
           </div>
         ) : aiResult ? (
           <div>

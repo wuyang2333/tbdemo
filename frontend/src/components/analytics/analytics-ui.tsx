@@ -3,6 +3,7 @@ import { Button, Empty, Select, Space, Tag, Typography, message } from "antd";
 import { useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../../lib/api";
+import { showSyncFeedback } from "../../lib/sync-feedback";
 import type { AnalyticsStoreAgg, AnalyticsSummary, AnalyticsTrendPoint } from "../../types";
 
 const { Text } = Typography;
@@ -52,11 +53,7 @@ export function useSyncStores(onDone: () => void) {
       const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
         "/stores/sync-all"
       );
-      message.success(`同步完成：成功 ${data.ok} / 共 ${data.total} 家`);
-      data.results
-        .filter((r) => !r.ok)
-        .slice(0, 3)
-        .forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
+      showSyncFeedback("同步", [{ ok: data.ok, total: data.total, results: data.results }]);
       onDone();
     } catch (error) {
       message.error(getApiErrorMessage(error));

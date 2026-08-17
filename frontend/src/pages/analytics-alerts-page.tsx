@@ -143,10 +143,10 @@ export function AnalyticsAlertsPage() {
         onOk={saveConfig}
         okText="保存"
         confirmLoading={savingConfig}
-        destroyOnClose
+        destroyOnHidden
       >
         {config && (
-          <Space direction="vertical" style={{ width: "100%" }} size={14}>
+          <Space orientation="vertical" style={{ width: "100%" }} size={14}>
             <div>
               <Text type="secondary" style={{ fontSize: 12 }}>对比基线天数（前 N 天均值，2-30）</Text>
               <InputNumber min={2} max={30} value={config.baseline_days} onChange={(v) => setCfg("baseline_days", v ?? 7)} style={{ width: "100%" }} />

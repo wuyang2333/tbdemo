@@ -193,7 +193,7 @@ def set_modules(
     _ensure_can_manage(actor, target)
     if target["role"] != "member":
         raise HTTPException(status_code=400, detail="管理员和超级管理员默认拥有全部模块权限，无需设置")
-    grantable = {m["id"] for m in MODULES if m["id"] not in ("accounts", "profile", "logs")}
+    grantable = {m["id"] for m in MODULES if m["id"] not in ("accounts", "profile", "logs", "settings")}
     unknown = set(body.modules) - grantable
     if unknown:
         raise HTTPException(status_code=400, detail=f"包含不可授予的模块：{', '.join(sorted(unknown))}")

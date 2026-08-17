@@ -1,4 +1,4 @@
-import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined } from "@ant-design/icons";
+import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -27,6 +27,7 @@ export function AnalyticsReportPage() {
   const [lastUpdated, setLastUpdated] = useState("");
   const [loading, setLoading] = useState(false);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
+  const [syncing, setSyncing] = useState(false);
   const [date, setDate] = useState<string | null>(dayjs().subtract(1, "day").format("YYYY-MM-DD"));
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -69,6 +70,25 @@ export function AnalyticsReportPage() {
       setLoading(false);
     }
   }, [date, storeId]);
+
+  const syncDaily = async () => {
+    setSyncing(true);
+    try {
+      // 同步近 7 天推广按天 + 商品按天数据（日报推广/TOP 商品来源），无需等每天 9 点定时
+      const [promoRes, itemRes] = await Promise.all([
+        http.post<{ ok: number; total: number }>("/promotions/sync?days=7"),
+        http.post<{ ok: number; total: number }>("/stores/sync-items?days=7"),
+      ]);
+      message.success(
+        `同步完成：推广 ${promoRes.data.ok}/${promoRes.data.total} 家，商品 ${itemRes.data.ok}/${itemRes.data.total} 家`
+      );
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   useEffect(() => {
     load();
@@ -286,6 +306,7 @@ export function AnalyticsReportPage() {
             <HourlyPushButton />
             <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
             <Button icon={<DownloadOutlined />} onClick={exportPdf}>导出 PDF</Button>
+            <Button icon={<SyncOutlined />} loading={syncing} onClick={syncDaily}>同步数据</Button>
             <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
           </Space>
         }
@@ -303,11 +324,11 @@ export function AnalyticsReportPage() {
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}销售额`} value={data.today.sales} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.sales, data.yesterday.sales)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}订单`} value={data.today.orders} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.orders, data.yesterday.orders)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" valueStyle={{ color: "#1677ff" }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" styles={{ content: {  color: "#1677ff"  } }} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}真实ROI`} value={realRoi} precision={2} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(realRoi, prevRealRoi)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="加购" value={data.add_cart} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{data.add_cart ? "次" : "—"}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" valueStyle={{ color: "#ff4d4f" }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" styles={{ content: {  color: "#ff4d4f"  } }} /></Card></Col>
           </Row>
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
@@ -358,7 +379,7 @@ export function AnalyticsReportPage() {
             }
           >
             {analysisLoading ? (
-              <div style={{ textAlign: "center", padding: 40 }}><Spin tip="AI 正在结合昨日数据生成经营分析…" /></div>
+              <div style={{ textAlign: "center", padding: 40 }}><Spin description="AI 正在结合昨日数据生成经营分析…" /></div>
             ) : currentAnalysis ? (
               <div style={{ display: "grid", gap: 10 }}>
                 {[
@@ -394,9 +415,9 @@ export function AnalyticsReportPage() {
         </>
       )}
 
-      <Drawer title="AI 日报总结" width={520} open={aiOpen} onClose={() => setAiOpen(false)} destroyOnClose>
+      <Drawer title="AI 日报总结" size="large" open={aiOpen} onClose={() => setAiOpen(false)} destroyOnHidden>
         {aiLoading ? (
-          <div style={{ textAlign: "center", padding: 60 }}><Spin tip="AI 正在生成总结…" /></div>
+          <div style={{ textAlign: "center", padding: 60 }}><Spin description="AI 正在生成总结…" /></div>
         ) : aiReply ? (
           <div>
             <Text style={{ fontSize: 14, lineHeight: 1.9, whiteSpace: "pre-wrap" }}>{aiReply}</Text>
@@ -417,7 +438,7 @@ export function AnalyticsReportPage() {
         okText="保存"
         cancelText="取消"
         confirmLoading={pushSaving}
-        destroyOnClose
+        destroyOnHidden
       >
         <div style={{ display: "grid", gap: 14 }}>
           <div>

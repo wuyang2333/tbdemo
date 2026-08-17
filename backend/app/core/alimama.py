@@ -19,6 +19,10 @@ CLI_SCRIPT = CLI_DIR / "alimama_cli.py"
 PYTHON = sys.executable
 
 _ENV = dict(os.environ)
+# 清掉继承的代理环境变量：WorkBuddy 会话会注入 HTTP_PROXY/HTTPS_PROXY（如 127.0.0.1:7892），
+# 抓取万相台数据应直连，否则 curl 走无效代理报 (7) Could not connect
+for _k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+    _ENV.pop(_k, None)
 _ENV["ALIMAMA_BYPASS_CURFEW"] = "1"
 _ENV["SYCM_BYPASS_CURFEW"] = "1"
 _ENV["PYTHONIOENCODING"] = "utf-8"

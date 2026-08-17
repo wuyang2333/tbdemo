@@ -26,6 +26,10 @@ PYTHON = sys.executable
 
 # 后台自动同步可能发生在夜间，放开 CLI 的 1:00-6:00 禁跑限制
 _ENV = dict(os.environ)
+# 清掉继承的代理环境变量：WorkBuddy 会话会注入 HTTP_PROXY/HTTPS_PROXY（如 127.0.0.1:7892），
+# 抓取国内生意参谋数据应直连，否则 curl 走无效代理报 (7) Could not connect
+for _k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+    _ENV.pop(_k, None)
 _ENV["SYCM_BYPASS_CURFEW"] = "1"
 _ENV["PYTHONIOENCODING"] = "utf-8"
 _ENV["PYTHONUTF8"] = "1"
@@ -58,6 +62,9 @@ def profile_path(store_id: int) -> Path:
     return root / f"{profile_name(store_id)}.json"
 
 
+PROFILE_MISSING_MSG = "生意参谋未登录（未配置登录档案）"
+
+
 def has_profile(store_id: int) -> bool:
     """该店铺是否已保存生意参谋登录档案。"""
     return profile_path(store_id).exists()
@@ -65,7 +72,11 @@ def has_profile(store_id: int) -> bool:
 
 # ---------- 调用内置 CLI ----------
 
-def _run_cli(args: list[str], timeout: float = 120) -> tuple[str, str, int]:
+def _run_cli(
+    args: list[str],
+    timeout: float = 120,
+    input_data: str | None = None,
+) -> tuple[str, str, int]:
     """运行内置 sycm-cli，返回 (stdout, stderr, exit_code)。"""
     if not CLI_SCRIPT.exists():
         raise SycmError("生意参谋组件缺失，请先更新程序")
@@ -77,6 +88,7 @@ def _run_cli(args: list[str], timeout: float = 120) -> tuple[str, str, int]:
             text=True,
             encoding="utf-8",
             errors="replace",
+            input=input_data.encode("utf-8") if input_data else None,
             timeout=timeout,
             env=_ENV,
             cwd=str(CLI_DIR),
@@ -255,25 +267,16 @@ def fetch_store_daily(store: dict, target_date: str | None = None) -> dict:
     return metrics
 
 
-def bind_login(store: dict, wait_seconds: int | None = None) -> dict:
-    """打开专用 Chrome 并等待用户登录该店铺，登录成功后保存档案并验证。
+def _verify_profile(store: dict, name: str) -> dict:
+    """用刚保存的档案调今天的实时接口验证登录。
 
-    返回 {"ok": True, "profile": ..., "metrics": {...}}
+    新登录态首次请求偶发风控：耐心重试几次（隔几秒再试），
+    与手动点「测试」的等待效果一致；仍失败则交给前端手动「测试/保存」。
     """
-    name = profile_name(store["id"])
-    deadline = time.time() + (wait_seconds or LOGIN_WAIT_SECONDS)
     last_error = ""
-    while time.time() < deadline:
-        # 1) 确保专用 Chrome 打开，并把当前登录态保存为该店铺的档案
+    for attempt in range(5):
         try:
-            _run_cli(["export-profile", name], timeout=60)
-        except SycmError as exc:
-            last_error = str(exc)
-            time.sleep(2)
-            continue
-        # 2) 用刚保存的档案调一次今天的实时接口，能取到 = 真正登录成功
-        try:
-            payload = _run_live_overview(store, timeout=60)
+            payload = _run_live_overview(store, timeout=120)
             metrics = _parse_live_overview(payload)
             return {
                 "ok": True,
@@ -282,11 +285,41 @@ def bind_login(store: dict, wait_seconds: int | None = None) -> dict:
             }
         except SycmError as exc:
             last_error = str(exc)
-        time.sleep(BIND_POLL_STEP)
-    raise SycmError(
-        last_error
-        or "等待登录超时，请确认已在 Chrome 窗口完成登录后重试"
+            time.sleep(3 + attempt * 4)  # 3,7,11,15,19 → 最多约 55 秒重试窗口
+    raise SycmError(last_error or "登录成功但实时数据验证失败，请点击「测试」确认后保存")
+
+
+def bind_login(store: dict, wait_seconds: int | None = None) -> dict:
+    """打开专用 Chrome 并等待用户登录该店铺，登录成功后保存档案并验证。"""
+    name = profile_name(store["id"])
+    total_wait = wait_seconds or LOGIN_WAIT_SECONDS
+    _run_cli(["export-profile", name], timeout=total_wait + 30)
+    return _verify_profile(store, name)
+
+
+def bind_login_from_browser(store: dict) -> dict:
+    """不弹窗：直接从当前 Chrome/Edge 读取已登录的生意参谋登录态并保存为档案。"""
+    name = profile_name(store["id"])
+    out, err, code = _run_cli(["export-default", name], timeout=120)
+    if code != 0:
+        text = (err or out or "").strip().replace("\n", "；")
+        raise SycmError(_friendly_error(text))
+    return _verify_profile(store, name)
+
+
+def bind_login_from_cookies(store: dict, cookies_text: str) -> dict:
+    """不弹窗：粘贴当前浏览器里复制的登录态 cookie，保存并验证。"""
+    name = profile_name(store["id"])
+    out, err, code = _run_cli(
+        ["import-cookies", name],
+        timeout=60,
+        input_data=cookies_text,
     )
+    if code != 0:
+        text = (err or out or "").strip().replace("\n", "；")
+        raise SycmError(_friendly_error(text))
+    return _verify_profile(store, name)
+
 def fetch_hourly(store: dict, timeout: float = 120) -> list[dict]:
     """拉取生意参谋今日/昨日分时数据（累计序列，转每小时增量）。"""
     payload = _run_api_json(

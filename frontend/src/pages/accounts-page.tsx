@@ -49,7 +49,8 @@ const MODULE_OPTIONS = MODULES.filter(
     module.id !== "accounts" &&
     module.id !== "dashboard" &&
     module.id !== "profile" &&
-    module.id !== "logs"
+    module.id !== "logs" &&
+    module.id !== "settings"
 );
 
 function moduleName(id: string): string {

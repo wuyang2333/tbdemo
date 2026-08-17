@@ -1,49 +1,55 @@
-:root {
-  color-scheme: dark;
-  --ops-bg: #0a0c10;
-  --ops-card-bg: #12151d;
-  --ops-card-bg-2: #171b26;
-  --ops-border: rgba(255, 255, 255, 0.08);
-  --ops-border-strong: rgba(255, 255, 255, 0.14);
-  --ops-text: rgba(255, 255, 255, 0.92);
-  --ops-text-secondary: rgba(255, 255, 255, 0.55);
-  --ops-accent: #ff5000;
-  --ops-accent-light: #ff8a3d;
-  --ops-accent-soft: rgba(255, 80, 0, 0.14);
-  --ops-hoverbar-bg: #1b2230;
-  --ops-hoverbar-border: rgba(255, 255, 255, 0.12);
-  --ops-hoverbar-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
-  --ops-hoverbar-text: #ff8a3d;
-  --ops-hoverbar-text-hover: #ffa96b;
-  --ops-hoverbar-btn-hover: rgba(255, 138, 61, 0.16);
-  --ops-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
-  --ops-shadow-sm: 0 4px 14px rgba(0, 0, 0, 0.25);
-  --ops-radius: 14px;
-  --ops-radius-sm: 10px;
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/Inter-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
 }
 
-body[data-theme="light"] {
+:root {
   color-scheme: light;
-  --ops-bg: #f4f6fb;
+  --ops-bg: #f5f5f7;
   --ops-card-bg: #ffffff;
-  --ops-card-bg-2: #fafbfe;
-  --ops-border: rgba(18, 24, 45, 0.08);
-  --ops-border-strong: rgba(18, 24, 45, 0.14);
-  --ops-text: rgba(15, 21, 40, 0.92);
-  --ops-text-secondary: rgba(15, 21, 40, 0.55);
-  --ops-accent: #ff5000;
-  --ops-accent-light: #ff7a3d;
-  --ops-accent-soft: rgba(255, 80, 0, 0.1);
+  --ops-card-bg-2: #fafafc;
+  --ops-border: #e0e0e0;
+  --ops-border-strong: #7a7a7a;
+  --ops-text: #1d1d1f;
+  --ops-text-secondary: #333333;
+  --ops-accent: #0066cc;
+  --ops-accent-light: #0071e3;
+  --ops-accent-soft: rgba(0, 102, 204, 0.08);
   --ops-hoverbar-bg: #ffffff;
-  --ops-hoverbar-border: rgba(18, 24, 45, 0.12);
-  --ops-hoverbar-shadow: 0 4px 14px rgba(30, 40, 70, 0.12);
-  --ops-hoverbar-text: #ff5000;
-  --ops-hoverbar-text-hover: #e64500;
-  --ops-hoverbar-btn-hover: rgba(255, 80, 0, 0.1);
-  --ops-shadow: 0 10px 30px rgba(30, 40, 70, 0.1);
-  --ops-shadow-sm: 0 4px 14px rgba(30, 40, 70, 0.07);
-  --ops-radius: 14px;
-  --ops-radius-sm: 10px;
+  --ops-hoverbar-border: #e0e0e0;
+  --ops-hoverbar-text: #1d1d1f;
+  --ops-hoverbar-text-hover: #0066cc;
+  --ops-hoverbar-btn-hover: rgba(0, 102, 204, 0.08);
+  --ops-shadow: none;
+  --ops-shadow-sm: none;
+  --ops-radius: 18px;
+  --ops-radius-sm: 8px;
+}
+
+body[data-theme="dark"] {
+  color-scheme: dark;
+  --ops-bg: #1d1d1f;
+  --ops-card-bg: #2a2a2c;
+  --ops-card-bg-2: #272729;
+  --ops-border: #3f3f42;
+  --ops-border-strong: #6a6a6e;
+  --ops-text: rgba(255, 255, 255, 0.94);
+  --ops-text-secondary: #cccccc;
+  --ops-accent: #2997ff;
+  --ops-accent-light: #4da8ff;
+  --ops-accent-soft: rgba(41, 151, 255, 0.16);
+  --ops-hoverbar-bg: #2a2a2c;
+  --ops-hoverbar-border: #3f3f42;
+  --ops-hoverbar-text: rgba(255, 255, 255, 0.9);
+  --ops-hoverbar-text-hover: #2997ff;
+  --ops-hoverbar-btn-hover: rgba(41, 151, 255, 0.16);
+  --ops-shadow: none;
+  --ops-shadow-sm: none;
+  --ops-radius: 18px;
+  --ops-radius-sm: 8px;
 }
 
 * {
@@ -58,29 +64,12 @@ body,
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--ops-bg);
   color: var(--ops-text);
+  font-size: 15px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-}
-
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background:
-    radial-gradient(1000px 480px at 14% -10%, rgba(255, 80, 0, 0.16), transparent 60%),
-    radial-gradient(700px 420px at 92% -12%, rgba(255, 80, 0, 0.09), transparent 55%),
-    radial-gradient(900px 600px at 60% 110%, rgba(59, 91, 219, 0.07), transparent 60%);
-}
-
-body[data-theme="light"]::before {
-  background:
-    radial-gradient(1000px 480px at 14% -10%, rgba(255, 80, 0, 0.08), transparent 60%),
-    radial-gradient(700px 420px at 92% -12%, rgba(255, 80, 0, 0.05), transparent 55%),
-    radial-gradient(900px 600px at 60% 110%, rgba(59, 91, 219, 0.06), transparent 60%);
 }
 
 #root {
@@ -88,13 +77,27 @@ body[data-theme="light"]::before {
   z-index: 1;
 }
 
+/* Apple 式大标题：负字距 + 600，不超 700 */
+h1,
+h2,
+h3,
+h4,
+.ant-typography h1,
+.ant-typography h2,
+.ant-typography h3,
+.ant-typography h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ops-text);
+}
+
 ::selection {
-  background: rgba(255, 80, 0, 0.4);
+  background: rgba(0, 102, 204, 0.22);
   color: inherit;
 }
 
 :focus-visible {
-  outline: 2px solid rgba(255, 80, 0, 0.55);
+  outline: 2px solid #0071e3;
   outline-offset: 2px;
 }
 
@@ -108,75 +111,78 @@ body[data-theme="light"]::before {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(128, 134, 152, 0.35);
+  background: rgba(128, 128, 133, 0.4);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 134, 152, 0.55);
+  background: rgba(128, 128, 133, 0.6);
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
-/* ---------- 通用卡片 ---------- */
+/* ---------- 按钮：蓝色胶囊（单一强调色） ---------- */
+.ant-btn-primary {
+  border-radius: 999px !important;
+  font-weight: 400;
+}
+
+.ant-btn-primary:active {
+  transform: scale(0.96);
+}
+
+.ant-btn-default {
+  border-radius: 999px !important;
+  color: var(--ops-accent);
+  border-color: rgba(0, 102, 204, 0.5);
+  font-weight: 400;
+}
+
+.ant-btn-default:active {
+  transform: scale(0.96);
+}
+
+/* ---------- 通用卡片：白底 + 发丝边框 + 18px 圆角，无阴影 ---------- */
 .ant-card {
   border-radius: var(--ops-radius) !important;
-  box-shadow: var(--ops-shadow-sm);
-  transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+  box-shadow: none !important;
+  border: 1px solid var(--ops-border);
 }
 
-.ant-card:hover {
-  box-shadow: var(--ops-shadow);
+/* ---------- 全幅 tile（Apple 式节奏：白 ↔ 米白 ↔ 近黑） ---------- */
+.ops-tile {
+  border-radius: 0;
+  padding: 80px 24px;
 }
 
-/* ---------- 欢迎横幅 ---------- */
+.ops-tile--light {
+  background: #ffffff;
+  color: #1d1d1f;
+}
+
+.ops-tile--parchment {
+  background: #f5f5f7;
+  color: #1d1d1f;
+}
+
+.ops-tile--dark {
+  background: #272729;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+/* 欢迎横幅：浅色全幅 tile，无装饰 */
 .ops-hero {
   position: relative;
-  overflow: hidden;
-  border: 1px solid var(--ops-border);
-  background:
-    linear-gradient(120deg, rgba(255, 80, 0, 0.2), rgba(255, 80, 0, 0.05) 48%, transparent),
-    radial-gradient(420px 200px at 88% 0%, rgba(255, 138, 61, 0.16), transparent 60%),
-    linear-gradient(180deg, var(--ops-card-bg), var(--ops-card-bg-2));
-  box-shadow: var(--ops-shadow-sm);
+  border: none;
+  background: transparent;
+  padding: 56px 0 40px;
 }
 
-.ops-hero::after {
-  content: "淘";
-  position: absolute;
-  right: -10px;
-  bottom: -70px;
-  font-size: 260px;
-  font-weight: 800;
-  line-height: 1;
-  color: rgba(255, 80, 0, 0.09);
-  pointer-events: none;
-  user-select: none;
-}
-
+.ops-hero::after,
 .ops-hero::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-  background-size: 34px 34px;
-  mask-image: linear-gradient(90deg, transparent 20%, rgba(0, 0, 0, 0.5));
-}
-
-body[data-theme="light"] .ops-hero::before {
-  background-image:
-    linear-gradient(rgba(18, 24, 45, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(18, 24, 45, 0.05) 1px, transparent 1px);
-}
-
-.ops-hero > * {
-  position: relative;
-  z-index: 1;
+  content: none;
 }
 
 /* ---------- 指标图标 ---------- */
@@ -184,31 +190,29 @@ body[data-theme="light"] .ops-hero::before {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  font-size: 22px;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  font-size: 20px;
   flex-shrink: 0;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  background: var(--ops-accent-soft);
+  color: var(--ops-accent);
 }
 
 /* ---------- 模块卡片 ---------- */
 .ops-module-card {
   cursor: pointer;
   border: 1px solid var(--ops-border);
-  border-radius: var(--ops-radius-sm);
+  border-radius: var(--ops-radius);
   padding: 16px 14px;
   height: 100%;
   background: var(--ops-card-bg);
-  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease, background 0.22s ease;
+  transition: border-color 0.2s ease;
   position: relative;
 }
 
 .ops-module-card:hover {
-  transform: translateY(-3px);
-  border-color: rgba(255, 80, 0, 0.5);
-  box-shadow: var(--ops-shadow);
-  background: var(--ops-card-bg-2);
+  border-color: var(--ops-border-strong);
 }
 
 .ops-module-card .ops-module-arrow {
@@ -217,8 +221,8 @@ body[data-theme="light"] .ops-hero::before {
   top: 50%;
   transform: translateY(-50%) translateX(-6px);
   opacity: 0;
-  color: var(--ops-accent-light);
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  color: var(--ops-accent);
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .ops-module-card:hover .ops-module-arrow {
@@ -232,10 +236,10 @@ body[data-theme="light"] .ops-hero::before {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 17px;
   background: var(--ops-accent-soft);
-  color: var(--ops-accent-light);
+  color: var(--ops-accent);
   flex-shrink: 0;
 }
 
@@ -244,14 +248,14 @@ body[data-theme="light"] .ops-hero::before {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-bottom: 18px;
+  margin-bottom: 24px;
 }
 
 .ops-page-head .ops-module-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  font-size: 20px;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  font-size: 19px;
 }
 
 /* ---------- 指标卡片 ---------- */
@@ -262,15 +266,12 @@ body[data-theme="light"] .ops-hero::before {
   border-radius: var(--ops-radius);
   background: var(--ops-card-bg);
   padding: 18px;
-  box-shadow: var(--ops-shadow-sm);
-  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  transition: border-color 0.2s ease;
   height: 100%;
 }
 
 .ops-kpi-card:hover {
-  transform: translateY(-3px);
   border-color: var(--ops-border-strong);
-  box-shadow: var(--ops-shadow);
 }
 
 .ops-kpi-card::before {
@@ -278,8 +279,8 @@ body[data-theme="light"] .ops-hero::before {
   position: absolute;
   inset: 0 0 auto 0;
   height: 3px;
-  background: var(--ops-kpi-color);
-  opacity: 0.75;
+  background: var(--ops-accent);
+  opacity: 0.5;
 }
 
 /* ---------- 状态胶囊 ---------- */
@@ -305,26 +306,23 @@ body[data-theme="light"] .ops-hero::before {
 }
 
 .ops-dot--ok {
-  background: #34d399;
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+  background: #34c759;
 }
 
 .ops-dot--err {
-  background: #f87171;
-  box-shadow: 0 0 8px rgba(248, 113, 113, 0.8);
+  background: #ff3b30;
 }
 
 .ops-dot--wait {
-  background: #fbbf24;
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.8);
+  background: #ff9f0a;
 }
 
 /* ---------- 侧边栏 ---------- */
 .ops-sider-menu .ant-menu-item {
-  border-radius: 10px;
+  border-radius: 8px;
   margin: 4px 12px;
-  height: 42px;
-  line-height: 42px;
+  height: 40px;
+  line-height: 40px;
   width: calc(100% - 24px) !important;
   transition: background 0.2s ease, color 0.2s ease;
 }
@@ -337,13 +335,13 @@ body[data-theme="light"] .ops-hero::before {
   padding: 14px 24px 6px;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 2px;
+  letter-spacing: 1.5px;
   color: var(--ops-text-secondary);
   opacity: 0.8;
   text-transform: uppercase;
 }
 
-/* ---------- 登录页 ---------- */
+/* ---------- 登录页：左侧近黑 tile ---------- */
 .ops-auth-shell {
   position: relative;
   min-height: 100vh;
@@ -361,11 +359,8 @@ body[data-theme="light"] .ops-hero::before {
   flex-direction: column;
   justify-content: space-between;
   padding: 48px 52px;
-  color: #fff;
-  background:
-    radial-gradient(700px 380px at 20% -10%, rgba(255, 138, 61, 0.5), transparent 60%),
-    radial-gradient(520px 320px at 110% 30%, rgba(255, 80, 0, 0.35), transparent 60%),
-    linear-gradient(150deg, #1a0f0c 0%, #24100a 48%, #2d1207 100%);
+  color: rgba(255, 255, 255, 0.94);
+  background: #272729;
 }
 
 .ops-auth-brand::before {
@@ -374,26 +369,22 @@ body[data-theme="light"] .ops-hero::before {
   right: -40px;
   bottom: -120px;
   font-size: 420px;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1;
-  color: rgba(255, 80, 0, 0.12);
+  color: rgba(255, 255, 255, 0.05);
   user-select: none;
-}
-
-.ops-auth-brand::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: linear-gradient(120deg, rgba(0, 0, 0, 0.6), transparent 70%);
 }
 
 .ops-auth-brand > * {
   position: relative;
   z-index: 1;
+}
+
+.ops-auth-brand h1,
+.ops-auth-brand h2,
+.ops-auth-brand h3 {
+  color: #ffffff;
+  letter-spacing: -0.01em;
 }
 
 .ops-auth-form {
@@ -423,15 +414,14 @@ body[data-theme="light"] .ops-hero::before {
 .ops-empty-icon {
   width: 84px;
   height: 84px;
-  border-radius: 26px;
+  border-radius: 21px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 36px;
-  color: var(--ops-accent-light);
+  color: var(--ops-accent);
   background: var(--ops-accent-soft);
   margin-bottom: 20px;
-  box-shadow: inset 0 0 0 1px rgba(255, 80, 0, 0.18);
 }
 
 /* ---------- 表格 ---------- */
@@ -447,13 +437,13 @@ body[data-theme="light"] .ops-hero::before {
 
 /* ---------- 动效 ---------- */
 .ops-fade-in {
-  animation: opsFadeIn 0.4s ease both;
+  animation: opsFadeIn 0.35s ease both;
 }
 
 @keyframes opsFadeIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -473,7 +463,6 @@ body[data-theme="light"] .ops-hero::before {
   background: var(--ops-hoverbar-bg);
   border: 1px solid var(--ops-hoverbar-border);
   border-radius: 7px;
-  box-shadow: var(--ops-hoverbar-shadow);
   opacity: 0;
   transform: translateY(-3px);
   pointer-events: none;

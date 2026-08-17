@@ -28,6 +28,11 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+# 清掉继承的代理环境变量：WorkBuddy 会话会注入 HTTP_PROXY/HTTPS_PROXY（如 127.0.0.1:7892），
+# 抓取国内生意参谋数据应直连，否则 curl/urllib 走无效代理报 (7) Could not connect
+for _k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+    os.environ.pop(_k, None)
 from typing import Any
 
 import browser_cookie3
@@ -41,6 +46,9 @@ USER_AGENT = (
 
 API_BASE = "https://sycm.taobao.com/csp/api"
 REFERER_DETAIL_PAGE = "https://sycm.taobao.com/qos/service/frame/performance/detail/new"
+# 首次登录引导页：直接打开淘宝卖家登录页（loginmyseller.taobao.com 是卖家后台统一登录入口，
+# 提供扫码/密码登录；登录后落在 taobao.com 域，与生意参谋共用登录态）
+LOGIN_PAGE = "https://loginmyseller.taobao.com/"
 
 RISK_KEYWORDS = ("滑块", "验证码", "操作过于频繁", "请重新登录", "异常请求", "风控")
 
@@ -198,26 +206,42 @@ def _wait_for_windows_login(port: int, marker_file: Path) -> dict[str, str]:
     raise RuntimeError("等待登录超时。请保留浏览器窗口，登录后重新运行命令。")
 
 
+def _kill_dedicated_browser(profile_dir: Path) -> None:
+    """结束仍占用登录专用 profile 的 Chrome/Edge 进程（按命令行里的 profile 路径匹配），
+    避免旧实例持有 user-data-dir 导致新窗口弹不出来。不会误杀用户日常浏览器。"""
+    import subprocess
+
+    profile_str = str(profile_dir).replace("\\", "/")
+    ps_cmd = (
+        "Get-CimInstance Win32_Process | "
+        f"Where-Object {{ $_.CommandLine -like '*{profile_str}*' }} | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:
+        pass
+
+
 def _windows_cdp_cookies() -> dict[str, str]:
     state_dir = _windows_state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     port_file = state_dir / "cdp-port"
     marker_file = state_dir / "login-ready"
+    profile_dir = state_dir / "chrome-profile"
 
-    if port_file.exists():
-        try:
-            port = int(port_file.read_text(encoding="utf-8").strip())
-            cookies = _cdp_cookies(port)
-        except (OSError, ValueError, RuntimeError):
-            pass
-        else:
-            if _has_login_cookie(cookies):
-                return cookies
-            return _wait_for_windows_login(port, marker_file)
+    # 手动登录：清掉上次残留状态，并结束仍占用该专用 profile 的浏览器进程，
+    # 保证每次都弹出全新可见的登录窗口（避免复用旧实例导致"不弹窗/静默复用"）。
+    port_file.unlink(missing_ok=True)
+    marker_file.unlink(missing_ok=True)
+    _kill_dedicated_browser(profile_dir)
 
     port = _free_local_port()
     browser = _find_windows_browser()
-    profile_dir = state_dir / "chrome-profile"
     args = [
         str(browser),
         f"--remote-debugging-port={port}",
@@ -227,10 +251,8 @@ def _windows_cdp_cookies() -> dict[str, str]:
         "--no-first-run",
         "--no-default-browser-check",
         "--new-window",
-        REFERER_DETAIL_PAGE,
+        LOGIN_PAGE,
     ]
-    if marker_file.exists():
-        args.insert(-2, "--start-minimized")
     try:
         # No shell is involved; browser is a resolved local executable and arguments are separate.
         subprocess.Popen(  # nosec B603
@@ -1953,6 +1975,14 @@ def build_parser() -> argparse.ArgumentParser:
     ep_.add_argument("name", help="店名 / profile 名，如 示例主店")
     ep_.set_defaults(func=cmd_export_profile)
 
+    ed_ = sp.add_parser("export-default", help="不弹窗：从当前 Chrome/Edge 读取登录态存成命名 profile")
+    ed_.add_argument("name", help="店名 / profile 名")
+    ed_.set_defaults(func=cmd_export_profile_default)
+
+    ic_ = sp.add_parser("import-cookies", help="粘贴登录态 cookie 存成命名 profile（无弹窗）")
+    ic_.add_argument("name", help="店名 / profile 名")
+    ic_.set_defaults(func=cmd_import_cookies)
+
     pf = sp.add_parser("profiles", help="列出已保存的登录态 profile")
     pf.set_defaults(func=cmd_profiles)
 
@@ -2135,6 +2165,64 @@ def cmd_export_profile(args: argparse.Namespace) -> None:
     print(f"  含 {len(cookies)} 个 cookie。用法：sycm-cli --store {args.name} <命令>")
     print("  该文件含长效登录凭据(权限 0600)；勿提交 git、勿外发。")
     print("  提示：qianniu-cli 也读同一目录，这份 profile 两个工具通用。")
+
+
+def cmd_export_profile_default(args: argparse.Namespace) -> None:
+    """不弹窗：从当前 Chrome/Edge 读取 taobao 登录态存成命名 profile。"""
+    cookies: dict[str, str] = {}
+    last_error = ""
+    for loader in (
+        lambda: browser_cookie3.chrome(domain_name="taobao.com"),
+        lambda: browser_cookie3.edge(domain_name="taobao.com"),
+    ):
+        try:
+            jar = loader()
+            cookies = {c.name: c.value for c in jar if c.domain and "taobao.com" in c.domain}
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+        if _has_login_cookie(cookies):
+            break
+    if not _has_login_cookie(cookies):
+        hint = f"（{last_error}）" if last_error else ""
+        raise RuntimeError(
+            "未在当前浏览器检测到生意参谋登录态（taobao.com）。"
+            f"请先在 Chrome 或 Edge 登录 sycm.taobao.com 后重试{hint}"
+        )
+    path = save_taobao_profile(args.name, cookies)
+    print(f"✓ 已保存登录态 '{args.name}' → {path}（来自当前浏览器，含 {len(cookies)} 个 cookie）")
+
+
+def _parse_cookies_text(raw: str) -> dict[str, str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return {str(k): str(v) for k, v in data.items()}
+    except ValueError:
+        pass
+    out: dict[str, str] = {}
+    for part in raw.replace(";", "\n").splitlines():
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        key, _, value = part.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def cmd_import_cookies(args: argparse.Namespace) -> None:
+    """粘贴登录态 cookie（JSON 或 k=v;... 文本）存成命名 profile，无弹窗。"""
+    raw = sys.stdin.read()
+    cookies = _parse_cookies_text(raw)
+    if not _has_login_cookie(cookies):
+        raise RuntimeError(
+            "粘贴的登录态缺少 _tb_token_。请确认是在已登录生意参谋（sycm.taobao.com）"
+            "的页面控制台复制，或从 Application→Cookies 手动复制 taobao 域 cookie。"
+        )
+    path = save_taobao_profile(args.name, cookies)
+    print(f"✓ 已保存登录态 '{args.name}' → {path}（含 {len(cookies)} 个 cookie）")
 
 
 def cmd_profiles(args: argparse.Namespace) -> None:

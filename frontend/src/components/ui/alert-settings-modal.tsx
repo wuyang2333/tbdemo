@@ -95,7 +95,7 @@ export function AlertSettingsModal({
   const opOptions = RULE_OPERATORS.map((o) => ({ value: o.value, label: o.label }));
 
   return (
-    <Modal title={title} open={open} onCancel={onCancel} onOk={handleOk} okText="保存" cancelText="取消" confirmLoading={saving} destroyOnClose width={560}>
+    <Modal title={title} open={open} onCancel={onCancel} onOk={handleOk} okText="保存" cancelText="取消" confirmLoading={saving} destroyOnHidden width={560}>
       <div style={{ display: "grid", gap: 14 }}>
         {fields.map((f) => (
           <div key={f.key}>

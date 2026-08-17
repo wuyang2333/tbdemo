@@ -224,7 +224,7 @@ export function AppShell() {
           top: 0,
           bottom: 0,
           overflow: "hidden",
-          background: darkSider ? "#0d0f15" : "#ffffff",
+          background: darkSider ? "#272729" : "#f5f5f7",
           borderRight: `1px solid ${borderColor}`,
           zIndex: 20,
         }}
@@ -424,7 +424,7 @@ export function AppShell() {
             alignItems: "center",
             justifyContent: "space-between",
             gap: 16,
-            background: darkSider ? "rgba(10,12,16,0.72)" : "rgba(255,255,255,0.75)",
+            background: darkSider ? "rgba(20,20,22,0.8)" : "rgba(245,245,247,0.8)",
             backdropFilter: "blur(14px)",
             WebkitBackdropFilter: "blur(14px)",
             borderBottom: `1px solid ${borderColor}`,

@@ -43,6 +43,7 @@ type DashboardStats = {
   today_sales?: number;
   today_visitors?: number;
   pending_shipments?: number;
+  data_date?: string | null;
 };
 
 const MODULE_ICONS: Record<string, ReactNode> = {
@@ -78,11 +79,11 @@ type KpiDef = {
 };
 
 const KPI_CARDS: KpiDef[] = [
-  { key: "today_sales", label: "今日销售额", icon: <MoneyCollectOutlined />, color: "#ff5000", format: formatMoney },
-  { key: "today_orders", label: "今日订单", icon: <ShoppingCartOutlined />, color: "#1677ff", format: formatNumber },
-  { key: "pending_shipments", label: "待发货", icon: <CarOutlined />, color: "#722ed1", format: formatNumber },
-  { key: "product_count", label: "在售商品", icon: <ShoppingOutlined />, color: "#52c41a", format: formatNumber },
-  { key: "today_visitors", label: "今日访客", icon: <EyeOutlined />, color: "#13c2c2", format: formatNumber },
+  { key: "today_sales", label: "今日销售额", icon: <MoneyCollectOutlined />, color: "#0066cc", format: formatMoney },
+  { key: "today_orders", label: "今日订单", icon: <ShoppingCartOutlined />, color: "#0066cc", format: formatNumber },
+  { key: "pending_shipments", label: "待发货", icon: <CarOutlined />, color: "#0066cc", format: formatNumber },
+  { key: "product_count", label: "在售商品", icon: <ShoppingOutlined />, color: "#0066cc", format: formatNumber },
+  { key: "today_visitors", label: "今日访客", icon: <EyeOutlined />, color: "#0066cc", format: formatNumber },
 ];
 
 const LIVE_MODULES = new Set(["dashboard", "profile", "accounts"]);
@@ -147,10 +148,10 @@ export function DashboardPage() {
         <Row align="middle" justify="space-between" gutter={[24, 20]}>
           <Col xs={24} lg={16}>
             <Space size={8} align="center">
-              <Text style={{ fontSize: 12, letterSpacing: 2, color: "#ff8a4d", fontWeight: 600 }}>
+              <Text style={{ fontSize: 12, letterSpacing: 2, color: "var(--ops-text-secondary)", fontWeight: 500 }}>
                 {BRAND.eyebrow}
               </Text>
-              <span style={{ width: 3, height: 3, borderRadius: "50%", background: "rgba(255,138,77,0.6)" }} />
+              <span style={{ width: 3, height: 3, borderRadius: "50%", background: "var(--ops-border-strong)" }} />
               <Text style={{ fontSize: 12, color: "var(--ops-text-secondary)" }}>{BRAND.tagline}</Text>
             </Space>
             <Title level={2} style={{ margin: "10px 0 6px" }}>
@@ -183,8 +184,8 @@ export function DashboardPage() {
                 gap: 8,
               }}
             >
-              <span className="ops-pill" style={{ background: "rgba(255,255,255,0.06)" }}>
-                <ClockCircleOutlined style={{ color: "#ff8a4d" }} />
+              <span className="ops-pill">
+                <ClockCircleOutlined style={{ color: "var(--ops-accent)" }} />
                 <Text strong style={{ fontSize: 14, fontVariantNumeric: "tabular-nums" }}>
                   {clock}
                 </Text>
@@ -192,8 +193,11 @@ export function DashboardPage() {
               <Text type="secondary" style={{ fontSize: 13 }}>
                 {today}
               </Text>
-              <Tag color="orange" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
-                框架占位数据
+              <Tag
+                color={stats?.data_date ? "green" : "default"}
+                style={{ borderRadius: 999, marginInlineEnd: 0 }}
+              >
+                {stats?.data_date ? `数据截至 ${stats.data_date}` : "暂无数据"}
               </Tag>
             </div>
           </Col>

@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "taobao.db"
+# 测试/多实例可通过环境变量 TAOBAO_DB_PATH 指定数据库位置
+DB_PATH = Path(
+    os.environ.get("TAOBAO_DB_PATH")
+    or (Path(__file__).resolve().parent.parent.parent / "data" / "taobao.db")
+)
+
+
+def connect_db() -> sqlite3.Connection:
+    """统一的数据库连接：允许跨线程 + 10 秒锁等待，避免并发写入报 database is locked。"""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    return conn
 
 
 def get_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn = connect_db()
     try:
         yield conn
         conn.commit()
@@ -162,6 +174,9 @@ def _migrate_sycm(conn: sqlite3.Connection) -> None:
 
 def _seed_stores(conn: sqlite3.Connection) -> None:
     """首次运行时写入几家演示店铺，方便查看健康状态效果。"""
+    # 分发版跳过演示数据（TAOBAO_NO_SEED=1，由 start.bat 设置），朋友从零开始
+    if os.environ.get("TAOBAO_NO_SEED"):
+        return
     count = conn.execute("SELECT COUNT(*) AS c FROM stores").fetchone()["c"]
     if count > 0:
         return
@@ -319,6 +334,9 @@ def _migrate_promo_realtime(conn: sqlite3.Connection) -> None:
 
 def _seed_gifts(conn: sqlite3.Connection) -> None:
     """首次运行时给每家演示店铺写入几笔礼品单（仅当仍是演示店铺时，避免真实店铺下重建示例数据）。"""
+    # 分发版跳过演示数据（TAOBAO_NO_SEED=1，由 start.bat 设置）
+    if os.environ.get("TAOBAO_NO_SEED"):
+        return
     count = conn.execute("SELECT COUNT(*) AS c FROM gifts").fetchone()["c"]
     if count > 0:
         return
@@ -363,8 +381,8 @@ def _seed_gifts(conn: sqlite3.Connection) -> None:
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = connect_db()
+    conn.execute("PRAGMA journal_mode = WAL")
     try:
         conn.execute(
             """

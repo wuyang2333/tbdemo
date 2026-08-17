@@ -27,7 +27,7 @@ from backend.app.core.alimama import (
 )
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
-from backend.app.core.sycm import has_profile
+from backend.app.core.sycm import PROFILE_MISSING_MSG, has_profile
 
 router = APIRouter()
 
@@ -53,6 +53,33 @@ def _bound_stores(db) -> list[dict]:
         for r in db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
         if has_profile(r["id"])
     ]
+
+
+def _all_stores(db) -> list[dict]:
+    """全部店铺（含未配置档案的），供同步函数显式标记失败原因。"""
+    return [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()]
+
+
+def sync_promo_daily_all(db, days: int = 7) -> dict:
+    """同步近 N 天推广按天数据到 promo_daily_data（经营日报推广数据来源）。
+
+    后台每日定时调用（勿加路由装饰器），单店容错。返回 {"results", "total", "ok"}。
+    """
+    today = date_cls.today()
+    start = today - timedelta(days=days - 1)
+    end = today - timedelta(days=1)
+    results = []
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
+        try:
+            items = fetch_scene_daily(store, start.isoformat(), end.isoformat())
+            count = _store_daily_rows(db, store["id"], items, _now())
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
+        except AlimamaError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 
 def _mode(value: str) -> str:
@@ -316,7 +343,10 @@ def sync_promo(
     mode = _mode(mode)
     today = date_cls.today()
     results = []
-    for store in _bound_stores(db):
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             now = _now()
             if mode == "realtime":
@@ -398,7 +428,10 @@ def sync_plans(
     mode = _mode(mode)
     today = date_cls.today()
     results = []
-    for store in _bound_stores(db):
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             snapshots = fetch_plan_snapshots(store)
             if mode == "realtime":
@@ -514,7 +547,10 @@ def sync_items(
         db_mode = str(days)
     now = _now()
     results = []
-    for store in _bound_stores(db):
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             if realtime:
                 # 实时：走推广「计划→商品」口径（全站推广+关键词+人群，不含内容营销），
@@ -558,7 +594,10 @@ def sync_promo_realtime_all(db) -> dict:
 
     now = _now()
     results = []
-    for store in _bound_stores(db):
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             items = fetch_realtime(store)
             count = _store_realtime_rows(db, store["id"], items, now)
@@ -578,7 +617,10 @@ def sync_promo_items_realtime_all(db) -> dict:
     today = date_cls.today().isoformat()
     now = _now()
     results = []
-    for store in _bound_stores(db):
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             rows = fetch_item_promo_plan_based(store, today, today, realtime=True)
             source = "plan_scene"
@@ -621,7 +663,10 @@ def sync_promo_hourly(
     dates = [(today - timedelta(days=i)).isoformat() for i in range(1, days + 1)]
     now = _now()
     results = []
-    for store in _bound_stores(db):
+    for store in _all_stores(db):
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": PROFILE_MISSING_MSG})
+            continue
         total = 0
         err = None
         for d in dates:

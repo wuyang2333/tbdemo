@@ -789,7 +789,7 @@ export function GiftsPage() {
           <Button icon={<ReloadOutlined />} onClick={resetFilters}>
             重置
           </Button>
-          <Divider type="vertical" />
+          <Divider orientation="vertical" />
           <Dropdown menu={{ items: batchMenuItems }}>
             <Button type="primary" ghost icon={<AppstoreOutlined />}>
               批量操作
@@ -845,12 +845,12 @@ export function GiftsPage() {
                   <span style={{ marginRight: 14 }}>
                     <span style={{ marginRight: 12 }}>佣金总额 ¥{selectedCommission.toFixed(2)}</span>
                     <span style={{ marginRight: 12 }}>金额总额 ¥{selectedAmount.toFixed(2)}</span>
-                    <span style={{ color: "#ff5000", fontWeight: 700, marginRight: 12 }}>
+                    <span style={{ color: "#181d26", fontWeight: 700, marginRight: 12 }}>
                       总金额 ¥{selectedTotal.toFixed(2)}
                     </span>
                   </span>
                 )}
-                <span style={{ color: "#ff5000", fontWeight: 700, marginRight: 10 }}>
+                <span style={{ color: "#181d26", fontWeight: 700, marginRight: 10 }}>
                   已选 {selectedKeys.length} 单
                 </span>
                 共 {count} 单
@@ -888,7 +888,7 @@ export function GiftsPage() {
         }}
         confirmLoading={saving}
         okText="创建"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" onFinish={submitGift} style={{ marginTop: 8 }}>
           <Row gutter={12}>

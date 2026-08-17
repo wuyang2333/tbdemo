@@ -5,6 +5,8 @@ export function useAutoRefresh(refresh: () => void, intervalMs = 180000) {
   const ref = useRef(refresh);
   ref.current = refresh;
   useEffect(() => {
+    // 挂载后立即拉一次数据，避免页面首次打开为空
+    ref.current();
     const id = setInterval(() => {
       ref.current();
     }, intervalMs);

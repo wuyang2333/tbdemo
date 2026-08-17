@@ -79,21 +79,21 @@ export function buildReportHtml(data: AnalyticsReport): string {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; color: #1f2430; background: #fff; padding: 42px 48px; font-size: 13px; line-height: 1.6; }
-  .report-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #ff5000; padding-bottom: 14px; margin-bottom: 26px; }
+  .report-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #181d26; padding-bottom: 14px; margin-bottom: 26px; }
   .report-header h1 { font-size: 26px; font-weight: 800; letter-spacing: 3px; color: #14161a; }
   .report-header .sub { color: #9aa4b4; font-size: 11px; letter-spacing: 2px; margin-top: 4px; }
   .report-header .meta { text-align: right; }
-  .report-header .meta .date { font-size: 20px; font-weight: 800; color: #ff5000; font-variant-numeric: tabular-nums; }
+  .report-header .meta .date { font-size: 20px; font-weight: 700; color: #181d26; font-variant-numeric: tabular-nums; }
   .report-header .meta .who { color: #9aa4b4; font-size: 12px; margin-top: 2px; }
   .section { margin-bottom: 26px; }
   .section-title { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 700; color: #14161a; margin-bottom: 14px; }
-  .section-title::before { content: ""; width: 4px; height: 16px; background: #ff5000; border-radius: 2px; }
+  .section-title::before { content: ""; width: 4px; height: 16px; background: #181d26; border-radius: 2px; }
   .metric-strip { display: flex; gap: 12px; }
   .metric { flex: 1; border: 1px solid #edf0f5; border-radius: 12px; padding: 14px 16px; background: linear-gradient(180deg, #fbfcfe, #f6f8fc); }
   .metric-label { font-size: 12px; color: #8a94a6; }
   .metric-value { font-size: 21px; font-weight: 800; color: #14161a; margin-top: 3px; font-variant-numeric: tabular-nums; }
   .metric-chg { font-size: 12px; margin-top: 3px; font-weight: 600; }
-  .up { color: #ff5000; }
+  .up { color: #181d26; }
   .down { color: #17a34a; }
   table { width: 100%; border-collapse: collapse; }
   th, td { border: 1px solid #edf0f5; padding: 10px 12px; text-align: left; }
@@ -101,7 +101,7 @@ export function buildReportHtml(data: AnalyticsReport): string {
   td { color: #1f2430; font-size: 13px; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }
   .rank { width: 32px; color: #9aa4b4; font-weight: 600; }
-  .rank-top { color: #ff5000; font-weight: 800; }
+  .rank-top { color: #181d26; font-weight: 700; }
   .alert-item { display: flex; gap: 8px; align-items: flex-start; padding: 9px 13px; border-radius: 8px; margin-bottom: 7px; font-size: 13px; }
   .alert-ico { flex-shrink: 0; }
   .alert-error { background: #fff2f0; color: #d4380d; }
@@ -109,7 +109,7 @@ export function buildReportHtml(data: AnalyticsReport): string {
   .goal { display: flex; justify-content: space-between; align-items: center; border: 1px solid #edf0f5; border-radius: 12px; padding: 14px 18px; background: linear-gradient(90deg, #fff6f1, #fff); }
   .goal .g-label { font-size: 12px; color: #8a94a6; }
   .goal .g-value { font-size: 16px; font-weight: 800; color: #14161a; margin-top: 3px; }
-  .goal .g-pct { font-size: 15px; font-weight: 800; color: #ff5000; }
+  .goal .g-pct { font-size: 15px; font-weight: 700; color: #181d26; }
   .foot { margin-top: 30px; padding-top: 14px; border-top: 1px solid #edf0f5; color: #a5adbb; font-size: 11px; text-align: center; }
 </style>
 </head>

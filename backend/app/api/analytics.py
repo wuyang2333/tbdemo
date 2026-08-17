@@ -793,7 +793,9 @@ def send_report_webhook(webhook: str, text: str) -> None:
 
     body = _json.dumps({"msgtype": "text", "text": {"content": text}}).encode("utf-8")
     req = urllib.request.Request(webhook, data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    # 显式禁用代理：WorkBuddy 会话注入的 HTTP_PROXY/HTTPS_PROXY 会劫持 urllib 导致连不上
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=15) as resp:
         resp.read()
 
 

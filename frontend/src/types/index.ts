@@ -30,59 +30,14 @@ export type AuthResponse = {
 export type Store = {
   id: number;
   name: string;
-  owner: string;
-  category: string;
-  level: string;
-  location: string;
-  dsr_desc: number;
-  dsr_service: number;
-  dsr_logistics: number;
-  status: "active" | "auth_error" | "stopped";
-  display_status: "active" | "auth_error" | "stopped" | "auth_expired";
-  auth_expires_at: string | null;
+  status: "active" | "auth_error";
+  display_status: "active" | "auth_error";
   created_at: string;
-  sycm_username: string;
   sycm_configured: boolean;
-  sycm_cookie_masked: string;
-};
-
-export type StoreMetrics = {
-  sales: number;
-  orders: number;
-  visitors: number;
-  refund_rate: number;
-};
-
-export type StoreTrendPoint = StoreMetrics & {
-  date: string;
-};
-
-export type StoreMetricsResponse = {
-  store: Store;
-  today: StoreMetrics;
-  summary: {
-    sales_7d: number;
-    orders_7d: number;
-    avg_refund_rate: number;
-    sales_change_7d: number;
-  };
-  trend: StoreTrendPoint[];
-};
-
-export type StoreAlert = {
-  id: string;
-  store_id: number;
-  store_name: string;
-  type: "refund" | "dsr" | "auth_expiring" | "auth_expired" | "stopped" | "delivery";
-  level: "error" | "warn" | "info";
-  message: string;
-  created_at: string;
-};
-
-export type StoreCompareItem = StoreMetrics & {
-  store_id: number;
-  name: string;
-  display_status: Store["display_status"];
+  last_sync_at: string | null;
+  sycm_status: "ok" | "error" | "not_configured" | "unknown";
+  sycm_error: string | null;
+  sycm_checked_at: string | null;
 };
 
 export type StoreLog = {

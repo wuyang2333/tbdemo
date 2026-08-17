@@ -1,31 +1,26 @@
 import {
-  BarChartOutlined,
+  CheckOutlined,
+  CopyOutlined,
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
   HistoryOutlined,
   LoginOutlined,
-  ReloadOutlined,
+  ReadOutlined,
   SafetyOutlined,
   ShopOutlined,
-  StopOutlined,
   SyncOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
-  Alert,
   Button,
   Card,
   Col,
-  DatePicker,
-  Empty,
   Form,
   Input,
-  InputNumber,
   Modal,
   Popconfirm,
   Row,
-  Select,
   Space,
   Table,
   Tag,
@@ -34,43 +29,49 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { showSyncFeedback } from "../lib/sync-feedback";
 import { useStores } from "../lib/store";
 import { PageHeader } from "../components/ui/page-header";
-import { StoreCompareModal } from "../components/stores/store-compare";
 import { StoreDetailDrawer } from "../components/stores/store-detail";
-import type { Store, StoreAlert, StoreLog } from "../types";
+import type { Store, StoreLog } from "../types";
 
 const { Text } = Typography;
 
-const CATEGORY_OPTIONS = ["女装", "男装", "美妆", "食品", "数码", "家居", "母婴", "其他"];
-const LEVEL_OPTIONS = ["天猫旗舰店", "天猫专卖店", "金冠店", "皇冠店", "五钻店", "四钻店", "其他"];
-
 type StoreFormValues = {
   name: string;
-  owner?: string;
-  category?: string;
-  level?: string;
-  location?: string;
-  dsr_desc?: number;
-  dsr_service?: number;
-  dsr_logistics?: number;
-  auth_expires_at?: dayjs.Dayjs;
 };
 
-function StatusTag({ status }: { status: Store["display_status"] }) {
-  if (status === "active") return <Tag color="green">正常</Tag>;
-  if (status === "auth_expired") return <Tag color="orange">授权过期</Tag>;
-  if (status === "auth_error") return <Tag color="red">授权异常</Tag>;
-  return <Tag>已停用</Tag>;
+function LoginStatusTag({ status, error }: { status: Store["sycm_status"]; error: string | null }) {
+  if (status === "ok") return <Tag color="green">登录正常</Tag>;
+  if (status === "error") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <Tag color="red" style={{ width: "fit-content" }}>登录失效</Tag>
+        {error ? (
+          <Text type="secondary" style={{ fontSize: 12, maxWidth: 200 }} ellipsis={{ tooltip: error }}>
+            {error}
+          </Text>
+        ) : null}
+      </div>
+    );
+  }
+  if (status === "not_configured") return <Tag>未绑定</Tag>;
+  return <Tag color="orange">检测中</Tag>;
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return "—";
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed.format("YYYY-MM-DD") : "—";
+function timeAgo(value: string | null): string {
+  if (!value) return "从未同步";
+  const diff = Date.now() - dayjs(value).valueOf();
+  if (!Number.isFinite(diff) || diff < 0) return "从未同步";
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
 }
 
 export function StoresPage() {
@@ -78,98 +79,62 @@ export function StoresPage() {
   const [form] = Form.useForm<StoreFormValues>();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Store | null>(null);
+  const [bindOpen, setBindOpen] = useState(false);
+  const [bindName, setBindName] = useState("");
+  const [bindStoreId, setBindStoreId] = useState<number | null>(null);
+  const [bindOk, setBindOk] = useState(false);
+  const [bindLoggedIn, setBindLoggedIn] = useState(false);
+  const [bindBusy, setBindBusy] = useState<null | "login" | "test" | "browser">(null);
+  const [cookiesOpen, setCookiesOpen] = useState(false);
+  const [cookiesText, setCookiesText] = useState("");
+  const [cookiesSaving, setCookiesSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [detailStore, setDetailStore] = useState<Store | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [compareOpen, setCompareOpen] = useState(false);
-  const [alerts, setAlerts] = useState<StoreAlert[]>([]);
-  const [inspectedAt, setInspectedAt] = useState<string | null>(null);
-  const [inspecting, setInspecting] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
   const [logs, setLogs] = useState<StoreLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
-  const [sycmStore, setSycmStore] = useState<Store | null>(null);
-  const [sycmOpen, setSycmOpen] = useState(false);
-  const [sycmUsername, setSycmUsername] = useState("");
-  const [sycmPassword, setSycmPassword] = useState("");
-  const [sycmSaving, setSycmSaving] = useState(false);
-  const [sycmTesting, setSycmTesting] = useState(false);
-  const [sycmSyncing, setSycmSyncing] = useState(false);
-  const [sycmBinding, setSycmBinding] = useState(false);
+  const [bindingId, setBindingId] = useState<number | null>(null);
+  const [testingId, setTestingId] = useState<number | null>(null);
+  const [syncingId, setSyncingId] = useState<number | null>(null);
 
   const ACTION_LABELS: Record<string, string> = {
     bind: "绑定店铺",
     edit: "编辑店铺",
     unbind: "解绑店铺",
-    refresh_auth: "刷新授权",
-    status: "状态变更",
     current: "切换当前店",
-    inspect: "巡检",
     perm: "店铺权限",
   };
-
-  const loadAlerts = async () => {
-    try {
-      const { data } = await http.get<{ items: StoreAlert[]; inspected_at: string | null }>("/stores/alerts");
-      setAlerts(data.items);
-      setInspectedAt(data.inspected_at);
-    } catch {
-      setAlerts([]);
-      setInspectedAt(null);
-    }
-  };
-
-  useEffect(() => {
-    loadAlerts();
-  }, []);
 
   const total = stores.length;
   const normal = stores.filter((store) => store.display_status === "active").length;
   const attention = total - normal;
 
   const openCreate = () => {
-    form.resetFields();
-    setEditing(null);
-    setModalOpen(true);
+    setBindName("");
+    setBindStoreId(null);
+    setBindOk(false);
+    setBindLoggedIn(false);
+    setBindOpen(true);
   };
 
   const openEdit = (row: Store) => {
     form.setFieldsValue({
       name: row.name,
-      owner: row.owner,
-      category: row.category || undefined,
-      level: row.level || undefined,
-      location: row.location,
-      dsr_desc: row.dsr_desc,
-      dsr_service: row.dsr_service,
-      dsr_logistics: row.dsr_logistics,
-      auth_expires_at: row.auth_expires_at ? dayjs(row.auth_expires_at) : undefined,
     });
     setEditing(row);
     setModalOpen(true);
   };
 
   const submit = async (values: StoreFormValues) => {
+    if (!editing) return;
     setSaving(true);
     try {
       const payload = {
         name: values.name.trim(),
-        owner: values.owner?.trim() ?? "",
-        category: values.category ?? "",
-        level: values.level ?? "",
-        location: values.location?.trim() ?? "",
-        dsr_desc: values.dsr_desc ?? 0,
-        dsr_service: values.dsr_service ?? 0,
-        dsr_logistics: values.dsr_logistics ?? 0,
-        auth_expires_at: values.auth_expires_at ? values.auth_expires_at.toISOString() : "",
       };
-      if (editing) {
-        await http.put(`/stores/${editing.id}`, payload);
-        message.success("店铺信息已更新");
-      } else {
-        await http.post("/stores", payload);
-        message.success("店铺已绑定");
-      }
+      await http.put(`/stores/${editing.id}`, payload);
+      message.success("店铺信息已更新");
       setModalOpen(false);
       refresh();
     } catch (error) {
@@ -179,31 +144,204 @@ export function StoresPage() {
     }
   };
 
+  const bindLogin = async () => {
+    const name = bindName.trim();
+    if (!name) {
+      message.warning("请先填写店铺名称");
+      return;
+    }
+    setBindBusy("login");
+    try {
+      let storeId = bindStoreId;
+      if (!storeId) {
+        const { data } = await http.post<{ item: Store }>("/stores", { name });
+        storeId = data.item.id;
+        setBindStoreId(storeId);
+      }
+      message.info("已打开 Chrome 登录窗口，请在窗口里用本店铺的淘宝账号登录生意参谋（最长等待 5 分钟）");
+      // 登录等待最长 5 分钟：请求超时必须放宽到足够长，否则前端 30s 就放弃等待
+      await http.post(`/stores/${storeId}/sycm/bind`, undefined, { timeout: 330000 });
+      setBindLoggedIn(true);
+      // D 优化：登录成功 → 自动验证 → 通过则直接保存，失败保留手动「测试/保存」
+      try {
+        await http.post(`/stores/${storeId}/sycm/test`, undefined, { timeout: 60000 });
+        setBindOk(true);
+        try {
+          await http.put(`/stores/${storeId}`, { name });
+        } catch {
+          /* 名称同步失败不阻塞自动保存 */
+        }
+        setBindOpen(false);
+        setBindStoreId(null);
+        setBindOk(false);
+        setBindLoggedIn(false);
+        refresh();
+        message.success("生意参谋登录成功，已自动验证并保存");
+      } catch {
+        message.warning("登录成功，但自动验证未通过（可能触发风控），请点击「测试」确认后保存");
+        setBindOk(false);
+        setBindLoggedIn(true);
+        refresh();
+      }
+    } catch (error) {
+      const detail = getApiErrorMessage(error);
+      // bind 失败但档案已保存（登录其实成功，只是验证/风控问题）：保留店铺，允许手动测试保存
+      if (detail.includes("验证失败") || detail.includes("已失效")) {
+        setBindLoggedIn(true);
+        message.warning("登录成功，但自动验证未通过，请点击「测试」确认后保存");
+      } else {
+        message.error(detail);
+      }
+    } finally {
+      setBindBusy(null);
+    }
+  };
+
+  const bindTest = async () => {
+    if (!bindStoreId) {
+      message.warning("请先点击「登录」完成生意参谋登录");
+      return;
+    }
+    setBindBusy("test");
+    try {
+      await http.post(`/stores/${bindStoreId}/sycm/test`);
+      message.success("生意参谋登录正常");
+      // 测试通过 = 登录确实有效，允许保存（bind 首次验证偶发风控失败，不影响实际登录）
+      setBindOk(true);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setBindBusy(null);
+    }
+  };
+
+  const bindFromBrowser = async () => {
+    const name = bindName.trim();
+    if (!name) {
+      message.warning("请先填写店铺名称");
+      return;
+    }
+    setBindBusy("browser");
+    try {
+      let storeId = bindStoreId;
+      if (!storeId) {
+        const { data } = await http.post<{ item: Store }>("/stores", { name });
+        storeId = data.item.id;
+        setBindStoreId(storeId);
+      }
+      message.info("正在读取当前 Chrome/Edge 的生意参谋登录态（无需弹窗），请确认已在该浏览器登录 sycm.taobao.com");
+      await http.post(`/stores/${storeId}/sycm/bind-from-browser`, undefined, { timeout: 180000 });
+      setBindLoggedIn(true);
+      // 后端已自动验证通过 → 直接保存
+      try {
+        await http.put(`/stores/${storeId}`, { name });
+      } catch {
+        /* 名称同步失败不阻塞保存 */
+      }
+      setBindOpen(false);
+      setBindStoreId(null);
+      setBindOk(false);
+      setBindLoggedIn(false);
+      refresh();
+      message.success("已读取当前浏览器登录态并保存");
+    } catch (error) {
+      const detail = getApiErrorMessage(error);
+      setBindLoggedIn(true); // 若档案已读取成功则保留店铺，避免误删
+      message.error(detail);
+    } finally {
+      setBindBusy(null);
+    }
+  };
+
+  const COOKIE_SNIPPET =
+    "copy(JSON.stringify(Object.fromEntries(document.cookie.split('; ').map(c => { const i = c.indexOf('='); return [c.slice(0, i), c.slice(i + 1)]; }))));";
+
+  const submitCookies = async () => {
+    const name = bindName.trim();
+    if (!name) {
+      message.warning("请先填写店铺名称");
+      return;
+    }
+    if (!cookiesText.trim()) {
+      message.warning("请先粘贴登录态");
+      return;
+    }
+    setCookiesSaving(true);
+    try {
+      let storeId = bindStoreId;
+      if (!storeId) {
+        const { data } = await http.post<{ item: Store }>("/stores", { name });
+        storeId = data.item.id;
+        setBindStoreId(storeId);
+      }
+      await http.post(`/stores/${storeId}/sycm/bind-from-cookies`, { cookies: cookiesText }, { timeout: 180000 });
+      setBindLoggedIn(true);
+      try {
+        await http.put(`/stores/${storeId}`, { name });
+      } catch {
+        /* 名称同步失败不阻塞保存 */
+      }
+      setBindOpen(false);
+      setCookiesOpen(false);
+      setBindStoreId(null);
+      setBindOk(false);
+      setBindLoggedIn(false);
+      setCookiesText("");
+      refresh();
+      message.success("登录态已保存并验证通过");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setCookiesSaving(false);
+    }
+  };
+
+  const bindSave = async () => {
+    const name = bindName.trim();
+    if (!name) {
+      message.warning("请先填写店铺名称");
+      return;
+    }
+    if (!bindStoreId || !bindOk) {
+      message.warning("请先点击「登录」并完成生意参谋登录");
+      return;
+    }
+    try {
+      // 同步最终店铺名称（创建后用户可能改过输入框）
+      await http.put(`/stores/${bindStoreId}`, { name });
+    } catch {
+      /* 名称同步失败不阻塞保存 */
+    }
+    setBindOpen(false);
+    setBindStoreId(null);
+    setBindOk(false);
+    setBindLoggedIn(false);
+    refresh();
+  };
+
+  const closeBind = async () => {
+    // 未确认保存就关闭：清理预创建的占位店铺，保持「保存才出现在列表」的语义
+    // 若已登录成功（自动验证未通过），保留店铺与其登录档案，避免误删
+    if (bindStoreId && !bindLoggedIn) {
+      try {
+        await http.delete(`/stores/${bindStoreId}`);
+      } catch {
+        /* 清理失败也不影响（后端已兜底：未登录成功的占位店会自动删除） */
+      }
+    }
+    if (bindLoggedIn) {
+      message.info("店铺已登录并保留在列表中，可继续「测试」确认或稍后处理");
+    }
+    setBindStoreId(null);
+    setBindOk(false);
+    setBindLoggedIn(false);
+    setBindOpen(false);
+  };
+
   const switchCurrent = async (row: Store) => {
     try {
       await setCurrent(row.id);
       message.success(`当前店铺已切换为「${row.name}」`);
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    }
-  };
-
-  const refreshAuth = async (row: Store) => {
-    try {
-      await http.post(`/stores/${row.id}/auth`);
-      message.success(`「${row.name}」授权已刷新`);
-      refresh();
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    }
-  };
-
-  const toggleStatus = async (row: Store) => {
-    try {
-      const status = row.status === "stopped" ? "active" : "stopped";
-      await http.post(`/stores/${row.id}/status`, { status });
-      message.success(status === "stopped" ? `「${row.name}」已停用` : `「${row.name}」已启用`);
-      refresh();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     }
@@ -216,25 +354,6 @@ export function StoresPage() {
       refresh();
     } catch (error) {
       message.error(getApiErrorMessage(error));
-    }
-  };
-
-  const handleInspect = async () => {
-    setInspecting(true);
-    try {
-      const { data } = await http.post<{
-        ok: boolean;
-        inspected_at: string | null;
-        updated: number;
-        alerts_count: number;
-      }>("/stores/inspect");
-      message.success(`巡检完成：更新 ${data.updated} 家店铺，当前共 ${data.alerts_count} 条提醒`);
-      setInspectedAt(data.inspected_at);
-      await Promise.all([refresh(), loadAlerts()]);
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    } finally {
-      setInspecting(false);
     }
   };
 
@@ -261,31 +380,20 @@ export function StoresPage() {
         </Space>
       ),
     },
-    { title: "掌柜", dataIndex: "owner", render: (value: string) => value || "—" },
-    { title: "主营类目", dataIndex: "category", render: (value: string) => value || "—" },
-    { title: "等级", dataIndex: "level", render: (value: string) => value || "—" },
     {
-      title: "DSR 描述/服务/物流",
-      key: "dsr",
-      render: (_, row) => `${row.dsr_desc.toFixed(1)} / ${row.dsr_service.toFixed(1)} / ${row.dsr_logistics.toFixed(1)}`,
-    },
-    { title: "所在地", dataIndex: "location", render: (value: string) => value || "—" },
-    {
-      title: "健康状态",
-      dataIndex: "display_status",
-      render: (_, row) => <StatusTag status={row.display_status} />,
+      title: "生意参谋",
+      key: "sycm_status",
+      width: 220,
+      render: (_, row) => <LoginStatusTag status={row.sycm_status} error={row.sycm_error} />,
     },
     {
-      title: "授权到期",
-      dataIndex: "auth_expires_at",
+      title: "数据更新",
+      key: "last_sync_at",
       render: (_, row) => {
-        const expired = row.display_status === "auth_expired";
-        return (
-          <Text style={expired ? { color: "#ff4d4f" } : undefined}>
-            {formatDate(row.auth_expires_at)}
-            {expired && "（已过期）"}
-          </Text>
-        );
+        if (!row.last_sync_at) return <Text type="secondary">从未同步</Text>;
+        const mins = Math.floor((Date.now() - dayjs(row.last_sync_at).valueOf()) / 60000);
+        const color = mins > 24 * 60 ? "#ff4d4f" : mins > 30 ? "#fa8c16" : "#52c41a";
+        return <Text style={{ color }}>{timeAgo(row.last_sync_at)}</Text>;
       },
     },
     {
@@ -305,25 +413,45 @@ export function StoresPage() {
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(row)}>
               编辑
             </Button>
-            <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshAuth(row)}>
-              刷新授权
-            </Button>
-            <Button
-              size="small"
-              icon={<BarChartOutlined />}
-              type={row.sycm_configured ? "default" : "dashed"}
-              onClick={() => openSycm(row)}
-            >
-              生意参谋{row.sycm_configured ? "" : "·未配置"}
-            </Button>
-            <Popconfirm
-              title={row.status === "stopped" ? `启用店铺 ${row.name}？` : `停用店铺 ${row.name}？`}
-              onConfirm={() => toggleStatus(row)}
-            >
-              <Button size="small" icon={<StopOutlined />}>
-                {row.status === "stopped" ? "启用" : "停用"}
+            {row.sycm_configured ? (
+              <>
+                <Button
+                  size="small"
+                  icon={<LoginOutlined />}
+                  loading={bindingId === row.id}
+                  onClick={() => bindSycm(row)}
+                >
+                  重登
+                </Button>
+                <Button
+                  size="small"
+                  icon={<ThunderboltOutlined />}
+                  loading={testingId === row.id}
+                  onClick={() => testSycm(row)}
+                >
+                  测试
+                </Button>
+                <Button
+                  size="small"
+                  icon={<SyncOutlined />}
+                  loading={syncingId === row.id}
+                  onClick={() => syncSycm(row)}
+                >
+                  同步
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="small"
+                type="primary"
+                ghost
+                icon={<LoginOutlined />}
+                loading={bindingId === row.id}
+                onClick={() => bindSycm(row)}
+              >
+                登录
               </Button>
-            </Popconfirm>
+            )}
             <Popconfirm
               title={`解绑店铺 ${row.name}？解绑后不可恢复`}
               okText="解绑"
@@ -340,76 +468,54 @@ export function StoresPage() {
     },
   ];
 
-  const openSycm = (row: Store) => {
-    setSycmStore(row);
-    setSycmUsername(row.sycm_username || "");
-    setSycmPassword("");
-    setSycmOpen(true);
+  const testSycm = async (row: Store) => {
+    setTestingId(row.id);
+    try {
+      await http.post(`/stores/${row.id}/sycm/test`);
+      message.success(`「${row.name}」生意参谋登录正常`);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setTestingId(null);
+    }
   };
 
-  const saveSycm = async () => {
-    if (!sycmStore) return;
-    setSycmSaving(true);
+  const bindSycm = async (row: Store) => {
+    setBindingId(row.id);
     try {
-      await http.put(`/stores/${sycmStore.id}/sycm`, {
-        username: sycmUsername,
-        password: sycmPassword,
-        cookie: "",
-      });
-      message.success("生意参谋配置已保存");
+      message.info("已打开 Chrome 登录窗口，请在窗口里完成登录（最长等待 5 分钟）");
+      await http.post(`/stores/${row.id}/sycm/bind`, undefined, { timeout: 330000 });
+      try {
+        await http.post(`/stores/${row.id}/sycm/test`, undefined, { timeout: 60000 });
+        message.success(`「${row.name}」登录成功并已验证`);
+      } catch {
+        message.warning(`「${row.name}」登录成功，但验证未通过（可能风控），稍后可再点「测试」确认`);
+      }
       refresh();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
-      setSycmSaving(false);
+      setBindingId(null);
     }
   };
 
-  const testSycm = async () => {
-    if (!sycmStore) return;
-    setSycmTesting(true);
+  const syncSycm = async (row: Store) => {
+    setSyncingId(row.id);
     try {
-      await http.post(`/stores/${sycmStore.id}/sycm/test`);
-      message.success("生意参谋登录正常");
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    } finally {
-      setSycmTesting(false);
-    }
-  };
-
-  const bindSycm = async () => {
-    if (!sycmStore) return;
-    setSycmBinding(true);
-    try {
-      await http.post(`/stores/${sycmStore.id}/sycm/bind`);
-      message.success("生意参谋登录已绑定成功");
+      await http.post(`/stores/${row.id}/sync`);
+      message.success(`「${row.name}」已同步该店铺数据`);
       refresh();
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
-      setSycmBinding(false);
-    }
-  };
-
-  const syncSycm = async () => {
-    if (!sycmStore) return;
-    setSycmSyncing(true);
-    try {
-      await http.post(`/stores/${sycmStore.id}/sync`);
-      message.success("已同步该店铺数据");
-      refresh();
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    } finally {
-      setSycmSyncing(false);
+      setSyncingId(null);
     }
   };
 
   const syncAllSycm = async () => {
     try {
-      const { data } = await http.post<{ ok: number; total: number }>("/stores/sync-all");
-      message.success(`同步完成：成功 ${data.ok} / 共 ${data.total} 家`);
+      const { data } = await http.post<{ ok: number; total: number; results?: { store_name: string; ok: boolean; error?: string }[] }>("/stores/sync-all");
+      showSyncFeedback("同步", [{ ok: data.ok, total: data.total, results: data.results ?? [] }]);
       refresh();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -426,9 +532,6 @@ export function StoresPage() {
           <Space>
             <Button icon={<HistoryOutlined />} onClick={() => { setLogsOpen(true); loadLogs(); }}>
               操作日志
-            </Button>
-            <Button icon={<BarChartOutlined />} onClick={() => setCompareOpen(true)}>
-              多店对比
             </Button>
             <Button icon={<SyncOutlined />} onClick={syncAllSycm}>
               同步数据
@@ -469,53 +572,6 @@ export function StoresPage() {
         </Col>
       </Row>
 
-      <Card variant="borderless" style={{ marginBottom: 16 }} styles={{ body: { padding: "10px 20px 14px" } }}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "6px 0 4px",
-          }}
-        >
-          <Space size={10}>
-            <Text strong>经营提醒</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              最近巡检：{inspectedAt ? dayjs(inspectedAt).format("YYYY-MM-DD HH:mm") : "尚未巡检"}
-            </Text>
-          </Space>
-          <Button size="small" icon={<ThunderboltOutlined />} loading={inspecting} onClick={handleInspect}>
-            立即巡检
-          </Button>
-        </div>
-        {alerts.length === 0 ? (
-          <Empty description="暂无提醒，一切正常" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: "10px 0 4px" }} />
-        ) : (
-          <div>
-            {alerts.slice(0, 6).map((alert) => (
-              <div
-                key={alert.id}
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "center",
-                  padding: "7px 0",
-                  borderBottom: "1px solid var(--ops-border)",
-                }}
-              >
-                <Tag
-                  color={alert.level === "error" ? "red" : alert.level === "warn" ? "orange" : "default"}
-                  style={{ marginInlineEnd: 0, flexShrink: 0 }}
-                >
-                  {alert.level === "error" ? "严重" : alert.level === "warn" ? "提醒" : "提示"}
-                </Tag>
-                <Text style={{ fontSize: 13, flex: 1 }}>{alert.message}</Text>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-
       <Card variant="borderless">
         <Table<Store>
           rowKey="id"
@@ -528,12 +584,12 @@ export function StoresPage() {
       </Card>
 
       <Modal
-        title={editing ? `编辑店铺：${editing.name}` : "绑定店铺"}
+        title={`编辑店铺：${editing?.name ?? ""}`}
         open={modalOpen}
         onOk={() => form.submit()}
         onCancel={() => setModalOpen(false)}
         confirmLoading={saving}
-        okText={editing ? "保存" : "绑定"}
+        okText="保存"
       >
         <Form form={form} layout="vertical" onFinish={submit} style={{ marginTop: 8 }}>
           <Form.Item
@@ -546,60 +602,120 @@ export function StoresPage() {
           >
             <Input placeholder="如：淘品甄选旗舰店" />
           </Form.Item>
-          <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item name="owner" label="掌柜名">
-                <Input placeholder="掌柜名" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="category" label="主营类目">
-                <Select placeholder="选择类目" options={CATEGORY_OPTIONS.map((value) => ({ value, label: value }))} allowClear />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Row gutter={12}>
-            <Col span={12}>
-              <Form.Item name="level" label="店铺等级">
-                <Select placeholder="选择等级" options={LEVEL_OPTIONS.map((value) => ({ value, label: value }))} allowClear />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="location" label="所在地">
-                <Input placeholder="如：浙江·杭州" />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Row gutter={12}>
-            <Col span={8}>
-              <Form.Item name="dsr_desc" label="DSR 描述">
-                <InputNumber min={0} max={5} step={0.1} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="dsr_service" label="DSR 服务">
-                <InputNumber min={0} max={5} step={0.1} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-            <Col span={8}>
-              <Form.Item name="dsr_logistics" label="DSR 物流">
-                <InputNumber min={0} max={5} step={0.1} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item name="auth_expires_at" label="授权到期">
-            <DatePicker style={{ width: "100%" }} placeholder="默认 90 天后" />
-          </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="绑定店铺"
+        open={bindOpen}
+        onCancel={() => {
+          if (bindBusy === "login") {
+            message.info("正在等待登录，请先在 Chrome 窗口完成登录；如需取消请直接关闭 Chrome 窗口");
+            return;
+          }
+          closeBind();
+        }}
+        width={460}
+        footer={[
+          <Button key="cookies" icon={<CopyOutlined />} onClick={() => setCookiesOpen(true)}>
+            粘贴登录态
+          </Button>,
+          <Button key="browser" icon={<ReadOutlined />} loading={bindBusy === "browser"} onClick={bindFromBrowser}>
+            读取当前浏览器
+          </Button>,
+          <Button key="login" icon={<LoginOutlined />} loading={bindBusy === "login"} onClick={bindLogin}>
+            登录
+          </Button>,
+          <Button
+            key="test"
+            icon={<ThunderboltOutlined />}
+            loading={bindBusy === "test"}
+            disabled={!bindStoreId}
+            onClick={bindTest}
+          >
+            测试
+          </Button>,
+          <Button key="save" type="primary" icon={<CheckOutlined />} disabled={!bindOk} onClick={bindSave}>
+            保存
+          </Button>,
+        ]}
+      >
+        <div style={{ textAlign: "center", padding: "20px 8px 12px" }}>
+          <Space orientation="vertical" size={14} style={{ width: "100%" }}>
+            <Text strong style={{ fontSize: 15 }}>两步完成店铺绑定</Text>
+            <Input
+              placeholder="店铺名称（必填）"
+              value={bindName}
+              maxLength={50}
+              onChange={(event) => setBindName(event.target.value)}
+              onPressEnter={bindLogin}
+            />
+            <Text type="secondary">
+              三种方式任选：「粘贴登录态」/「读取当前浏览器」无需弹窗；「登录」会弹专用窗口扫码。成功后都会自动验证并保存。
+            </Text>
+            {bindBusy === "login" && (
+              <Text type="secondary" style={{ fontSize: 13, color: "var(--ops-accent)" }}>
+                正在等待登录…最长 5 分钟，请勿关闭本窗口
+              </Text>
+            )}
+            {bindBusy === "test" && (
+              <Text type="secondary" style={{ fontSize: 13, color: "var(--ops-accent)" }}>
+                正在验证登录状态…
+              </Text>
+            )}
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              若自动验证未通过（可能风控），请手动点「测试」确认后「保存」
+            </Text>
+          </Space>
+        </div>
+      </Modal>
+
+      <Modal
+        title="粘贴登录态（无需弹窗）"
+        open={cookiesOpen}
+        onCancel={() => setCookiesOpen(false)}
+        onOk={submitCookies}
+        confirmLoading={cookiesSaving}
+        okText="保存并验证"
+        width={640}
+      >
+        <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
+          <Text>
+            1. 在浏览器打开并登录 <Text code>sycm.taobao.com</Text>
+          </Text>
+          <Text>
+            2. 按 F12 → Console（控制台），粘贴下面这行并回车（会自动复制到剪贴板）：
+          </Text>
+          <Space.Compact style={{ width: "100%" }}>
+            <Input readOnly value={COOKIE_SNIPPET} />
+            <Button
+              onClick={() => {
+                navigator.clipboard?.writeText(COOKIE_SNIPPET).then(() => message.success("已复制，请到生意参谋控制台运行"));
+              }}
+            >
+              复制
+            </Button>
+          </Space.Compact>
+          <Text>
+            3. 回到这里，把控制台输出的内容粘贴到下方：
+          </Text>
+          <Input.TextArea
+            rows={6}
+            value={cookiesText}
+            onChange={(event) => setCookiesText(event.target.value)}
+            placeholder='例如：{"_tb_token_":"...","_m_h5_tk":"..."}'
+          />
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            若提示缺少 _tb_token_：打开 F12 → Application → Cookies，把 taobao 域的 cookie 按“名字=值”分行复制粘贴。
+          </Text>
+        </Space>
       </Modal>
 
       <StoreDetailDrawer
         store={detailStore}
         open={detailOpen}
-        alerts={alerts}
         onClose={() => setDetailOpen(false)}
       />
-      <StoreCompareModal open={compareOpen} onClose={() => setCompareOpen(false)} />
       <Modal
         title="操作日志"
         open={logsOpen}
@@ -630,65 +746,6 @@ export function StoresPage() {
             { title: "详情", dataIndex: "detail", render: (value: string) => value || "—" },
           ]}
         />
-      </Modal>
-
-      <Modal
-        title={`生意参谋数据源 · ${sycmStore?.name ?? ""}`}
-        open={sycmOpen}
-        onCancel={() => setSycmOpen(false)}
-        footer={
-          <Space>
-            <Button icon={<LoginOutlined />} loading={sycmBinding} onClick={bindSycm}>
-              打开浏览器登录
-            </Button>
-            <Button icon={<ThunderboltOutlined />} loading={sycmTesting} onClick={testSycm}>
-              测试连接
-            </Button>
-            <Button icon={<SyncOutlined />} loading={sycmSyncing} onClick={syncSycm}>
-              同步今天数据
-            </Button>
-            <Button type="primary" loading={sycmSaving} onClick={saveSycm}>
-              保存
-            </Button>
-          </Space>
-        }
-        destroyOnClose
-      >
-        <div style={{ marginBottom: 12 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            当前状态：
-            {sycmStore?.sycm_configured ? (
-              <Tag color="green">已绑定登录</Tag>
-            ) : (
-              <Tag color="orange">未绑定</Tag>
-            )}
-          </Text>
-        </div>
-        {sycmBinding && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 12 }}
-            message="已打开 Chrome 登录窗口"
-            description="请在弹出的 Chrome 窗口里用本店铺的淘宝账号登录生意参谋。如果是另一个店铺的账号，请先在窗口里退出当前账号再登录。登录成功后会自动保存并继续，无需关闭页面。"
-          />
-        )}
-        <Form layout="vertical">
-          <Form.Item label="账号" extra="仅用于备注，不会自动登录">
-            <Input
-              value={sycmUsername}
-              onChange={(event) => setSycmUsername(event.target.value)}
-              placeholder="如：该店铺的淘宝账号"
-            />
-          </Form.Item>
-          <Form.Item label="密码">
-            <Input.Password
-              value={sycmPassword}
-              onChange={(event) => setSycmPassword(event.target.value)}
-              placeholder="留空不修改"
-            />
-          </Form.Item>
-        </Form>
       </Modal>
     </div>
   );

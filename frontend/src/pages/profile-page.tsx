@@ -94,7 +94,7 @@ export function ProfilePage() {
               <Avatar
                 size={112}
                 src={user?.avatar_url || undefined}
-                style={{ background: "linear-gradient(135deg, #ff5000, #ff7a3d)", fontSize: 44, fontWeight: 700 }}
+                style={{ background: "#0066cc", fontSize: 44, fontWeight: 600 }}
               >
                 {displayName.slice(0, 1)}
               </Avatar>

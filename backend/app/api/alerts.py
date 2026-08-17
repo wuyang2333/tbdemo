@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user
@@ -132,6 +132,7 @@ def set_config(
 # ==================== 小时级异常推送（pushplus → 微信） ====================
 
 HOURLY_FIELDS = {"sales", "visitors", "orders", "conversion_rate", "promo_spend", "promo_roi"}
+HOURLY_CHANNELS = {"pushplus", "webhook", "both"}
 HOURLY_LABELS = {
     "sales": "销售额",
     "visitors": "访客",
@@ -169,13 +170,16 @@ def _norm_hourly_rule(r) -> dict | None:
 
 
 def _hourly_push_config(db) -> dict:
-    default = {"enabled": False, "token": "", "rules": []}
+    default = {"enabled": False, "token": "", "webhook": "", "channel": "pushplus", "rules": []}
     row = db.execute("SELECT value FROM meta WHERE key = 'hourly_push_config'").fetchone()
     if row and row["value"]:
         try:
             data = json.loads(row["value"])
             default["enabled"] = bool(data.get("enabled", False))
             default["token"] = str(data.get("token") or "")
+            default["webhook"] = str(data.get("webhook") or "")
+            if str(data.get("channel") or "") in HOURLY_CHANNELS:
+                default["channel"] = str(data["channel"])
             if isinstance(data.get("rules"), list):
                 default["rules"] = [r for r in (_norm_hourly_rule(x) for x in data["rules"]) if r]
         except (ValueError, TypeError):
@@ -186,6 +190,8 @@ def _hourly_push_config(db) -> dict:
 class HourlyPushIn(BaseModel):
     enabled: bool = False
     token: str = ""
+    webhook: str | None = None
+    channel: str | None = None
     rules: list | None = None
 
 
@@ -203,9 +209,18 @@ def set_hourly_push_config(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
+    existing = _hourly_push_config(db)
+    channel = existing["channel"]
+    if body.channel is not None:
+        if body.channel not in HOURLY_CHANNELS:
+            raise HTTPException(status_code=400, detail="推送渠道只能是 pushplus、webhook 或 both")
+        channel = body.channel
+    webhook = existing["webhook"] if body.webhook is None else (body.webhook or "").strip()
     cfg = {
         "enabled": bool(body.enabled),
         "token": (body.token or "").strip(),
+        "webhook": webhook,
+        "channel": channel,
         "rules": [r for r in (_norm_hourly_rule(x) for x in (body.rules or [])) if r],
     }
     db.execute(
@@ -221,8 +236,35 @@ def send_pushplus(token: str, title: str, content: str) -> None:
 
     body = json.dumps({"token": token, "title": title, "content": content, "template": "txt"}).encode("utf-8")
     req = urllib.request.Request("https://www.pushplus.plus/send", data=body, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    # 显式禁用代理：WorkBuddy 会话会注入 HTTP_PROXY/HTTPS_PROXY（如 127.0.0.1:7892），
+    # 让 urllib 走无效代理导致连不上 pushplus
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=15) as resp:
         resp.read()
+
+
+def send_webhook(webhook: str, text: str) -> None:
+    """推送文本到群机器人（钉钉/企业微信通用格式），显式禁用代理。"""
+    import urllib.request
+
+    body = json.dumps({"msgtype": "text", "text": {"content": text}}).encode("utf-8")
+    req = urllib.request.Request(webhook, data=body, headers={"Content-Type": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=15) as resp:
+        resp.read()
+
+
+def send_hourly_push(cfg: dict, title: str, content: str) -> list[str]:
+    """按渠道发送小时异常提醒：pushplus / webhook / 两者同时。返回实际发送的渠道。"""
+    sent: list[str] = []
+    channel = cfg.get("channel", "pushplus")
+    if channel in ("pushplus", "both") and cfg.get("token"):
+        send_pushplus(cfg["token"], title, content)
+        sent.append("pushplus")
+    if channel in ("webhook", "both") and cfg.get("webhook"):
+        send_webhook(cfg["webhook"], content)
+        sent.append("webhook")
+    return sent
 
 
 def _hpct(cur: float, prev: float):
@@ -347,15 +389,21 @@ def hourly_push_test(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """测试 pushplus 推送。"""
+    """测试小时异常推送（按配置的渠道）。"""
     cfg = _hourly_push_config(db)
-    if not cfg.get("token"):
-        raise HTTPException(status_code=400, detail="还没有配置 pushplus token")
+    channel = cfg.get("channel", "pushplus")
+    missing = []
+    if channel in ("pushplus", "both") and not cfg.get("token"):
+        missing.append("pushplus token")
+    if channel in ("webhook", "both") and not cfg.get("webhook"):
+        missing.append("webhook 地址")
+    if missing:
+        raise HTTPException(status_code=400, detail="推送渠道未配置完整：" + "、".join(missing))
     try:
-        send_pushplus(cfg["token"], "店铺小时异常提醒 - 测试", "这是一条测试消息，收到说明配置成功。")
+        sent = send_hourly_push(cfg, "店铺小时异常提醒 - 测试", "这是一条测试消息，收到说明配置成功。")
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"推送失败：{exc}") from exc
-    return {"ok": True}
+    return {"ok": True, "channels": sent}
 
 
 @router.post("/hourly-push/check")
@@ -364,14 +412,13 @@ def hourly_push_check(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """手动检查上个小时的数据（push=1 时同时推送到微信）。"""
+    """手动检查上个小时的数据（push=1 时按配置渠道推送）。"""
     cfg = _hourly_push_config(db)
     messages = check_hourly_rules(db, cfg)
-    pushed = False
-    if messages and push and cfg.get("enabled") and cfg.get("token"):
+    channels: list[str] = []
+    if messages and push and cfg.get("enabled"):
         try:
-            send_pushplus(cfg["token"], "店铺小时异常提醒", "\n".join(messages))
-            pushed = True
+            channels = send_hourly_push(cfg, "店铺小时异常提醒", "\n".join(messages))
         except Exception:  # noqa: BLE001
             pass
-    return {"messages": messages, "pushed": pushed}
+    return {"messages": messages, "pushed": bool(channels), "channels": channels}

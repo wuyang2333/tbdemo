@@ -14,18 +14,17 @@ from backend.app.api.auth import get_current_user
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
 from backend.app.core.sycm import (
+    PROFILE_MISSING_MSG,
     SycmError,
     bind_login,
+    bind_login_from_browser,
+    bind_login_from_cookies,
     check_sycm_login,
     fetch_store_daily,
     has_profile,
 )
 
 router = APIRouter()
-
-STATUSES = ("active", "auth_error", "stopped")
-CATEGORIES = ("女装", "男装", "美妆", "食品", "数码", "家居", "母婴", "其他")
-LEVELS = ("天猫旗舰店", "天猫专卖店", "金冠店", "皇冠店", "五钻店", "四钻店", "其他")
 
 
 def _now() -> datetime:
@@ -36,41 +35,28 @@ def _fmt(value: datetime) -> str:
     return value.isoformat()
 
 
-def _parse(value: str) -> datetime:
-    return datetime.fromisoformat(value)
-
-
 def _display_status(row) -> str:
-    if row["status"] == "stopped":
-        return "stopped"
-    expires = row["auth_expires_at"]
-    if expires:
-        try:
-            if _parse(expires) < _now():
-                return "auth_expired"
-        except ValueError:
-            pass
-    return row["status"]
+    return row["status"] or "active"
 
 
-def _payload(row) -> dict:
+def _payload(row, db) -> dict:
+    store_id = row["id"]
+    configured = has_profile(store_id)
+    if configured:
+        sycm_status = _meta_get(db, f"store_{store_id}_sycm_status") or "unknown"
+    else:
+        sycm_status = "not_configured"
     return {
-        "id": row["id"],
+        "id": store_id,
         "name": row["name"],
-        "owner": row["owner"],
-        "category": row["category"],
-        "level": row["level"],
-        "location": row["location"],
-        "dsr_desc": row["dsr_desc"],
-        "dsr_service": row["dsr_service"],
-        "dsr_logistics": row["dsr_logistics"],
         "status": row["status"],
         "display_status": _display_status(row),
-        "auth_expires_at": row["auth_expires_at"],
         "created_at": row["created_at"],
-        "sycm_username": row["sycm_username"],
-        "sycm_configured": has_profile(row["id"]),
-        "sycm_cookie_masked": _mask_cookie(row["sycm_cookie"]),
+        "sycm_configured": configured,
+        "last_sync_at": _meta_get(db, f"store_{store_id}_last_sync"),
+        "sycm_status": sycm_status,
+        "sycm_error": _meta_get(db, f"store_{store_id}_sycm_error"),
+        "sycm_checked_at": _meta_get(db, f"store_{store_id}_sycm_checked_at"),
     }
 
 
@@ -122,103 +108,26 @@ def _metrics_for(store_id: int, day: date_cls) -> dict:
     }
 
 
-def _metrics_for_day(db, store_id: int, day: date_cls) -> dict:
-    """按真实同步数据返回某天指标；没有数据时返回 0。"""
-    row = db.execute(
-        "SELECT sales, orders, visitors, conversion_rate FROM store_daily_data "
-        "WHERE store_id = ? AND data_date = ?",
-        (store_id, day.isoformat()),
-    ).fetchone()
-    if not row:
-        return {"sales": 0.0, "orders": 0, "visitors": 0, "refund_rate": 0.0}
-    return {
-        "sales": round(row["sales"] or 0.0, 2),
-        "orders": int(row["orders"] or 0),
-        "visitors": int(row["visitors"] or 0),
-        "refund_rate": 0.0,
-    }
-
-
-def _compute_alerts(db) -> list[dict]:
-    items = []
-    now = _now()
-    rows = db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
-    for row in rows:
-        name = row["name"]
-        base = {"store_id": row["id"], "store_name": name, "created_at": _fmt(now)}
-        status = _display_status(row)
-
-        if status == "auth_expired":
-            items.append(
-                {
-                    **base,
-                    "id": f"al_{row['id']}_expired",
-                    "type": "auth_expired",
-                    "level": "error",
-                    "message": f"「{name}」店铺授权已过期，请尽快刷新授权",
-                }
-            )
-        elif status == "stopped":
-            items.append(
-                {
-                    **base,
-                    "id": f"al_{row['id']}_stopped",
-                    "type": "stopped",
-                    "level": "info",
-                    "message": f"「{name}」店铺已停用",
-                }
-            )
-        else:
-            expires = row["auth_expires_at"]
-            if expires:
-                try:
-                    days_left = (_parse(expires) - now).days
-                    if days_left <= 7:
-                        items.append(
-                            {
-                                **base,
-                                "id": f"al_{row['id']}_expiring",
-                                "type": "auth_expiring",
-                                "level": "warn",
-                                "message": f"「{name}」授权将于 {max(days_left, 0)} 天后到期，请提前续期",
-                            }
-                        )
-                except ValueError:
-                    pass
-
-
-        if 0 < min(row["dsr_desc"], row["dsr_service"], row["dsr_logistics"]) < 4.5:
-            items.append(
-                {
-                    **base,
-                    "id": f"al_{row['id']}_dsr",
-                    "type": "dsr",
-                    "level": "warn",
-                    "message": f"「{name}」存在低于 4.5 的 DSR 评分，建议关注服务体验",
-                }
-            )
-
-
-    order_map = {"error": 0, "warn": 1, "info": 2}
-    items.sort(key=lambda item: (order_map[item["level"]], item["store_id"]))
-    return items
-
-
 def run_inspect_once() -> int:
-    """巡检一次：把授权已过期的店铺落库，并更新巡检时间。返回状态更新的店铺数。"""
-    import sqlite3
+    """巡检一次：校验各店铺生意参谋登录态，并更新巡检时间。返回状态更新的店铺数。"""
+    from backend.app.core.db import connect_db
+    from backend.app.core.sycm import SycmError, check_sycm_login
 
-    from backend.app.core.db import DB_PATH
-
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn = connect_db()
     try:
         rows = conn.execute("SELECT * FROM stores").fetchall()
         updated = 0
         for row in rows:
-            if row["status"] == "active" and _display_status(row) == "auth_expired":
-                conn.execute("UPDATE stores SET status = 'auth_expired' WHERE id = ?", (row["id"],))
-                updated += 1
+            # 校验生意参谋登录态（仅已配置档案的店铺，单店容错，失败不影响巡检）
+            if has_profile(row["id"]):
+                try:
+                    check_sycm_login(dict(row))
+                    _meta_set(conn, f"store_{row['id']}_sycm_status", "ok")
+                    _meta_set(conn, f"store_{row['id']}_sycm_error", "")
+                except SycmError as exc:
+                    _meta_set(conn, f"store_{row['id']}_sycm_status", "error")
+                    _meta_set(conn, f"store_{row['id']}_sycm_error", str(exc)[:300])
+                _meta_set(conn, f"store_{row['id']}_sycm_checked_at", _fmt(_now()))
         _meta_set(conn, "stores_last_inspect", _fmt(_now()))
         conn.commit()
         return updated
@@ -228,18 +137,6 @@ def run_inspect_once() -> int:
 
 class StoreIn(BaseModel):
     name: str
-    owner: str = ""
-    category: str = ""
-    level: str = ""
-    location: str = ""
-    dsr_desc: float = 0
-    dsr_service: float = 0
-    dsr_logistics: float = 0
-    auth_expires_at: str = ""
-
-
-class StatusIn(BaseModel):
-    status: str
 
 
 class CurrentIn(BaseModel):
@@ -252,6 +149,10 @@ class SycmConfigIn(BaseModel):
     cookie: str = ""
 
 
+class BindCookiesIn(BaseModel):
+    cookies: str = ""
+
+
 def _get_store_or_404(db, store_id: int):
     row = db.execute("SELECT * FROM stores WHERE id = ?", (store_id,)).fetchone()
     if not row:
@@ -259,34 +160,12 @@ def _get_store_or_404(db, store_id: int):
     return row
 
 
-def _validate(body: StoreIn) -> str:
+def _validate(body: StoreIn) -> None:
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="店铺名称不能为空")
     if len(name) > 50:
         raise HTTPException(status_code=400, detail="店铺名称不能超过 50 个字符")
-    if body.category and body.category not in CATEGORIES:
-        raise HTTPException(status_code=400, detail="主营类目不正确")
-    if body.level and body.level not in LEVELS:
-        raise HTTPException(status_code=400, detail="店铺等级不正确")
-    for label, value in (("描述", body.dsr_desc), ("服务", body.dsr_service), ("物流", body.dsr_logistics)):
-        if not (0 <= value <= 5):
-            raise HTTPException(status_code=400, detail=f"DSR{label}评分需在 0-5 之间")
-    expires = body.auth_expires_at.strip()
-    if expires:
-        try:
-            _parse(expires)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="授权到期时间格式不正确")
-    return expires
-
-
-def _mask_cookie(cookie: str) -> str:
-    if not cookie:
-        return ""
-    if len(cookie) <= 12:
-        return "****"
-    return cookie[:6] + "****" + cookie[-6:]
 
 
 def sync_store_row(db, row) -> dict:
@@ -321,6 +200,7 @@ def sync_store_row(db, row) -> dict:
         "SELECT * FROM store_daily_data WHERE store_id = ? AND data_date = ?",
         (row["id"], data_date),
     ).fetchone()
+    _meta_set(db, f"store_{row['id']}_last_sync", _fmt(_now()))
     return {
         "store_id": row["id"],
         "store_name": row["name"],
@@ -334,11 +214,13 @@ def sync_store_row(db, row) -> dict:
 
 
 def sync_all_stores(db, user=None) -> dict:
-    """同步所有配置了生意参谋凭证的店铺，逐店容错。"""
+    """同步所有店铺，未配置生意参谋档案的店铺显式记录失败原因，逐店容错。"""
     rows = db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
-    rows = [row for row in rows if has_profile(row["id"])]
     results = []
     for row in rows:
+        if not has_profile(row["id"]):
+            results.append({"store_id": row["id"], "store_name": row["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             item = sync_store_row(db, row)
             results.append(
@@ -352,7 +234,7 @@ def sync_all_stores(db, user=None) -> dict:
 @router.get("")
 def list_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
     rows = _visible_rows(db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall(), user)
-    return {"items": [_payload(row) for row in rows]}
+    return {"items": [_payload(row, db) for row in rows]}
 
 
 @router.post("")
@@ -361,29 +243,19 @@ def create_store(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    expires = _validate(body)
-    if not expires:
-        expires = _fmt(_now() + timedelta(days=90))
+    _validate(body)
     now = _fmt(_now())
     cur = db.execute(
         """
-        INSERT INTO stores (name, owner, category, level, location, dsr_desc, dsr_service, dsr_logistics, status, auth_expires_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+        INSERT INTO stores (name, status, created_at)
+        VALUES (?, 'active', ?)
         """,
         (
             body.name.strip(),
-            body.owner.strip(),
-            body.category.strip(),
-            body.level.strip(),
-            body.location.strip(),
-            body.dsr_desc,
-            body.dsr_service,
-            body.dsr_logistics,
-            expires,
             now,
         ),
     )
-    item = _payload(_get_store_or_404(db, cur.lastrowid))
+    item = _payload(_get_store_or_404(db, cur.lastrowid), db)
     _log(db, user, "bind", item["name"], "绑定店铺")
     return {"item": item}
 
@@ -398,27 +270,19 @@ def update_store(
     target = _get_store_or_404(db, store_id)
     if not can_access_store(user, store_id):
         raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
-    expires = _validate(body) or target["auth_expires_at"]
+    _validate(body)
     db.execute(
         """
         UPDATE stores
-        SET name=?, owner=?, category=?, level=?, location=?, dsr_desc=?, dsr_service=?, dsr_logistics=?, auth_expires_at=?
+        SET name=?
         WHERE id=?
         """,
         (
             body.name.strip(),
-            body.owner.strip(),
-            body.category.strip(),
-            body.level.strip(),
-            body.location.strip(),
-            body.dsr_desc,
-            body.dsr_service,
-            body.dsr_logistics,
-            expires,
             store_id,
         ),
     )
-    item = _payload(_get_store_or_404(db, store_id))
+    item = _payload(_get_store_or_404(db, store_id), db)
     _log(db, user, "edit", item["name"], "编辑店铺信息")
     return {"item": item}
 
@@ -434,45 +298,16 @@ def delete_store(
         raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
     db.execute("UPDATE users SET current_store_id = NULL WHERE current_store_id = ?", (store_id,))
     db.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+    # 清理该店铺的 meta 残留（同步时间/登录状态），避免占位店删除后留垃圾
+    for key in (
+        f"store_{store_id}_last_sync",
+        f"store_{store_id}_sycm_status",
+        f"store_{store_id}_sycm_error",
+        f"store_{store_id}_sycm_checked_at",
+    ):
+        db.execute("DELETE FROM meta WHERE key = ?", (key,))
     _log(db, user, "unbind", target["name"], "解绑店铺")
     return {"ok": True}
-
-
-@router.post("/{store_id}/auth")
-def refresh_auth(
-    store_id: int,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    target = _get_store_or_404(db, store_id)
-    if not can_access_store(user, store_id):
-        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
-    db.execute(
-        "UPDATE stores SET status = 'active', auth_expires_at = ? WHERE id = ?",
-        (_fmt(_now() + timedelta(days=90)), store_id),
-    )
-    item = _payload(_get_store_or_404(db, store_id))
-    _log(db, user, "refresh_auth", item["name"], "刷新授权（90 天）")
-    return {"item": item}
-
-
-@router.post("/{store_id}/status")
-def set_status(
-    store_id: int,
-    body: StatusIn,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    if body.status not in STATUSES:
-        raise HTTPException(status_code=400, detail="状态只能是 active、auth_error 或 stopped")
-    target = _get_store_or_404(db, store_id)
-    if not can_access_store(user, store_id):
-        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
-    db.execute("UPDATE stores SET status = ? WHERE id = ?", (body.status, store_id))
-    label = {"active": "启用", "stopped": "停用", "auth_error": "标记授权异常"}[body.status]
-    item = _payload(_get_store_or_404(db, store_id))
-    _log(db, user, "status", item["name"], label)
-    return {"item": item}
 
 
 @router.put("/{store_id}/sycm")
@@ -491,7 +326,7 @@ def update_store_sycm(
         (username, password, cookie, store_id),
     )
     _log(db, user, "配置生意参谋", row["name"], "更新生意参谋凭证")
-    return {"item": _payload(_get_store_or_404(db, store_id))}
+    return {"item": _payload(_get_store_or_404(db, store_id), db)}
 
 
 @router.post("/{store_id}/sycm/test")
@@ -504,7 +339,13 @@ def test_store_sycm(
     try:
         check_sycm_login(dict(row))
     except SycmError as exc:
+        _meta_set(db, f"store_{store_id}_sycm_status", "error")
+        _meta_set(db, f"store_{store_id}_sycm_error", str(exc)[:300])
+        _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _meta_set(db, f"store_{store_id}_sycm_status", "ok")
+    _meta_set(db, f"store_{store_id}_sycm_error", "")
+    _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
     return {"ok": True}
 
 
@@ -521,8 +362,71 @@ def bind_store_sycm(
     try:
         result = bind_login(dict(row))
     except SycmError as exc:
+        # 登录失败/取消：若该店铺尚无登录档案（=绑定流程中创建的占位店），自动删除，
+        # 避免前端未关弹窗/请求中断时残留"幽灵店铺"
+        if not has_profile(store_id):
+            db.execute("UPDATE users SET current_store_id = NULL WHERE current_store_id = ?", (store_id,))
+            db.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+            db.commit()  # get_db 在异常时不会自动 commit，需显式提交
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _log(db, user, "sycm_bind", row["name"], "打开浏览器绑定生意参谋登录")
+    _meta_set(db, f"store_{store_id}_sycm_status", "ok")
+    _meta_set(db, f"store_{store_id}_sycm_error", "")
+    _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
+    return {"ok": True, "store_id": row["id"], "metrics": result.get("metrics")}
+
+
+@router.post("/{store_id}/sycm/bind-from-browser")
+def bind_store_sycm_from_browser(
+    store_id: int,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """不弹窗：读取当前 Chrome/Edge 已登录的生意参谋登录态并保存档案。"""
+    row = _get_store_or_404(db, store_id)
+    if not can_access_store(user, store_id):
+        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    try:
+        result = bind_login_from_browser(dict(row))
+    except SycmError as exc:
+        if not has_profile(store_id):
+            db.execute("UPDATE users SET current_store_id = NULL WHERE current_store_id = ?", (store_id,))
+            db.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+            db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _log(db, user, "sycm_bind_browser", row["name"], "从当前浏览器读取生意参谋登录态")
+    _meta_set(db, f"store_{store_id}_sycm_status", "ok")
+    _meta_set(db, f"store_{store_id}_sycm_error", "")
+    _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
+    return {"ok": True, "store_id": row["id"], "metrics": result.get("metrics")}
+
+
+@router.post("/{store_id}/sycm/bind-from-cookies")
+def bind_store_sycm_from_cookies(
+    store_id: int,
+    body: BindCookiesIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """不弹窗：粘贴登录态 cookie 保存档案。"""
+    row = _get_store_or_404(db, store_id)
+    if not can_access_store(user, store_id):
+        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    text = (body.cookies or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="请先复制登录态再粘贴")
+    try:
+        result = bind_login_from_cookies(dict(row), text)
+    except SycmError as exc:
+        if not has_profile(store_id):
+            db.execute("UPDATE users SET current_store_id = NULL WHERE current_store_id = ?", (store_id,))
+            db.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+            db.commit()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _log(db, user, "sycm_bind_cookies", row["name"], "粘贴登录态绑定生意参谋")
+    _meta_set(db, f"store_{store_id}_sycm_status", "ok")
+    _meta_set(db, f"store_{store_id}_sycm_error", "")
+    _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
     return {"ok": True, "store_id": row["id"], "metrics": result.get("metrics")}
 
 
@@ -562,9 +466,12 @@ def sync_history(
         days = 30
     today = date_cls.today()
     dates = [(today - timedelta(days=i)).isoformat() for i in range(1, days + 1)]
-    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
     results = []
     for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": PROFILE_MISSING_MSG})
+            continue
         total = 0
         err = None
         for target in dates:
@@ -592,14 +499,16 @@ def sync_history(
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
 
-@router.post("/sync-hourly")
 def sync_hourly_all(db) -> dict:
-    """同步生意参谋今日/昨日分时数据到 store_hourly_data（后台定时与接口共用）。"""
+    """同步生意参谋今日/昨日分时数据到 store_hourly_data（后台定时直接调用，勿加路由装饰器）。"""
     from backend.app.core.sycm import SycmError, fetch_hourly
 
-    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
     results = []
     for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             items = fetch_hourly(store)
             now = _fmt(_now())
@@ -640,6 +549,53 @@ def sync_hourly(
     return result
 
 
+def sync_items_daily_all(db, days: int = 7) -> dict:
+    """同步近 N 天商品销售排行到 store_item_daily（经营日报 TOP 商品来源）。
+
+    后台每日定时调用（勿加路由装饰器），单店容错。返回 {"results", "total", "ok", "days"}。
+    """
+    from datetime import date as date_cls
+    from backend.app.core.sycm import SycmError, fetch_item_sales
+
+    if not (1 <= days <= 30):
+        days = 7
+    today = date_cls.today()
+    dates = [(today - timedelta(days=offset)).isoformat() for offset in range(1, days + 1)]
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
+    results = []
+    for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": PROFILE_MISSING_MSG})
+            continue
+        total_rows = 0
+        err = None
+        for target in dates:
+            try:
+                items = fetch_item_sales(store, target)
+                now = _fmt(_now())
+                for it in items:
+                    db.execute(
+                        "INSERT INTO store_item_daily (store_id, item_id, item_title, image, data_date, sales, orders, buyers, visitors, pv, conversion_rate, add_cart, refund_amount, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(store_id, item_id, data_date) DO UPDATE SET "
+                        "item_title = excluded.item_title, image = excluded.image, sales = excluded.sales, "
+                        "orders = excluded.orders, buyers = excluded.buyers, visitors = excluded.visitors, "
+                        "pv = excluded.pv, conversion_rate = excluded.conversion_rate, "
+                        "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount",
+                        (
+                            store["id"], it["item_id"], it["item_title"], it.get("image", ""), target,
+                            it["sales"], it["orders"], it["buyers"], it.get("visitors", 0), it.get("pv", 0),
+                            it.get("conversion_rate", 0), it.get("add_cart", 0), it.get("refund_amount", 0), now,
+                        ),
+                    )
+                total_rows += len(items)
+            except SycmError as exc:
+                err = str(exc)
+                break
+        results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total_rows, "error": err})
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
+
+
 @router.post("/sync-items")
 def sync_items(
     date: str = "",
@@ -677,9 +633,12 @@ def sync_items(
             raise HTTPException(status_code=400, detail="日期格式不正确（应为 YYYY-MM-DD）") from exc
     else:
         dates = [(today - timedelta(days=offset)).isoformat() for offset in range(1, days + 1)]
-    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
     results = []
     for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": PROFILE_MISSING_MSG})
+            continue
         total_rows = 0
         err = None
         for target in dates:
@@ -710,14 +669,16 @@ def sync_items(
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
 
-@router.post("/sync-items-realtime")
 def sync_items_realtime_all(db) -> dict:
-    """同步今日实时商品排行到 store_item_realtime（后台定时与接口共用）。"""
+    """同步今日实时商品排行到 store_item_realtime（后台定时直接调用，勿加路由装饰器）。"""
     from backend.app.core.sycm import SycmError, fetch_item_realtime
 
-    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
     results = []
     for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
         try:
             items = fetch_item_realtime(store)
             now = _fmt(_now())
@@ -761,7 +722,7 @@ def get_current_store(user: dict = Depends(get_current_user), db=Depends(get_db)
     ).fetchone()
     if row and not can_access_store(user, row["id"]):
         row = None
-    return {"store": _payload(row) if row else None}
+    return {"store": _payload(row, db) if row else None}
 
 
 @router.post("/current")
@@ -778,82 +739,6 @@ def set_current_store(
     if body.store_id is not None:
         _log(db, user, "current", target["name"], "切换当前店铺")
     return {"ok": True}
-
-
-@router.get("/alerts")
-def get_alerts(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
-    items = [item for item in _compute_alerts(db) if can_access_store(user, item["store_id"])]
-    return {"items": items, "inspected_at": _meta_get(db, "stores_last_inspect")}
-
-
-@router.post("/inspect")
-def inspect_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
-    updated = run_inspect_once()
-    alerts = _compute_alerts(db)
-    _log(db, user, "inspect", "", f"巡检：更新 {updated} 家店铺，共 {len(alerts)} 条提醒")
-    return {
-        "ok": True,
-        "inspected_at": _meta_get(db, "stores_last_inspect"),
-        "updated": updated,
-        "alerts_count": len(alerts),
-    }
-
-
-@router.get("/compare")
-def compare_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
-    today = date_cls.today()
-    rows = _visible_rows(db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall(), user)
-    items = []
-    for row in rows:
-        items.append(
-            {
-                "store_id": row["id"],
-                "name": row["name"],
-                "display_status": _display_status(row),
-                **_metrics_for_day(db, row["id"], today),
-            }
-        )
-    return {"items": items}
-
-
-@router.get("/{store_id}/metrics")
-def store_metrics(
-    store_id: int,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    row = _get_store_or_404(db, store_id)
-    if not can_access_store(user, store_id):
-        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
-    today = date_cls.today()
-    trend = []
-    for offset in range(13, -1, -1):
-        day = today - timedelta(days=offset)
-        trend.append({"date": day.isoformat(), **_metrics_for_day(db, store_id, day)})
-
-    sales_7d = sum(_metrics_for_day(db, store_id, today - timedelta(days=offset))["sales"] for offset in range(7))
-    orders_7d = sum(_metrics_for_day(db, store_id, today - timedelta(days=offset))["orders"] for offset in range(7))
-    prev_sales_7d = sum(
-        _metrics_for_day(db, store_id, today - timedelta(days=offset))["sales"] for offset in range(7, 14)
-    )
-    today_metrics = _metrics_for_day(db, store_id, today)
-    change = (
-        round((sales_7d - prev_sales_7d) / prev_sales_7d * 100, 1)
-        if prev_sales_7d
-        else 0.0
-    )
-
-    return {
-        "store": _payload(row),
-        "today": today_metrics,
-        "summary": {
-            "sales_7d": round(sales_7d, 2),
-            "orders_7d": orders_7d,
-            "avg_refund_rate": 0.0,
-            "sales_change_7d": change,
-        },
-        "trend": trend,
-    }
 
 
 @router.get("/logs")

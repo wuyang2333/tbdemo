@@ -63,20 +63,20 @@ export function BoardPage() {
       ) : (
         <>
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日销售额" value={report?.today.sales ?? 0} precision={0} prefix="¥" valueStyle={{ color: "#60a5fa" }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日访客" value={report?.today.visitors ?? 0} valueStyle={{ color: "#34d399" }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日订单" value={report?.today.orders ?? 0} valueStyle={{ color: "#fbbf24" }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日转化率" value={report?.today.conversion_rate ?? 0} precision={2} suffix="%" valueStyle={{ color: "#f472b6" }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日推广花费" value={report?.promo_today.spend ?? 0} precision={0} prefix="¥" valueStyle={{ color: "#f87171" }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日推广 ROI" value={report?.promo_today.roi ?? 0} precision={2} valueStyle={{ color: "#a78bfa" }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日销售额" value={report?.today.sales ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "#60a5fa"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日访客" value={report?.today.visitors ?? 0} styles={{ content: {  color: "#34d399"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日订单" value={report?.today.orders ?? 0} styles={{ content: {  color: "#fbbf24"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日转化率" value={report?.today.conversion_rate ?? 0} precision={2} suffix="%" styles={{ content: {  color: "#f472b6"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日推广花费" value={report?.promo_today.spend ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "#f87171"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日推广 ROI" value={report?.promo_today.roi ?? 0} precision={2} styles={{ content: {  color: "#a78bfa"  } }} /></Card></Col>
           </Row>
 
           <Row gutter={[16, 16]}>
             <Col xs={24} md={8}>
               <Card title="月度目标" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}>
-                <Statistic title="已达成" value={goal?.sales ?? 0} precision={0} prefix="¥" valueStyle={{ color: "#34d399", fontSize: 28 }} />
+                <Statistic title="已达成" value={goal?.sales ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "#34d399", fontSize: 28  } }} />
                 <div style={{ margin: "10px 0" }}>
-                  <Progress percent={Math.min(goal?.progress_pct ?? 0, 100)} showInfo={false} strokeColor="#34d399" trailColor="rgba(255,255,255,0.15)" />
+                  <Progress percent={Math.min(goal?.progress_pct ?? 0, 100)} showInfo={false} strokeColor="#34d399" railColor="rgba(255,255,255,0.15)" />
                 </div>
                 <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 13 }}>
                   目标 {goal ? fmt(goal.goal) : "未设置"} · 进度 {(goal?.progress_pct ?? 0).toFixed(1)}% · 预测 {goal ? fmt(goal.forecast) : "—"}

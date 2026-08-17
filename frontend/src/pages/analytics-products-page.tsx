@@ -5,6 +5,7 @@ import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
@@ -222,10 +223,12 @@ export function AnalyticsProductsPage() {
       const promoRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync?mode=${promoMode}`);
       const promoItemsRes = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(`/promotions/sync-items?mode=${promoMode}`);
       const label = view === "realtime" ? "实时商品" : view === "yesterday" ? "昨日商品" : range ? `${range[0]}~${range[1]} 商品` : "商品";
-      message.success(`同步完成：店铺 ${storeRes.data.ok}/${storeRes.data.total}，${label} ${itemsRes.data.ok}/${itemsRes.data.total} 家，推广 ${promoRes.data.ok}/${promoRes.data.total} 家，商品推广 ${promoItemsRes.data.ok}/${promoItemsRes.data.total} 家`);
-      [...storeRes.data.results.filter((r) => !r.ok), ...itemsRes.data.results.filter((r) => !r.ok), ...promoRes.data.results.filter((r) => !r.ok), ...promoItemsRes.data.results.filter((r) => !r.ok)]
-        .slice(0, 3)
-        .forEach((r) => message.warning(`${r.store_name}：${r.error || "同步失败"}`));
+      showSyncFeedback(`同步（${label}）`, [
+        { ok: storeRes.data.ok, total: storeRes.data.total, results: storeRes.data.results },
+        { ok: itemsRes.data.ok, total: itemsRes.data.total, results: itemsRes.data.results },
+        { ok: promoRes.data.ok, total: promoRes.data.total, results: promoRes.data.results },
+        { ok: promoItemsRes.data.ok, total: promoItemsRes.data.total, results: promoItemsRes.data.results },
+      ]);
       await load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -734,11 +737,11 @@ export function AnalyticsProductsPage() {
         width={640}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {detailLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="AI 正在分析该商品…" />
+            <Spin description="AI 正在分析该商品…" />
           </div>
         ) : detailResult ? (
           <div>
@@ -840,7 +843,7 @@ export function AnalyticsProductsPage() {
         width={620}
         open={trendOpen}
         onClose={() => setTrendOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         {trendItem && (
           <div style={{ marginBottom: 12 }}>
@@ -855,7 +858,7 @@ export function AnalyticsProductsPage() {
         />
         {trendLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="加载趋势数据…" />
+            <Spin description="加载趋势数据…" />
           </div>
         ) : trendData.length ? (
           <div>
@@ -890,7 +893,7 @@ export function AnalyticsProductsPage() {
         width={700}
         open={promoOpen}
         onClose={() => setPromoOpen(false)}
-        destroyOnClose
+        destroyOnHidden
       >
         <Segmented
           options={[
@@ -904,7 +907,7 @@ export function AnalyticsProductsPage() {
         />
         {promoLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin tip="加载推广数据…" />
+            <Spin description="加载推广数据…" />
           </div>
         ) : (
           <div>

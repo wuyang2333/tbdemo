@@ -35,6 +35,7 @@ export function canAccessModule(user: AuthUser | null, id: string): boolean {
   if (id === "dashboard" || id === "profile") return true;
   if (id === "accounts") return user.role === "admin" || user.role === "super_admin";
   if (id === "logs") return user.role === "admin" || user.role === "super_admin";
+  if (id === "settings") return user.role === "admin" || user.role === "super_admin";
   if (user.role === "admin" || user.role === "super_admin" || user.allowed_modules == null) return true;
   return user.allowed_modules.includes(id);
 }
