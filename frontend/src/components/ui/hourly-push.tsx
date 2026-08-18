@@ -134,22 +134,22 @@ export function HourlyPushButton() {
       >
         <div style={{ display: "grid", gap: 14 }}>
           <div>
-            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>启用</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>开启后每小时自动检查上个小时数据，触发规则按所选渠道推送</span></div>
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>启用</span> <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ops-text-3)" }}>开启后每小时自动检查上个小时数据，触发规则按所选渠道推送</span></div>
             <Switch checked={cfg.enabled} onChange={(v) => setCfg((p) => ({ ...p, enabled: v }))} checkedChildren="开" unCheckedChildren="关" />
           </div>
           <div>
-            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>推送渠道</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>可二选一或同时推送</span></div>
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>推送渠道</span> <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ops-text-3)" }}>可二选一或同时推送</span></div>
             <Select style={{ width: "100%" }} options={CHANNEL_OPTIONS} value={cfg.channel} onChange={(channel) => setCfg((p) => ({ ...p, channel }))} />
           </div>
           {cfg.channel !== "webhook" && (
             <div>
-              <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>pushplus Token</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>pushplus.plus 绑定微信后获取</span></div>
+              <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>pushplus Token</span> <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ops-text-3)" }}>pushplus.plus 绑定微信后获取</span></div>
               <Input placeholder="pushplus token" value={cfg.token} onChange={(e) => setCfg((p) => ({ ...p, token: e.target.value }))} />
             </div>
           )}
           {cfg.channel !== "pushplus" && (
             <div>
-              <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>群机器人 Webhook</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>钉钉 / 企业微信通用</span></div>
+              <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>群机器人 Webhook</span> <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ops-text-3)" }}>钉钉 / 企业微信通用</span></div>
               <Input placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." value={cfg.webhook} onChange={(e) => setCfg((p) => ({ ...p, webhook: e.target.value }))} />
             </div>
           )}
@@ -158,7 +158,7 @@ export function HourlyPushButton() {
             {cfg.rules.length === 0 && <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>还没有规则，添加一条试试。</Text>}
             <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
               {cfg.rules.map((r) => (
-                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", borderRadius: 8, padding: "6px 10px" }}>
+                <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius-sm)", padding: "6px 10px" }}>
                   <Text style={{ fontSize: 13, flex: 1 }}>
                     {r.scene ? `[${SCENE_OPTIONS.find((x) => x.value === r.scene)?.label || r.scene}] ` : ""}
                     {ruleText({ id: r.id, module: "hour", field: r.field, operator: r.operator as "cycle_drop_pct" | "cycle_up_pct" | "lt" | "gt", threshold: r.threshold, enabled: r.enabled })}

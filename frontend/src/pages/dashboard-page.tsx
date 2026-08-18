@@ -231,7 +231,7 @@ export function DashboardPage() {
 
   return (
     <div>
-      <div className="ops-hero" style={{ borderRadius: 18, padding: "30px 34px" }}>
+      <div className="ops-hero" style={{ borderRadius: "var(--ops-radius-lg)", padding: "30px 34px" }}>
         <Row align="middle" justify="space-between" gutter={[24, 20]}>
           <Col xs={24} lg={16}>
             <Space size={8} align="center">
@@ -307,7 +307,7 @@ export function DashboardPage() {
           const change = statsFailed ? "—" : formatChange(value, typeof prev === "number" ? prev : undefined);
           const isUp = change.startsWith("+");
           const isDown = change.startsWith("-");
-          const changeColor = isUp ? "#34c759" : isDown ? "#ff3b30" : "var(--ops-text-secondary)";
+          const changeColor = isUp ? "var(--ops-up)" : isDown ? "var(--ops-down)" : "var(--ops-text-secondary)";
           return (
             <Col key={item.key} xs={24} sm={12} md={8} xl={4}>
               <div className="ops-kpi-card">
@@ -367,10 +367,10 @@ export function DashboardPage() {
                 近 14 天趋势
               </Text>
               <Space size={6}>
-                <Tag color="#ff5000" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                <Tag color="orange" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
                   销售额
                 </Tag>
-                <Tag color="#1677ff" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                <Tag color="orange" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
                   订单数
                 </Tag>
               </Space>
@@ -502,7 +502,7 @@ export function DashboardPage() {
                 }}
               >
                 <Space size={10} align="center">
-                  <span className="ops-module-icon" style={{ width: 30, height: 30, borderRadius: 8, fontSize: 14 }}>
+                  <span className="ops-module-icon" style={{ width: 30, height: 30, borderRadius: "var(--ops-radius-sm)", fontSize: 14 }}>
                     {row.icon}
                   </span>
                   <Text type="secondary" style={{ fontSize: 13 }}>
@@ -525,7 +525,7 @@ export function DashboardPage() {
           <div
             style={{
               border: "1px solid var(--ops-border)",
-              borderRadius: 14,
+              borderRadius: "var(--ops-radius-lg)",
               background: "var(--ops-card-bg)",
               boxShadow: "var(--ops-shadow-sm)",
               padding: "14px 18px",
@@ -554,7 +554,7 @@ export function DashboardPage() {
       <Modal title="自定义看板" open={configOpen} onCancel={() => { setConfigOpen(false); loadConfig(); }} onOk={saveWidgets} okText="保存" width={440}>
         <Space orientation="vertical" size={8} style={{ width: "100%" }}>
           {(widgets ?? []).map((id, index) => (
-            <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--ops-border)", borderRadius: 10 }}>
+            <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)" }}>
               <Checkbox checked onChange={(event) => toggleWidget(id, event.target.checked)} />
               <Text style={{ flex: 1 }}>{WIDGET_OPTIONS.find((widget) => widget.id === id)?.label ?? id}</Text>
               <Button size="small" type="text" icon={<UpOutlined />} disabled={index === 0} onClick={() => moveWidget(id, -1)} />

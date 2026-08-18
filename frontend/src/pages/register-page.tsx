@@ -1,4 +1,4 @@
-﻿import {
+import {
   BarChartOutlined,
   KeyOutlined,
   LockOutlined,
@@ -72,8 +72,8 @@ export function RegisterPage() {
               style={{
                 width: 42,
                 height: 42,
-                borderRadius: 12,
-                background: BRAND.gradient,
+                borderRadius: "var(--ops-radius)",
+                background: BRAND.logoUrl ? "transparent" : BRAND.gradient,
                 color: "#fff",
                 fontSize: 21,
                 fontWeight: 800,
@@ -83,7 +83,11 @@ export function RegisterPage() {
                 boxShadow: "0 8px 24px rgba(255,80,0,0.45)",
               }}
             >
-              {BRAND.logoText}
+              {BRAND.logoUrl ? (
+                <img src={BRAND.logoUrl} alt="" style={{ width: "100%", height: "100%", borderRadius: "var(--ops-radius)", objectFit: "cover", display: "block" }} />
+              ) : (
+                (BRAND.name || "淘").slice(0, 1)
+              )}
             </span>
             <span>
               <div style={{ fontSize: 17, fontWeight: 700, lineHeight: "22px" }}>{BRAND.name}</div>
@@ -112,7 +116,7 @@ export function RegisterPage() {
                   alignItems: "center",
                   gap: 10,
                   padding: "11px 14px",
-                  borderRadius: 12,
+                  borderRadius: "var(--ops-radius)",
                   background: "rgba(255,255,255,0.07)",
                   border: "1px solid rgba(255,255,255,0.1)",
                   fontSize: 13,
@@ -131,7 +135,7 @@ export function RegisterPage() {
       <div className="ops-auth-form">
         <Card
           variant="borderless"
-          style={{ width: 420, maxWidth: "100%", borderRadius: 18 }}
+          style={{ width: 420, maxWidth: "100%", borderRadius: "var(--ops-radius-lg)" }}
           styles={{ body: { padding: "36px 40px 28px" } }}
         >
           <div style={{ marginBottom: 24 }}>

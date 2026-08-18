@@ -452,7 +452,19 @@ def sync_all(
     db=Depends(get_db),
 ) -> dict:
     result = sync_all_stores(db, user)
-    _log(db, user, "同步生意参谋", "全部店铺", f"同步完成：成功 {result['ok']} / 共 {result['total']}")
+    extras: list[str] = []
+    for name, fn in (("流量来源", sync_flow_source_all), ("今日退款", sync_refund_all)):
+        try:
+            r = fn(db)
+            db.commit()
+            extras.append(f"{name} {r['ok']}/{r['total']}")
+        except Exception as exc:  # noqa: BLE001
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            extras.append(f"{name} 失败:{exc}")
+    _log(db, user, "同步生意参谋", "全部店铺", f"同步完成：成功 {result['ok']} / 共 {result['total']}（{'，'.join(extras)}）")
     return result
 
 
@@ -576,17 +588,24 @@ def sync_items_daily_all(db, days: int = 7) -> dict:
                 now = _fmt(_now())
                 for it in items:
                     db.execute(
-                        "INSERT INTO store_item_daily (store_id, item_id, item_title, image, data_date, sales, orders, buyers, visitors, pv, conversion_rate, add_cart, refund_amount, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO store_item_daily (store_id, item_id, item_title, image, data_date, sales, orders, buyers, visitors, pv, conversion_rate, add_cart, refund_amount, pay_pct, item_clt_byr_cnt, uv_avg_value, stay_time_avg, itm_bounce_rate, se_guide_uv, se_guide_pay_byr_cnt, se_guide_pay_rate, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(store_id, item_id, data_date) DO UPDATE SET "
                         "item_title = excluded.item_title, image = excluded.image, sales = excluded.sales, "
                         "orders = excluded.orders, buyers = excluded.buyers, visitors = excluded.visitors, "
                         "pv = excluded.pv, conversion_rate = excluded.conversion_rate, "
-                        "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount",
+                        "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount, "
+                        "pay_pct = excluded.pay_pct, item_clt_byr_cnt = excluded.item_clt_byr_cnt, "
+                        "uv_avg_value = excluded.uv_avg_value, stay_time_avg = excluded.stay_time_avg, "
+                        "itm_bounce_rate = excluded.itm_bounce_rate, se_guide_uv = excluded.se_guide_uv, "
+                        "se_guide_pay_byr_cnt = excluded.se_guide_pay_byr_cnt, se_guide_pay_rate = excluded.se_guide_pay_rate",
                         (
                             store["id"], it["item_id"], it["item_title"], it.get("image", ""), target,
                             it["sales"], it["orders"], it["buyers"], it.get("visitors", 0), it.get("pv", 0),
-                            it.get("conversion_rate", 0), it.get("add_cart", 0), it.get("refund_amount", 0), now,
+                            it.get("conversion_rate", 0), it.get("add_cart", 0), it.get("refund_amount", 0),
+                            it.get("pay_pct", 0), it.get("item_clt_byr_cnt", 0), it.get("uv_avg_value", 0),
+                            it.get("stay_time_avg", 0), it.get("itm_bounce_rate", 0), it.get("se_guide_uv", 0),
+                            it.get("se_guide_pay_byr_cnt", 0), it.get("se_guide_pay_rate", 0), now,
                         ),
                     )
                 total_rows += len(items)
@@ -648,17 +667,24 @@ def sync_items(
                 now = _fmt(_now())
                 for it in items:
                     db.execute(
-                        "INSERT INTO store_item_daily (store_id, item_id, item_title, image, data_date, sales, orders, buyers, visitors, pv, conversion_rate, add_cart, refund_amount, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO store_item_daily (store_id, item_id, item_title, image, data_date, sales, orders, buyers, visitors, pv, conversion_rate, add_cart, refund_amount, pay_pct, item_clt_byr_cnt, uv_avg_value, stay_time_avg, itm_bounce_rate, se_guide_uv, se_guide_pay_byr_cnt, se_guide_pay_rate, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(store_id, item_id, data_date) DO UPDATE SET "
                         "item_title = excluded.item_title, image = excluded.image, sales = excluded.sales, "
                         "orders = excluded.orders, buyers = excluded.buyers, visitors = excluded.visitors, "
                         "pv = excluded.pv, conversion_rate = excluded.conversion_rate, "
-                        "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount",
+                        "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount, "
+                        "pay_pct = excluded.pay_pct, item_clt_byr_cnt = excluded.item_clt_byr_cnt, "
+                        "uv_avg_value = excluded.uv_avg_value, stay_time_avg = excluded.stay_time_avg, "
+                        "itm_bounce_rate = excluded.itm_bounce_rate, se_guide_uv = excluded.se_guide_uv, "
+                        "se_guide_pay_byr_cnt = excluded.se_guide_pay_byr_cnt, se_guide_pay_rate = excluded.se_guide_pay_rate",
                         (
                             store["id"], it["item_id"], it["item_title"], it.get("image", ""), target,
                             it["sales"], it["orders"], it["buyers"], it.get("visitors", 0), it.get("pv", 0),
-                            it.get("conversion_rate", 0), it.get("add_cart", 0), it.get("refund_amount", 0), now,
+                            it.get("conversion_rate", 0), it.get("add_cart", 0), it.get("refund_amount", 0),
+                            it.get("pay_pct", 0), it.get("item_clt_byr_cnt", 0), it.get("uv_avg_value", 0),
+                            it.get("stay_time_avg", 0), it.get("itm_bounce_rate", 0), it.get("se_guide_uv", 0),
+                            it.get("se_guide_pay_byr_cnt", 0), it.get("se_guide_pay_rate", 0), now,
                         ),
                     )
                 total_rows += len(items)
@@ -668,6 +694,57 @@ def sync_items(
         results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total_rows, "error": err})
     _log(db, user, "同步商品数据", "", f"{len(dates)} 天 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
+
+
+def sync_flow_source_all(db) -> dict:
+    """同步今日流量来源排行 Top 到 flow_source_top（后台定时调用）。"""
+    from backend.app.core.sycm import SycmError, fetch_shop_flow_source
+    today = date_cls.today().isoformat()
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
+    results = []
+    for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": PROFILE_MISSING_MSG})
+            continue
+        try:
+            items = fetch_shop_flow_source(store, today)
+            db.execute("DELETE FROM flow_source_top WHERE store_id = ? AND data_date = ?", (store["id"], today))
+            for it in items:
+                db.execute(
+                    "INSERT INTO flow_source_top (store_id, data_date, rank, source_name, uv, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (store["id"], today, it["rank"], it["source"], it["uv"], _fmt(_now())),
+                )
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
+        except SycmError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": str(exc)})
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+
+
+def sync_refund_all(db) -> dict:
+    """同步今日实时退款（生意参谋 首页-数据概括 退款金额-完结时间）到 refund_today（后台定时调用）。"""
+    from backend.app.core.sycm import SycmError, fetch_shop_refund
+    today = date_cls.today().isoformat()
+    stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall()]
+    results = []
+    for store in stores:
+        if not has_profile(store["id"]):
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": PROFILE_MISSING_MSG})
+            continue
+        try:
+            d = fetch_shop_refund(store)
+            db.execute(
+                "INSERT INTO refund_today (store_id, data_date, amount, pay_amt, rate, ord_rate, cycle, yest_amount, yest_pay_amt, yest_rate, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(store_id, data_date) DO UPDATE SET "
+                "amount = excluded.amount, pay_amt = excluded.pay_amt, rate = excluded.rate, ord_rate = excluded.ord_rate, "
+                "cycle = excluded.cycle, yest_amount = excluded.yest_amount, yest_pay_amt = excluded.yest_pay_amt, "
+                "yest_rate = excluded.yest_rate, updated_at = excluded.updated_at",
+                (store["id"], today, d["amount"], d["pay_amt"], d["rate"], d["ord_rate"], d["cycle"], d["yest_amount"], d["yest_pay_amt"], d["yest_rate"], d["update_time"] or _fmt(_now())),
+            )
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": 1})
+        except SycmError as exc:
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": str(exc)})
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 
 def sync_items_realtime_all(db) -> dict:
@@ -685,18 +762,22 @@ def sync_items_realtime_all(db) -> dict:
             now = _fmt(_now())
             for it in items:
                 db.execute(
-                    "INSERT INTO store_item_realtime (store_id, item_id, item_title, image, visitors, pv, buyers, orders, sales, conversion_rate, add_cart, refund_amount, visitors_cycle, pv_cycle, buyers_cycle, orders_cycle, sales_cycle, conversion_cycle, add_cart_cycle, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO store_item_realtime (store_id, item_id, item_title, image, visitors, pv, buyers, orders, sales, conversion_rate, add_cart, refund_amount, pay_pct, item_clt_byr_cnt, uv_avg_value, stay_time_avg, itm_bounce_rate, se_guide_uv, se_guide_pay_byr_cnt, se_guide_pay_rate, visitors_cycle, pv_cycle, buyers_cycle, orders_cycle, sales_cycle, conversion_cycle, add_cart_cycle, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(store_id, item_id) DO UPDATE SET "
                     "item_title = excluded.item_title, image = excluded.image, visitors = excluded.visitors, "
                     "pv = excluded.pv, buyers = excluded.buyers, orders = excluded.orders, "
                     "sales = excluded.sales, conversion_rate = excluded.conversion_rate, "
                     "add_cart = excluded.add_cart, refund_amount = excluded.refund_amount, "
+                    "pay_pct = excluded.pay_pct, item_clt_byr_cnt = excluded.item_clt_byr_cnt, "
+                    "uv_avg_value = excluded.uv_avg_value, stay_time_avg = excluded.stay_time_avg, "
+                    "itm_bounce_rate = excluded.itm_bounce_rate, se_guide_uv = excluded.se_guide_uv, "
+                    "se_guide_pay_byr_cnt = excluded.se_guide_pay_byr_cnt, se_guide_pay_rate = excluded.se_guide_pay_rate, "
                     "visitors_cycle = excluded.visitors_cycle, pv_cycle = excluded.pv_cycle, "
                     "buyers_cycle = excluded.buyers_cycle, orders_cycle = excluded.orders_cycle, "
                     "sales_cycle = excluded.sales_cycle, conversion_cycle = excluded.conversion_cycle, "
                     "add_cart_cycle = excluded.add_cart_cycle, updated_at = excluded.updated_at",
-                    (store["id"], it["item_id"], it["item_title"], it.get("image", ""), it["visitors"], it["pv"], it["buyers"], it["orders"], it["sales"], it["conversion_rate"], it.get("add_cart", 0), it.get("refund_amount", 0), it.get("visitors_cycle", 0), it.get("pv_cycle", 0), it.get("buyers_cycle", 0), it.get("orders_cycle", 0), it.get("sales_cycle", 0), it.get("conversion_cycle", 0), it.get("add_cart_cycle", 0), now),
+                    (store["id"], it["item_id"], it["item_title"], it.get("image", ""), it["visitors"], it["pv"], it["buyers"], it["orders"], it["sales"], it["conversion_rate"], it.get("add_cart", 0), it.get("refund_amount", 0), it.get("pay_pct", 0), it.get("item_clt_byr_cnt", 0), it.get("uv_avg_value", 0), it.get("stay_time_avg", 0), it.get("itm_bounce_rate", 0), it.get("se_guide_uv", 0), it.get("se_guide_pay_byr_cnt", 0), it.get("se_guide_pay_rate", 0), it.get("visitors_cycle", 0), it.get("pv_cycle", 0), it.get("buyers_cycle", 0), it.get("orders_cycle", 0), it.get("sales_cycle", 0), it.get("conversion_cycle", 0), it.get("add_cart_cycle", 0), now),
                 )
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
         except SycmError as exc:

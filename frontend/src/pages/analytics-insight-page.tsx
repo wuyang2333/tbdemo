@@ -40,9 +40,9 @@ interface InsightResult {
 }
 
 function ChangeBadge({ change, unit }: { change: number | null; unit: string }) {
-  if (change == null) return <span style={{ color: "rgba(128,128,128,0.55)", fontSize: 12 }}>—</span>;
+  if (change == null) return <span style={{ color: "var(--ops-text-3)", fontSize: 12 }}>—</span>;
   const up = change >= 0;
-  const color = up ? "#ff4d4f" : "#52c41a";
+  const color = up ? "var(--ops-up)" : "var(--ops-down)";
   const suffix = unit === "%" ? "%" : unit === "pp" ? "pp" : "";
   return (
     <span style={{ color, fontSize: 12, fontWeight: 600 }}>
@@ -71,7 +71,7 @@ function InsightSection({
         display: "flex",
         gap: 10,
         padding: "10px 14px",
-        borderRadius: 10,
+        borderRadius: "var(--ops-radius)",
         background: "var(--ops-card-bg-2)",
         border: "1px solid var(--ops-border)",
       }}
@@ -211,7 +211,7 @@ export function AnalyticsInsightPage() {
                     flex: "1 1 150px",
                     minWidth: 140,
                     padding: "10px 14px",
-                    borderRadius: 10,
+                    borderRadius: "var(--ops-radius)",
                     background: "var(--ops-card-bg-2)",
                     border: "1px solid var(--ops-border)",
                   }}
@@ -227,7 +227,7 @@ export function AnalyticsInsightPage() {
               <div
                 style={{
                   padding: "12px 16px",
-                  borderRadius: 10,
+                  borderRadius: "var(--ops-radius)",
                   background: "var(--ops-accent-soft)",
                   borderLeft: "3px solid var(--ops-accent)",
                   marginBottom: 12,
@@ -238,9 +238,9 @@ export function AnalyticsInsightPage() {
             )}
 
             <div style={{ display: "grid", gap: 10 }}>
-              <InsightSection icon={<CheckCircleOutlined />} color="#52c41a" title="亮点" items={result.sections.highlights} />
-              <InsightSection icon={<RobotOutlined />} color="#1677ff" title="推广表现" items={result.sections.promo} />
-              <InsightSection icon={<WarningOutlined />} color="#ff4d4f" title="风险" items={result.sections.risks} />
+              <InsightSection icon={<CheckCircleOutlined />} color="green" title="亮点" items={result.sections.highlights} />
+              <InsightSection icon={<RobotOutlined />} color="orange" title="推广表现" items={result.sections.promo} />
+              <InsightSection icon={<WarningOutlined />} color="red" title="风险" items={result.sections.risks} />
               <InsightSection icon={<BulbOutlined />} color="var(--ops-accent-light)" title="建议" items={result.sections.suggestions} />
             </div>
 
@@ -253,11 +253,11 @@ export function AnalyticsInsightPage() {
                 <div style={{ display: "grid", gap: 8, marginBottom: 12, maxHeight: 320, overflowY: "auto" }}>
                   {chat.map((m, i) =>
                     m.role === "user" ? (
-                      <div key={i} style={{ alignSelf: "flex-end", maxWidth: "80%", background: "var(--ops-accent-soft)", padding: "8px 12px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap" }}>
+                      <div key={i} style={{ alignSelf: "flex-end", maxWidth: "80%", background: "var(--ops-accent-soft)", padding: "8px 12px", borderRadius: "var(--ops-radius)", fontSize: 13, whiteSpace: "pre-wrap" }}>
                         {m.content}
                       </div>
                     ) : (
-                      <div key={i} style={{ alignSelf: "flex-start", maxWidth: "92%", background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", padding: "8px 12px", borderRadius: 10, fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                      <div key={i} style={{ alignSelf: "flex-start", maxWidth: "92%", background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", padding: "8px 12px", borderRadius: "var(--ops-radius)", fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
                         {m.content}
                       </div>
                     ),

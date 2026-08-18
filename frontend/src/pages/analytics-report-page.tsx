@@ -240,11 +240,11 @@ export function AnalyticsReportPage() {
         <div style={{ display: "grid", gap: 8 }}>
           {items.map((it, idx) => (
             <div key={it.item_id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 20, fontWeight: 700, color: idx < 3 ? "#fa8c16" : "rgba(128,128,128,0.7)" }}>{idx + 1}</span>
-              {it.image ? <img src={it.image} alt="" style={{ width: 34, height: 34, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 34, height: 34, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />}
+              <span style={{ width: 20, fontWeight: 700, color: idx < 3 ? "var(--ops-warn)" : "var(--ops-text-3)" }}>{idx + 1}</span>
+              {it.image ? <img src={it.image} alt="" style={{ width: 34, height: 34, borderRadius: "var(--ops-radius-xs)", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 34, height: 34, borderRadius: "var(--ops-radius-xs)", background: "var(--ops-card-bg-2)", flexShrink: 0 }} />}
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{it.item_title}</div>
-                <div style={{ fontSize: 11, color: "rgba(128,128,128,0.7)" }}>{fmtInt(it.orders)}单</div>
+                <div style={{ fontSize: 11, color: "var(--ops-text-3)" }}>{fmtInt(it.orders)}单</div>
               </div>
               <Text strong style={{ fontSize: 13 }}>{fmt(it.sales)}</Text>
             </div>
@@ -258,7 +258,7 @@ export function AnalyticsReportPage() {
     items.length === 0 ? (<Text type="secondary" style={{ fontSize: 12 }}>暂无分场景数据</Text>) : (
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
         {items.map((x) => (
-          <div key={x.scene} style={{ border: "1px solid var(--ops-border)", borderRadius: 8, padding: "8px 10px" }}>
+          <div key={x.scene} style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius-sm)", padding: "8px 10px" }}>
             <Text strong style={{ fontSize: 12 }}>{x.scene_name}</Text>
             <div style={{ fontSize: 12, marginTop: 4, color: "var(--ops-text-secondary)" }}>
               花费 {fmt(x.spend)} · 成交 {fmt(x.sales)}
@@ -324,11 +324,11 @@ export function AnalyticsReportPage() {
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}销售额`} value={data.today.sales} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.sales, data.yesterday.sales)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}订单`} value={data.today.orders} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.orders, data.yesterday.orders)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" styles={{ content: {  color: "#1677ff"  } }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" styles={{ content: {  color: "var(--ops-accent)"  } }} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}真实ROI`} value={realRoi} precision={2} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(realRoi, prevRealRoi)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="加购" value={data.add_cart} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{data.add_cart ? "次" : "—"}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" styles={{ content: {  color: "#ff4d4f"  } }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" styles={{ content: {  color: "var(--ops-danger)"  } }} /></Card></Col>
           </Row>
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
@@ -379,18 +379,18 @@ export function AnalyticsReportPage() {
             }
           >
             {analysisLoading ? (
-              <div style={{ textAlign: "center", padding: 40 }}><Spin description="AI 正在结合昨日数据生成经营分析…" /></div>
+              <div style={{ textAlign: "center", padding: 40 }}><Spin description="AI 正在结合数据生成经营分析，约需 30-60 秒，请稍候…" /></div>
             ) : currentAnalysis ? (
               <div style={{ display: "grid", gap: 10 }}>
                 {[
                   { key: "经营分析" as const, color: "var(--ops-accent-light)", bg: "var(--ops-accent-soft)" },
-                  { key: "推广分析" as const, color: "#1677ff", bg: "rgba(22,119,255,0.08)" },
-                  { key: "异常分析" as const, color: "#ff4d4f", bg: "rgba(255,77,79,0.08)" },
-                  { key: "总结" as const, color: "#52c41a", bg: "rgba(82,196,26,0.08)" },
-                  { key: "今日行动建议" as const, color: "#fa8c16", bg: "rgba(250,140,22,0.08)" },
+                  { key: "推广分析" as const, color: "var(--ops-accent)", bg: "rgba(255,122,31,0.08)" },
+                  { key: "异常分析" as const, color: "var(--ops-danger)", bg: "rgba(255,77,79,0.08)" },
+                  { key: "总结" as const, color: "var(--ops-success)", bg: "rgba(82,196,26,0.08)" },
+                  { key: "今日行动建议" as const, color: "var(--ops-warn)", bg: "rgba(250,140,22,0.08)" },
                 ].map((sec) =>
                   currentAnalysis.sections[sec.key] ? (
-                    <div key={sec.key} style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "12px 14px", background: sec.bg }}>
+                    <div key={sec.key} style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "12px 14px", background: sec.bg }}>
                       <Text strong style={{ color: sec.color }}>{sec.key}</Text>
                       <div style={{ fontSize: 13, lineHeight: 1.9, marginTop: 6, color: "var(--ops-text)", whiteSpace: "pre-wrap" }}>
                         {currentAnalysis.sections[sec.key]}
@@ -446,7 +446,7 @@ export function AnalyticsReportPage() {
             <Switch checked={pushCfg.enabled} onChange={(v) => setPushCfg((p) => ({ ...p, enabled: v }))} checkedChildren="开" unCheckedChildren="关" />
           </div>
           <div>
-            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>群机器人 Webhook</span> <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>钉钉/企业微信 自定义机器人地址</span></div>
+            <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>群机器人 Webhook</span> <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ops-text-3)" }}>钉钉/企业微信 自定义机器人地址</span></div>
             <Input placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." value={pushCfg.webhook} onChange={(e) => setPushCfg((p) => ({ ...p, webhook: e.target.value }))} />
           </div>
           <div style={{ display: "flex", gap: 16 }}>

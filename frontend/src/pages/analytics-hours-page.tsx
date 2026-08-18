@@ -58,10 +58,10 @@ function readHoursConfig() {
 }
 
 function ChangeBadge({ change }: { change: number | null | undefined }) {
-  if (change == null) return <span style={{ color: "rgba(128,128,128,0.55)", fontSize: 11 }}>—</span>;
+  if (change == null) return <span style={{ color: "var(--ops-text-3)", fontSize: 11 }}>—</span>;
   const up = change >= 0;
   return (
-    <span style={{ color: up ? "#ff4d4f" : "#52c41a", fontSize: 11, fontWeight: 600 }}>
+    <span style={{ color: up ? "var(--ops-up)" : "var(--ops-down)", fontSize: 11, fontWeight: 600 }}>
       {up ? "+" : "-"}
       {Math.abs(change).toFixed(1)}%
     </span>
@@ -135,19 +135,19 @@ function HourChart({
               flexDirection: "column",
               alignItems: "center",
               gap: 2,
-              borderRadius: 4,
+              borderRadius: "var(--ops-radius-xs)",
               background: hover === idx ? "var(--ops-accent-soft)" : "transparent",
               transition: "background 0.15s",
             }}
           >
             {peakHours.includes(it.hour) && (
-              <div style={{ fontSize: 9, color: peakHours[0] === it.hour ? "#fa8c16" : "rgba(128,128,128,0.55)", lineHeight: 1 }}>★</div>
+              <div style={{ fontSize: 9, color: peakHours[0] === it.hour ? "var(--ops-warn)" : "var(--ops-text-3)", lineHeight: 1 }}>★</div>
             )}
             {anomaly ? anomaly(it, idx) : null}
             <div style={{ width: "100%", flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center" }}>
               {barSlots(it, idx)}
             </div>
-            <div style={{ fontSize: 9, color: "rgba(128,128,128,0.8)", whiteSpace: "nowrap" }}>{it.hour.slice(0, 2)}时</div>
+            <div style={{ fontSize: 9, color: "var(--ops-text-3)", whiteSpace: "nowrap" }}>{it.hour.slice(0, 2)}时</div>
           </div>
         ))}
       </div>
@@ -158,9 +158,9 @@ function HourChart({
             top: 0,
             left: `clamp(64px, calc(${(hover + 0.5) * (100 / n)}%), calc(100% - 64px))`,
             transform: "translateX(-50%)",
-            background: "rgba(18,21,29,0.96)",
+            background: "var(--ops-panel)",
             border: "1px solid var(--ops-border-strong)",
-            borderRadius: 8,
+            borderRadius: "var(--ops-radius-sm)",
             padding: "6px 10px",
             fontSize: 12,
             lineHeight: 1.7,
@@ -435,7 +435,7 @@ export function AnalyticsHoursPage() {
                   flex: "1 1 140px",
                   minWidth: 130,
                   padding: "10px 14px",
-                  borderRadius: 10,
+                  borderRadius: "var(--ops-radius)",
                   background: "var(--ops-card-bg-2)",
                   border: "1px solid var(--ops-border)",
                 }}
@@ -458,7 +458,7 @@ export function AnalyticsHoursPage() {
               <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
                 <div style={{ display: "grid", gap: 4 }}>
                   {hourAlerts.map((a, i) => (
-                    <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : a.level === "success" ? "#52c41a" : "#fa8c16" }}>
+                    <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "var(--ops-danger)" : a.level === "success" ? "var(--ops-success)" : "var(--ops-warn)" }}>
                       {a.level === "error" ? "⚠️ " : a.level === "success" ? "✅ " : "❗ "}
                       [{a.type}] {a.message}
                     </div>
@@ -476,7 +476,7 @@ export function AnalyticsHoursPage() {
                 <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
               }
             >
-              <div style={{ fontSize: 13, color: "rgba(128,128,128,0.6)" }}>
+              <div style={{ fontSize: 13, color: "var(--ops-text-3)" }}>
                 暂无时段预警（未达到 建议投放ROI≥{alertConfig.hour.roi_high}、或 ROI低于{alertConfig.hour.roi_low} 的条件）
               </div>
             </Card>
@@ -486,12 +486,12 @@ export function AnalyticsHoursPage() {
             <LineChart
               labels={items.map((p) => p.hour.slice(0, 2))}
               series={[
-                { name: "转化率", color: "#1677ff", values: items.map((p) => p.conversion_rate), format: (v: number) => `${v.toFixed(2)}%` },
+                { name: "转化率", color: "var(--ops-accent)", values: items.map((p) => p.conversion_rate), format: (v: number) => `${v.toFixed(2)}%` },
               ]}
             />
             {items.length > 0 && (
               <Space style={{ marginTop: 8 }} wrap>
-                <Tag color="#1677ff">转化率最高 {items.reduce((a, b) => (b.conversion_rate > a.conversion_rate ? b : a)).hour}</Tag>
+                <Tag color="orange">转化率最高 {items.reduce((a, b) => (b.conversion_rate > a.conversion_rate ? b : a)).hour}</Tag>
                 <Tag>转化率最低 {items.reduce((a, b) => (b.conversion_rate < a.conversion_rate ? b : a)).hour}</Tag>
               </Space>
             )}
@@ -515,8 +515,8 @@ export function AnalyticsHoursPage() {
               anomaly={(it) => {
                 const c = it.sales_cycle;
                 if (c == null) return null;
-                if (c <= -alertConfig.hour.drop_pct) return <div title={`销售额环比 ${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff4d4f", marginBottom: 1 }} />;
-                if (c >= alertConfig.hour.surge_pct) return <div title={`销售额环比 +${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "#fa8c16", marginBottom: 1 }} />;
+                if (c <= -alertConfig.hour.drop_pct) return <div title={`销售额环比 ${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--ops-down)", marginBottom: 1 }} />;
+                if (c >= alertConfig.hour.surge_pct) return <div title={`销售额环比 +${c.toFixed(1)}%`} style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--ops-warn)", marginBottom: 1 }} />;
                 return null;
               }}
               barSlots={(it, idx) => {
@@ -524,9 +524,9 @@ export function AnalyticsHoursPage() {
                 return (
                   <>
                     {compare && (
-                      <div style={{ width: "40%", height: `${(prev / maxPrevMetric) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prev ? 2 : 0 }} />
+                      <div style={{ width: "40%", height: `${(prev / maxPrevMetric) * 100}%`, background: "var(--ops-text-3)", borderRadius: "4px 4px 0 0", minHeight: prev ? 2 : 0 }} />
                     )}
-                    <div style={{ width: "40%", height: `${(metricValue(it) / metricMax) * 100}%`, background: "linear-gradient(180deg, #ff8a3d, #ff5000)", borderRadius: "4px 4px 0 0", minHeight: metricValue(it) ? 2 : 0 }} />
+                    <div style={{ width: "40%", height: `${(metricValue(it) / metricMax) * 100}%`, background: "linear-gradient(180deg, var(--ops-accent-light), var(--ops-accent))", borderRadius: "4px 4px 0 0", minHeight: metricValue(it) ? 2 : 0 }} />
                   </>
                 );
               }}
@@ -544,11 +544,11 @@ export function AnalyticsHoursPage() {
               )}
             />
             <Space style={{ marginTop: 8 }}>
-              <Tag color="var(--ops-accent)">{metricLabel}</Tag>
+              <Tag color="orange">{metricLabel}</Tag>
               {compare && <Tag>上期{metricLabel}</Tag>}
-              <Tag color="#fa8c16">★ 前3高峰</Tag>
-              <Tag color="#ff4d4f">● 环比骤降≥50%</Tag>
-              <Tag color="#fa8c16">● 环比暴涨≥100%</Tag>
+              <Tag color="orange">★ 前3高峰</Tag>
+              <Tag color="green">● 环比骤降≥50%</Tag>
+              <Tag color="orange">● 环比暴涨≥100%</Tag>
             </Space>
           </Card>
 
@@ -571,15 +571,15 @@ export function AnalyticsHoursPage() {
                 const prev = data?.prev_promo_items?.[idx];
                 const prevRoi = prev && prev.spend ? prev.sales / prev.spend : 0;
                 const roi = it.promo_roi;
-                const roiColor = roi >= 2 ? "#52c41a" : roi >= 1 ? "#fa8c16" : "#ff4d4f";
+                const roiColor = roi >= 2 ? "var(--ops-success)" : roi >= 1 ? "var(--ops-warn)" : "var(--ops-danger)";
                 return (
                   <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
-                    <div style={{ fontSize: 9, fontWeight: 600, color: roi > 0 ? roiColor : "rgba(128,128,128,0.6)" }}>
+                    <div style={{ fontSize: 9, fontWeight: 600, color: roi > 0 ? roiColor : "var(--ops-text-3)" }}>
                       {roi > 0 ? roi.toFixed(1) : ""}
                     </div>
                     <div style={{ flex: 1, display: "flex", alignItems: "flex-end", gap: 2, justifyContent: "center", width: "100%" }}>
                       {comparePromo && (
-                        <div style={{ width: "28%", height: `${(prevRoi / maxPrevRoi) * 100}%`, background: "rgba(128,128,128,0.4)", borderRadius: "4px 4px 0 0", minHeight: prevRoi ? 2 : 0 }} />
+                        <div style={{ width: "28%", height: `${(prevRoi / maxPrevRoi) * 100}%`, background: "var(--ops-text-3)", borderRadius: "4px 4px 0 0", minHeight: prevRoi ? 2 : 0 }} />
                       )}
                       <div style={{ width: "28%", height: `${(roi / maxRoi) * 100}%`, background: roiColor, borderRadius: "4px 4px 0 0", minHeight: roi ? 2 : 0 }} />
                     </div>
@@ -602,18 +602,18 @@ export function AnalyticsHoursPage() {
               )}
             />
             <Space style={{ marginTop: 8 }}>
-              <Tag color="#52c41a">ROI≥2 绿</Tag>
-              <Tag color="#fa8c16">ROI 1~2 橙</Tag>
-              <Tag color="#ff4d4f">ROI&lt;1 红</Tag>
+              <Tag color="green">ROI≥2 绿</Tag>
+              <Tag color="orange">ROI 1~2 橙</Tag>
+              <Tag color="red">ROI&lt;1 红</Tag>
               {comparePromo && <Tag>上期ROI 灰</Tag>}
-              <Tag color="#fa8c16">★ ROI 前3</Tag>
+              <Tag color="orange">★ ROI 前3</Tag>
             </Space>
           </Card>
 
           <Card variant="borderless" title="时段分组（凌晨/上午/下午/晚间/深夜）" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {data.segments.map((seg) => (
-                <div key={seg.name} style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                <div key={seg.name} style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
                   <Text strong style={{ fontSize: 13 }}>
                     {seg.name} <Text type="secondary" style={{ fontSize: 11 }}>{seg.hours}</Text>
                   </Text>
@@ -632,7 +632,7 @@ export function AnalyticsHoursPage() {
           <Card variant="borderless" title="分时明细（环比 = 较上一周期同时段）" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))", gap: 8 }}>
               {items.map((p) => (
-                <div key={p.hour} style={{ border: "1px solid var(--ops-border)", borderRadius: 8, padding: "8px 10px" }}>
+                <div key={p.hour} style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius-sm)", padding: "8px 10px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <Text strong style={{ fontSize: 13 }}>{p.hour}</Text>
                     <ChangeBadge change={p.sales_cycle} />
@@ -680,37 +680,37 @@ export function AnalyticsHoursPage() {
               </div>
             )}
             {aiResult.sections.overall && (
-              <div style={{ padding: "12px 14px", borderRadius: 10, background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
+              <div style={{ padding: "12px 14px", borderRadius: "var(--ops-radius)", background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
                 <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{aiResult.sections.overall}</Text>
               </div>
             )}
             <div style={{ display: "grid", gap: 8 }}>
               {aiResult.sections.highlights.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#52c41a" }}>销售时段规律</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-success)" }}>销售时段规律</Text>
                   {aiResult.sections.highlights.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {aiResult.sections.conversion.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#1677ff" }}>流量与转化</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-accent)" }}>流量与转化</Text>
                   {aiResult.sections.conversion.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {aiResult.sections.risks.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#ff4d4f" }}>风险提醒</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-danger)" }}>风险提醒</Text>
                   {aiResult.sections.risks.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {aiResult.sections.suggestions.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
                   <Text strong style={{ color: "var(--ops-accent-light)" }}>投放建议</Text>
                   {aiResult.sections.suggestions.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>

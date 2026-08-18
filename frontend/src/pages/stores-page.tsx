@@ -1,4 +1,4 @@
-﻿import {
+import {
   CheckOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -450,7 +450,7 @@ export function StoresPage() {
       render: (_, row) => {
         if (!row.last_sync_at) return <Text type="secondary">从未同步</Text>;
         const mins = Math.floor((Date.now() - dayjs(row.last_sync_at).valueOf()) / 60000);
-        const color = mins > 24 * 60 ? "#ff4d4f" : mins > 30 ? "#fa8c16" : "#52c41a";
+        const color = mins > 24 * 60 ? "var(--ops-danger)" : mins > 30 ? "var(--ops-warn)" : "var(--ops-success)";
         return <Text style={{ color }}>{timeAgo(row.last_sync_at)}</Text>;
       },
     },
@@ -615,7 +615,7 @@ export function StoresPage() {
             <Text type="secondary" style={{ fontSize: 12 }}>
               状态正常
             </Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#52c41a" }}>{normal}</div>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-success)" }}>{normal}</div>
           </Card>
         </Col>
         <Col xs={24} sm={8}>
@@ -623,7 +623,7 @@ export function StoresPage() {
             <Text type="secondary" style={{ fontSize: 12 }}>
               需要关注
             </Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: attention > 0 ? "#fa8c16" : undefined }}>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: attention > 0 ? "var(--ops-warn)" : undefined }}>
               {attention}
             </div>
           </Card>

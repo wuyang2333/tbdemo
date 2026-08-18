@@ -1,5 +1,5 @@
 import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, HolderOutlined, LineChartOutlined, RocketOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, DatePicker, Drawer, Empty, Input, Popover, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Button, Card, Checkbox, Col, DatePicker, Drawer, Empty, Input, Popover, Row, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -69,9 +69,9 @@ interface ProductInsightResult {
 }
 
 function ProductChangeBadge({ change, unit }: { change: number | null; unit: string }) {
-  if (change == null) return <span style={{ color: "rgba(128,128,128,0.55)", fontSize: 12 }}>—</span>;
+  if (change == null) return <span style={{ color: "var(--ops-text-3)", fontSize: 12 }}>—</span>;
   const up = change >= 0;
-  const color = up ? "#ff4d4f" : "#52c41a";
+  const color = up ? "var(--ops-up)" : "var(--ops-down)";
   const suffix = unit === "%" ? "%" : unit === "pp" ? "pp" : "";
   return (
     <span style={{ color, fontSize: 12, fontWeight: 600 }}>
@@ -99,7 +99,7 @@ function ProductSection({
         display: "flex",
         gap: 10,
         padding: "10px 12px",
-        borderRadius: 10,
+        borderRadius: "var(--ops-radius)",
         background: "var(--ops-card-bg-2)",
         border: "1px solid var(--ops-border)",
       }}
@@ -123,12 +123,12 @@ function MetricCell({ value, change }: { value: string; change: number | null | 
     <div>
       <div>{value}</div>
       {hasChange ? (
-        <div style={{ fontSize: 11, fontWeight: 600, color: change >= 0 ? "#ff4d4f" : "#52c41a" }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: change >= 0 ? "var(--ops-up)" : "var(--ops-down)" }}>
           {change >= 0 ? "+" : "-"}
           {Math.abs(change).toFixed(2)}%
         </div>
       ) : (
-        <div style={{ fontSize: 11, color: "rgba(128,128,128,0.55)" }}>—</div>
+        <div style={{ fontSize: 11, color: "var(--ops-text-3)" }}>—</div>
       )}
     </div>
   );
@@ -146,6 +146,9 @@ export function AnalyticsProductsPage() {
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [refundOpen, setRefundOpen] = useState(false);
+  const [refundData, setRefundData] = useState<{ total_refund: number; refund_rate: number; top_refund: { item_id: string; item_title: string; refund: number; refund_rate: number }[]; trend: { date: string; refund: number; rate: number }[] } | null>(null);
+  const [refundLoading, setRefundLoading] = useState(false);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<{ item_id: string; item_title: string; image?: string } | null>(null);
@@ -205,6 +208,20 @@ export function AnalyticsProductsPage() {
     load();
   }, [load]);
   useAutoRefresh(load);
+
+  const openRefund = async () => {
+    setRefundOpen(true);
+    setRefundLoading(true);
+    setRefundData(null);
+    try {
+      const { data } = await http.get(`/analytics/refund-analysis?days=14${storeId ? `&store_id=${storeId}` : ""}`);
+      setRefundData(data);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setRefundLoading(false);
+    }
+  };
 
   const syncAll = async () => {
     setSyncing(true);
@@ -433,9 +450,9 @@ export function AnalyticsProductsPage() {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {row.image ? (
-          <img src={row.image} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+          <img src={row.image} alt="" style={{ width: 40, height: 40, borderRadius: "var(--ops-radius-xs)", objectFit: "cover", flexShrink: 0 }} />
         ) : (
-          <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
+          <div style={{ width: 40, height: 40, borderRadius: "var(--ops-radius-xs)", background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
         )}
         <div style={{ minWidth: 0, position: "relative", paddingTop: hovered ? 28 : 0, transition: "padding-top 0.16s ease" }}>
           <div className={`product-hover-bar${hovered ? " visible" : ""}`} onClick={(e) => e.stopPropagation()}>
@@ -455,7 +472,7 @@ export function AnalyticsProductsPage() {
           <Tooltip title={row.item_title}>
             <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.item_title}</div>
           </Tooltip>
-          <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>ID {row.item_id}</div>
+          <div style={{ fontSize: 11, color: "var(--ops-text-3)" }}>ID {row.item_id}</div>
         </div>
       </div>
     );
@@ -469,10 +486,21 @@ export function AnalyticsProductsPage() {
             width: 70,
             align: "center",
             render: (v: number) => (
-              <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span>
+              <span style={{ fontWeight: 700, color: v <= 3 ? "var(--ops-danger)" : undefined }}>{v}</span>
             ),
           },
           { title: "商品", key: "item", width: 200, render: renderItem },
+          {
+            title: "生命周期",
+            dataIndex: "lifecycle",
+            width: 92,
+            render: (v?: string) =>
+              v ? (
+                <Tag color={v === "成长期" ? "green" : v === "衰退期" ? "red" : v === "成熟期" ? "blue" : v === "无销量" ? "default" : "orange"}>
+                  {v}
+                </Tag>
+              ) : null,
+          },
           {
             title: "诊断",
             key: "diag",
@@ -494,7 +522,7 @@ export function AnalyticsProductsPage() {
           { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, sorter: numSorter("promo_share"), render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "#ff4d4f" : undefined }}>{v}</span> },
+          { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "var(--ops-danger)" : undefined }}>{v}</span> },
           { title: "商品", key: "item", width: 200, render: renderItem },
           {
             title: "诊断",
@@ -585,12 +613,12 @@ export function AnalyticsProductsPage() {
                         alignItems: "center",
                         gap: 8,
                         padding: "4px 6px",
-                        borderRadius: 6,
+                        borderRadius: "var(--ops-radius-xs)",
                         cursor: "grab",
                         background: dragCol === o.value ? "var(--ops-accent-soft)" : "transparent",
                       }}
                     >
-                      <HolderOutlined style={{ color: "rgba(128,128,128,0.6)", fontSize: 12 }} />
+                      <HolderOutlined style={{ color: "var(--ops-text-3)", fontSize: 12 }} />
                       <Checkbox checked={!hiddenCols.includes(o.value)} onChange={(e) => toggleCol(o.value, e.target.checked)}>
                         {o.label}
                       </Checkbox>
@@ -603,6 +631,7 @@ export function AnalyticsProductsPage() {
               }
             >
               <Button icon={<SettingOutlined />}>字段设置</Button>
+            <Button icon={<WarningOutlined />} onClick={openRefund}>退款分析</Button>
             </Popover>
             <HourlyPushButton />
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
@@ -679,7 +708,7 @@ export function AnalyticsProductsPage() {
           <div style={{ maxHeight: 170, overflowY: "auto", paddingRight: 4 }}>
             <div style={{ display: "grid", gap: 4 }}>
               {allProductAlerts.map((a, i) => (
-                <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
+                <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "var(--ops-danger)" : "var(--ops-warn)" }}>
                   {a.level === "error" ? "⚠️ " : "❗ "}
                   [{a.type}] {a.message}
                 </div>
@@ -724,13 +753,13 @@ export function AnalyticsProductsPage() {
         title={
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {detail?.image ? (
-              <img src={detail.image} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: "cover" }} />
+              <img src={detail.image} alt="" style={{ width: 36, height: 36, borderRadius: "var(--ops-radius-xs)", objectFit: "cover" }} />
             ) : null}
             <div style={{ minWidth: 0 }}>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 420, fontWeight: 600 }}>
                 {detail?.item_title}
               </div>
-              <div style={{ fontSize: 12, color: "rgba(128,128,128,0.75)" }}>ID {detail?.item_id}</div>
+              <div style={{ fontSize: 12, color: "var(--ops-text-3)" }}>ID {detail?.item_id}</div>
             </div>
           </div>
         }
@@ -757,7 +786,7 @@ export function AnalyticsProductsPage() {
                     flex: "1 1 130px",
                     minWidth: 120,
                     padding: "8px 12px",
-                    borderRadius: 10,
+                    borderRadius: "var(--ops-radius)",
                     background: "var(--ops-card-bg-2)",
                     border: "1px solid var(--ops-border)",
                   }}
@@ -773,7 +802,7 @@ export function AnalyticsProductsPage() {
               <div
                 style={{
                   padding: "12px 14px",
-                  borderRadius: 10,
+                  borderRadius: "var(--ops-radius)",
                   background: "var(--ops-accent-soft)",
                   borderLeft: "3px solid var(--ops-accent)",
                   marginBottom: 10,
@@ -785,10 +814,10 @@ export function AnalyticsProductsPage() {
 
             <div style={{ display: "grid", gap: 8 }}>
               {detailResult.sections.highlights.length > 0 && (
-                <ProductSection icon={<CheckCircleOutlined />} color="#52c41a" title="亮点" items={detailResult.sections.highlights} />
+                <ProductSection icon={<CheckCircleOutlined />} color="green" title="亮点" items={detailResult.sections.highlights} />
               )}
               {detailResult.sections.risks.length > 0 && (
-                <ProductSection icon={<WarningOutlined />} color="#ff4d4f" title="风险" items={detailResult.sections.risks} />
+                <ProductSection icon={<WarningOutlined />} color="red" title="风险" items={detailResult.sections.risks} />
               )}
               {detailResult.sections.suggestions.length > 0 && (
                 <ProductSection icon={<BulbOutlined />} color="var(--ops-accent-light)" title="建议" items={detailResult.sections.suggestions} />
@@ -803,11 +832,11 @@ export function AnalyticsProductsPage() {
                 <div style={{ display: "grid", gap: 8, marginBottom: 10, maxHeight: 260, overflowY: "auto" }}>
                   {detailChat.map((m, i) =>
                     m.role === "user" ? (
-                      <div key={i} style={{ alignSelf: "flex-end", maxWidth: "85%", background: "var(--ops-accent-soft)", padding: "8px 12px", borderRadius: 10, fontSize: 13, whiteSpace: "pre-wrap" }}>
+                      <div key={i} style={{ alignSelf: "flex-end", maxWidth: "85%", background: "var(--ops-accent-soft)", padding: "8px 12px", borderRadius: "var(--ops-radius)", fontSize: 13, whiteSpace: "pre-wrap" }}>
                         {m.content}
                       </div>
                     ) : (
-                      <div key={i} style={{ alignSelf: "flex-start", maxWidth: "95%", background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", padding: "8px 12px", borderRadius: 10, fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                      <div key={i} style={{ alignSelf: "flex-start", maxWidth: "95%", background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", padding: "8px 12px", borderRadius: "var(--ops-radius)", fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
                         {m.content}
                       </div>
                     ),
@@ -865,8 +894,8 @@ export function AnalyticsProductsPage() {
             <LineChart
               labels={trendData.map((d) => d.date.slice(5))}
               series={[
-                { name: "销售额", color: "#fa8c16", values: trendData.map((d) => d.sales), format: (v: number) => fmtMoney(v) },
-                { name: "访客", color: "#1677ff", values: trendData.map((d) => d.visitors), format: (v: number) => fmtInt(v) },
+                { name: "销售额", color: "var(--ops-warn)", values: trendData.map((d) => d.sales), format: (v: number) => fmtMoney(v) },
+                { name: "访客", color: "var(--ops-accent)", values: trendData.map((d) => d.visitors), format: (v: number) => fmtInt(v) },
               ]}
             />
             <Table
@@ -969,6 +998,51 @@ export function AnalyticsProductsPage() {
           { group: "product", key: "min_visitors", label: "最低访客数", hint: "转化提醒的访客门槛（避免低流量误报）", min: 1, max: 1000, step: 10 },
         ]}
       />
+      <Drawer title="退款分析" open={refundOpen} onClose={() => setRefundOpen(false)} width={540}>
+        {refundLoading ? (
+          <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
+        ) : refundData ? (
+          <Space direction="vertical" style={{ width: "100%" }} size={16}>
+            <Row gutter={8}>
+              <Col span={12}>
+                <Card size="small">
+                  <Text type="secondary" style={{ fontSize: 12 }}>区间退款金额</Text>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--ops-danger)" }}>¥{refundData.total_refund.toLocaleString()}</div>
+                </Card>
+              </Col>
+              <Col span={12}>
+                <Card size="small">
+                  <Text type="secondary" style={{ fontSize: 12 }}>退款率</Text>
+                  <div style={{ fontSize: 22, fontWeight: 700 }}>{refundData.refund_rate}%</div>
+                </Card>
+              </Col>
+            </Row>
+            <div>
+              <Text strong>TOP 退款商品（近 14 天）</Text>
+              <div style={{ marginTop: 8 }}>
+                {refundData.top_refund.length === 0 ? (
+                  <Text type="secondary">暂无退款数据</Text>
+                ) : (
+                  refundData.top_refund.map((it, i) => (
+                    <div key={it.item_id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                      <Text type="secondary" style={{ width: 20 }}>{i + 1}</Text>
+                      <Text ellipsis style={{ flex: 1, fontSize: 13 }}>{it.item_title}</Text>
+                      <Text style={{ fontSize: 13, color: "var(--ops-danger)" }}>¥{it.refund.toLocaleString()}</Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{it.refund_rate}%</Text>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            <div>
+              <Text strong>退款趋势</Text>
+              <LineChart labels={refundData.trend.map((t) => t.date)} series={[{ name: "退款金额", color: "var(--ops-danger)", values: refundData.trend.map((t) => t.refund), format: fmtMoney }]} height={160} />
+            </div>
+          </Space>
+        ) : (
+          <Empty />
+        )}
+      </Drawer>
     </div>
   );
 }

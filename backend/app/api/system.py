@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
@@ -16,6 +18,32 @@ router = APIRouter()
 def loops_status(user: dict = Depends(get_current_user)) -> dict:
     """返回全部后台循环的运行状态（最后运行/成功时间、失败次数、错误信息）。"""
     return {"items": loops.get_all_status()}
+
+
+@router.get("/version")
+def version_info(actor: dict = Depends(require_admin)) -> dict:
+    """系统版本信息。"""
+    return {
+        "name": "淘宝运营工作台",
+        "version": "0.1.0",
+        "backend": "FastAPI + SQLite",
+        "frontend": "React + Vite",
+    }
+
+
+@router.get("/cleanup-config")
+def cleanup_config(actor: dict = Depends(require_admin), db=Depends(get_db)) -> dict:
+    from backend.app.main import DATA_RETENTION_DAYS
+
+    return {"retention_days": DATA_RETENTION_DAYS}
+
+
+@router.post("/cleanup")
+def run_cleanup(actor: dict = Depends(require_admin)) -> dict:
+    """一键清理超过保留期的历史数据。"""
+    from backend.app.main import _run_data_cleanup_once
+
+    return _run_data_cleanup_once()
 
 
 @router.get("/tenant-overview")
@@ -88,4 +116,32 @@ def tenant_overview(actor: dict = Depends(require_admin), db=Depends(get_db)) ->
         },
         "accounts": accounts,
         "recent_logins": [dict(r) for r in recent_logins],
+    }
+
+
+@router.get("/healthcheck")
+def healthcheck(actor: dict = Depends(require_admin), db=Depends(get_db)) -> dict:
+    """系统体检：数据库/磁盘/备份/同步健康/店铺登录态。"""
+    from backend.app.core.db import DB_PATH
+    from backend.app.core.sycm import has_profile
+
+    db_size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    disk = shutil.disk_usage("D:/")
+    backup_dir = Path("D:/demo/backups")
+    backups = sorted(backup_dir.glob("taobao_*.db"), key=lambda p: p.stat().st_mtime, reverse=True) if backup_dir.exists() else []
+    stores = db.execute("SELECT * FROM stores ORDER BY id").fetchall()
+    last_sync = db.execute("SELECT value FROM meta WHERE key = 'store_1_last_sync'").fetchone()
+    loops_rows = db.execute("SELECT value FROM meta WHERE key = 'loops'").fetchone()
+    return {
+        "db_size_mb": round(db_size / 1024 / 1024, 1),
+        "disk_free_gb": round(disk.free / 1024 ** 3, 1),
+        "store_count": len(stores),
+        "profile_ok": sum(1 for s in stores if has_profile(s["id"])),
+        "last_sync": last_sync["value"] if last_sync else None,
+        "backup_count": len(backups),
+        "backup_latest": backups[0].name if backups else None,
+        "store_status": [
+            {"store_id": s["id"], "store_name": s["name"], "configured": has_profile(s["id"])}
+            for s in stores
+        ],
     }

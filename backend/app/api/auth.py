@@ -87,6 +87,7 @@ def user_payload(row) -> dict:
         "parent_id": row["parent_id"] if "parent_id" in row.keys() else None,
         "sub_account_quota": row["sub_account_quota"] if "sub_account_quota" in row.keys() else 2,
         "store_quota": row["store_quota"] if "store_quota" in row.keys() else 3,
+        "expires_at": row["expires_at"] if "expires_at" in row.keys() else None,
     }
 
 
@@ -104,13 +105,13 @@ def _effective_payload(db, row) -> dict:
     return payload
 
 
-def _issue_token(db, user_id: int) -> str:
+def _issue_token(db, user_id: int, ip: str = "", ua: str = "") -> str:
     token = secrets.token_hex(32)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=TOKEN_TTL_SECONDS)
     db.execute(
-        "INSERT INTO tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-        (token, user_id, now.isoformat(), expires_at.isoformat()),
+        "INSERT INTO tokens (token, user_id, created_at, expires_at, ip, user_agent) VALUES (?, ?, ?, ?, ?, ?)",
+        (token, user_id, now.isoformat(), expires_at.isoformat(), ip[:45], ua[:200]),
     )
     return token
 
@@ -249,7 +250,7 @@ def login(body: LoginIn, request: Request, db=Depends(get_db)) -> dict:
         "UPDATE users SET failed_count = 0, locked_until = NULL, last_login_at = ?, last_login_ip = ? WHERE id = ?",
         (now, ip, row["id"]),
     )
-    token = _issue_token(db, row["id"])
+    token = _issue_token(db, row["id"], ip, ua)
     _write_login_log(db, row["id"], username, "login", ip, ua)
     return {"token": token, "user": _effective_payload(db, row)}
 

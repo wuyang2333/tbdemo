@@ -21,9 +21,9 @@ const PLAN_COL_KEY = "promo_plans_cols_v1";
 const BUILTIN_COL_ORDER = ["scene_name", "plan_name", "item", "status", "day_budget", "bid", "spend", "sales", "roi", "diag", "clicks", "op", "tag", "note"];
 
 function ChangeBadge({ change, unit = "%" }: { change: number | null | undefined; unit?: string }) {
-  if (change == null) return <span style={{ color: "rgba(128,128,128,0.45)", fontSize: 11 }}>—</span>;
+  if (change == null) return <span style={{ color: "var(--ops-text-3)", fontSize: 11 }}>—</span>;
   const up = change >= 0;
-  const color = up ? "#ff4d4f" : "#52c41a";
+  const color = up ? "var(--ops-up)" : "var(--ops-down)";
   return (
     <span style={{ color, fontSize: 11, fontWeight: 600 }}>
       {up ? "+" : ""}
@@ -362,9 +362,9 @@ export function PromotionsPlansPage() {
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {it?.image ? (
-              <img src={it.image} alt="" style={{ width: 40, height: 40, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+              <img src={it.image} alt="" style={{ width: 40, height: 40, borderRadius: "var(--ops-radius-xs)", objectFit: "cover", flexShrink: 0 }} />
             ) : (
-              <div style={{ width: 40, height: 40, borderRadius: 6, background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
+              <div style={{ width: 40, height: 40, borderRadius: "var(--ops-radius-xs)", background: "var(--ops-card-bg-2)", flexShrink: 0 }} />
             )}
             <div style={{ minWidth: 0, flex: 1 }}>
               {loadingCell ? (
@@ -403,7 +403,7 @@ export function PromotionsPlansPage() {
       sorter: (a, b) => a.roi - b.roi,
       render: (v: number, row: PromoPlan) => {
         const d = diag(row);
-        const color = d.color === "green" ? "#52c41a" : d.color === "orange" ? "#fa8c16" : d.color === "red" ? "#ff4d4f" : undefined;
+        const color = d.color === "green" ? "var(--ops-success)" : d.color === "orange" ? "var(--ops-warn)" : d.color === "red" ? "var(--ops-danger)" : undefined;
         return (
           <div style={{ textAlign: "right" }}>
             <div style={{ color, fontWeight: 600 }}>{v ? v.toFixed(2) : "—"}</div>
@@ -513,7 +513,7 @@ export function PromotionsPlansPage() {
         <Select style={{ width: 150 }} value={scene} onChange={setScene} options={SCENE_OPTIONS} />
         <Input
           allowClear
-          prefix={<SearchOutlined style={{ color: "rgba(128,128,128,0.5)" }} />}
+          prefix={<SearchOutlined style={{ color: "var(--ops-text-3)" }} />}
           placeholder="搜计划名 / ID"
           style={{ width: 180 }}
           value={search}
@@ -548,13 +548,13 @@ export function PromotionsPlansPage() {
                     display: "flex",
                     alignItems: "center",
                     gap: 8,
-                    borderRadius: 6,
+                    borderRadius: "var(--ops-radius-xs)",
                     cursor: "grab",
                     padding: "2px 6px",
                     background: dragCol === o.value ? "var(--ops-accent-soft)" : "transparent",
                   }}
                 >
-                  <HolderOutlined style={{ color: "rgba(128,128,128,0.6)", fontSize: 12 }} />
+                  <HolderOutlined style={{ color: "var(--ops-text-3)", fontSize: 12 }} />
                   <Checkbox checked={!hiddenCols.includes(o.value)} onChange={(e) => toggleCol(o.value, e.target.checked)}>
                     {o.label}
                   </Checkbox>
@@ -589,7 +589,7 @@ export function PromotionsPlansPage() {
           <div style={{ maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
             <Space orientation="vertical" style={{ width: "100%" }} size={4}>
               {allPlanAlerts.map((a, i) => (
-                <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "#ff4d4f" : "#fa8c16" }}>
+                <div key={i} style={{ fontSize: 13, color: a.level === "error" ? "var(--ops-danger)" : "var(--ops-warn)" }}>
                   {a.level === "error" ? "⚠️ " : "❗ "}
                   [{a.type}] {a.message}
                 </div>
@@ -654,29 +654,29 @@ export function PromotionsPlansPage() {
               <Tag color="red">建议暂停 {aiResult.summary.low_count}</Tag>
             </div>
             {aiResult.sections.overall && (
-              <div style={{ padding: "12px 14px", borderRadius: 10, background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
+              <div style={{ padding: "12px 14px", borderRadius: "var(--ops-radius)", background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
                 <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{aiResult.sections.overall}</Text>
               </div>
             )}
             <div style={{ display: "grid", gap: 8 }}>
               {aiResult.sections.highlights.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#52c41a" }}>亮点</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-success)" }}>亮点</Text>
                   {aiResult.sections.highlights.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {aiResult.sections.risks.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#ff4d4f" }}>风险</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-danger)" }}>风险</Text>
                   {aiResult.sections.risks.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {aiResult.sections.suggestions.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
                   <Text strong style={{ color: "var(--ops-accent-light)" }}>建议</Text>
                   {aiResult.sections.suggestions.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
@@ -718,8 +718,8 @@ export function PromotionsPlansPage() {
             <LineChart
               labels={trendData.map((d) => d.date.slice(5))}
               series={[
-                { name: "花费", color: "#fa8c16", values: trendData.map((d) => d.spend), format: (v: number) => fmtMoney(v) },
-                { name: "成交", color: "#52c41a", values: trendData.map((d) => d.sales), format: (v: number) => fmtMoney(v) },
+                { name: "花费", color: "var(--ops-warn)", values: trendData.map((d) => d.spend), format: (v: number) => fmtMoney(v) },
+                { name: "成交", color: "var(--ops-success)", values: trendData.map((d) => d.sales), format: (v: number) => fmtMoney(v) },
               ]}
             />
             <Table
@@ -755,29 +755,29 @@ export function PromotionsPlansPage() {
         ) : planAiResult ? (
           <div>
             {planAiResult.sections.overall && (
-              <div style={{ padding: "12px 14px", borderRadius: 10, background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
+              <div style={{ padding: "12px 14px", borderRadius: "var(--ops-radius)", background: "var(--ops-accent-soft)", borderLeft: "3px solid var(--ops-accent)", marginBottom: 10 }}>
                 <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{planAiResult.sections.overall}</Text>
               </div>
             )}
             <div style={{ display: "grid", gap: 8 }}>
               {planAiResult.sections.highlights.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#52c41a" }}>亮点</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-success)" }}>亮点</Text>
                   {planAiResult.sections.highlights.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {planAiResult.sections.risks.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
-                  <Text strong style={{ color: "#ff4d4f" }}>风险</Text>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                  <Text strong style={{ color: "var(--ops-danger)" }}>风险</Text>
                   {planAiResult.sections.risks.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
                   ))}
                 </div>
               )}
               {planAiResult.sections.suggestions.length > 0 && (
-                <div style={{ border: "1px solid var(--ops-border)", borderRadius: 10, padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
+                <div style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
                   <Text strong style={{ color: "var(--ops-accent-light)" }}>建议</Text>
                   {planAiResult.sections.suggestions.map((it, i) => (
                     <div key={i} style={{ fontSize: 13, lineHeight: 1.8, color: "var(--ops-text-secondary)" }}>{it}</div>
@@ -797,7 +797,7 @@ export function PromotionsPlansPage() {
                       alignSelf: m.role === "user" ? "flex-end" : "flex-start",
                       maxWidth: "90%",
                       padding: "8px 12px",
-                      borderRadius: 10,
+                      borderRadius: "var(--ops-radius)",
                       background: m.role === "user" ? "var(--ops-accent-soft)" : "var(--ops-card-bg-2)",
                       fontSize: 13,
                       lineHeight: 1.7,
@@ -865,7 +865,7 @@ export function PromotionsPlansPage() {
               将{opStatus === "pause" ? "暂停" : "开启"}计划：
               <Text strong>{opPlan.plan_name}</Text>
             </p>
-            <p style={{ color: "#fa8c16", fontSize: 13, marginBottom: 0, lineHeight: 1.8 }}>
+            <p style={{ color: "var(--ops-warn)", fontSize: 13, marginBottom: 0, lineHeight: 1.8 }}>
               ⚠️ 此操作会直接修改万相台后台：{opStatus === "pause" ? "暂停后该计划立即停止投放、不再扣费" : "开启后该计划立即恢复投放"}。
               <br />
               确认继续吗？

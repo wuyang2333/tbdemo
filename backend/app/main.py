@@ -43,7 +43,9 @@ from backend.app.api.promotions import (
 from backend.app.api.stores import (
     run_inspect_once,
     sync_all_stores,
+    sync_flow_source_all,
     sync_hourly_all,
+    sync_refund_all,
     sync_items_daily_all,
     sync_items_realtime_all,
 )
@@ -196,6 +198,8 @@ def _run_realtime_sync() -> None:
         ("推广实时分时", lambda: sync_promo_realtime_all(conn)),
         ("商品实时", lambda: sync_items_realtime_all(conn)),
         ("商品级推广", lambda: sync_promo_items_realtime_all(conn)),
+        ("流量来源", lambda: sync_flow_source_all(conn)),
+        ("今日退款", lambda: sync_refund_all(conn)),
     ]
     errors: list[str] = []
     for step_name, fn in steps:

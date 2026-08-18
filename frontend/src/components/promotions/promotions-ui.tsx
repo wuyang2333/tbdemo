@@ -9,6 +9,7 @@ export const MODE_OPTIONS = [
   { label: "实时", value: "realtime" },
   { label: "昨天", value: "yesterday" },
   { label: "近七天", value: "7d" },
+  { label: "自定义", value: "range" },
 ];
 
 export const SCENE_OPTIONS = [
@@ -27,11 +28,13 @@ export const TAG_OPTIONS = [
 ];
 
 export function fmtMoney(value: number): string {
-  return `¥${value.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const v = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return `¥${v.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function fmtInt(value: number): string {
-  return value.toLocaleString("zh-CN");
+  const v = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return v.toLocaleString("zh-CN");
 }
 
 export type LineSeries = {
@@ -71,10 +74,10 @@ export function LineChart({ labels, series, height = 200 }: { labels: string[]; 
         {paths.map((s) => (
           <polyline key={s.name} points={s.path} fill="none" stroke={s.color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
         ))}
-        <text x={pad} y={height - 4} fontSize={10} fill="rgba(128,128,128,0.85)">
+        <text x={pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)">
           {labels[0]}
         </text>
-        <text x={width - pad} y={height - 4} fontSize={10} fill="rgba(128,128,128,0.85)" textAnchor="end">
+        <text x={width - pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)" textAnchor="end">
           {labels[n - 1]}
         </text>
       </svg>

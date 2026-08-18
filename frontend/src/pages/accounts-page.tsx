@@ -1,4 +1,4 @@
-﻿import {
+import {
   ClockCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
@@ -35,6 +35,7 @@ import {
   message,
 } from "antd";
 import type { TableColumnsType } from "antd";
+import { ColumnSettings } from "../components/ui/column-settings";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -1035,6 +1036,40 @@ export function AccountsPage() {
     },
   ];
 
+  // —— 字段设置：列显隐 + 列顺序（本地持久化） ——
+  const [hiddenCols, setHiddenCols] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("tb-accounts-cols") || "{}").hidden ?? [];
+    } catch {
+      return [];
+    }
+  });
+  const [colOrder, setColOrder] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("tb-accounts-cols") || "{}").order ?? [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem("tb-accounts-cols", JSON.stringify({ hidden: hiddenCols, order: colOrder }));
+  }, [hiddenCols, colOrder]);
+  const colKey = (col: (typeof columns)[number]) => String((col as { key?: string }).key ?? (col as { dataIndex?: string }).dataIndex ?? "");
+  const visibleColumns = columns
+    .filter((col) => {
+      const k = colKey(col);
+      return !k || !hiddenCols.includes(k);
+    })
+    .sort((a, b) => {
+      const ia = colOrder.indexOf(colKey(a));
+      const ib = colOrder.indexOf(colKey(b));
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+  const colDefs = columns
+    .map((col) => ({ key: colKey(col), title: col.title as string }))
+    .filter((c) => c.key);
+  const tableX = visibleColumns.reduce((sum, col) => sum + ((col.width as number) || 100), 0);
+
   return (
     <div>
       <PageHeader
@@ -1065,6 +1100,15 @@ export function AccountsPage() {
             children: (
               <Card variant="borderless">
                 <Space style={{ marginBottom: 12 }} wrap>
+                  <ColumnSettings
+                    columns={colDefs}
+                    hidden={hiddenCols}
+                    order={colOrder}
+                    onChange={({ hidden, order }) => {
+                      setHiddenCols(hidden);
+                      setColOrder(order);
+                    }}
+                  />
                   <Input
                     allowClear
                     placeholder="搜索用户名 / 花名"
@@ -1099,10 +1143,10 @@ export function AccountsPage() {
                 <Table<AccountRow>
                   rowKey="id"
                   loading={loading}
-                  columns={columns}
+                  columns={visibleColumns}
                   dataSource={filteredItems}
                   pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (total) => `共 ${total} 个账号` }}
-                  scroll={{ x: 1400 }}
+                  scroll={{ x: tableX }}
                 />
               </Card>
             ),
@@ -1172,18 +1216,18 @@ export function AccountsPage() {
                   <>
                     <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
                       {[
-                        { label: "账号总数", value: tenant.summary.total_accounts, color: "#1677ff" },
+                        { label: "账号总数", value: tenant.summary.total_accounts, color: "var(--ops-accent)" },
                         { label: "超级管理员", value: tenant.summary.super_admin, color: "#faad14" },
-                        { label: "管理员", value: tenant.summary.admin, color: "#fa8c16" },
-                        { label: "普通账号", value: tenant.summary.member, color: "#52c41a" },
-                        { label: "已禁用", value: tenant.summary.disabled, color: "#ff4d4f" },
-                        { label: "店铺总数", value: tenant.summary.total_stores, color: "#1677ff" },
-                        { label: "已绑定账号", value: tenant.summary.bound_accounts, color: "#52c41a" },
-                        { label: "未绑定账号", value: tenant.summary.unbound_accounts, color: "#ff4d4f" },
-                        { label: "绑定关系数", value: tenant.summary.total_bindings, color: "#722ed1" },
+                        { label: "管理员", value: tenant.summary.admin, color: "var(--ops-warn)" },
+                        { label: "普通账号", value: tenant.summary.member, color: "var(--ops-success)" },
+                        { label: "已禁用", value: tenant.summary.disabled, color: "var(--ops-danger)" },
+                        { label: "店铺总数", value: tenant.summary.total_stores, color: "var(--ops-accent)" },
+                        { label: "已绑定账号", value: tenant.summary.bound_accounts, color: "var(--ops-success)" },
+                        { label: "未绑定账号", value: tenant.summary.unbound_accounts, color: "var(--ops-danger)" },
+                        { label: "绑定关系数", value: tenant.summary.total_bindings, color: "var(--ops-cat-2)" },
                       ].map((item) => (
                         <Col xs={12} sm={8} md={6} key={item.label}>
-                          <div style={{ background: "#fafafa", borderRadius: 10, padding: "12px 16px", border: "1px solid #f0f0f0" }}>
+                          <div style={{ background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius)", padding: "12px 16px", border: "1px solid var(--ops-border)" }}>
                             <Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>
                             <div style={{ fontSize: 22, fontWeight: 700, color: item.color }}>{item.value}</div>
                           </div>

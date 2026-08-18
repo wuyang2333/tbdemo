@@ -75,7 +75,7 @@ export function PlaceholderPage({ moduleId }: { moduleId: string }) {
               icon={<ApiOutlined />}
               title="接口链路"
               description={<Text code>GET /api/{moduleId}</Text>}
-              style={{ borderRadius: 12 }}
+              style={{ borderRadius: "var(--ops-radius)" }}
             />
           </Col>
           <Col xs={24} md={12}>
@@ -84,7 +84,7 @@ export function PlaceholderPage({ moduleId }: { moduleId: string }) {
               showIcon
               title="后端骨架已就绪"
               description={typeof data.message === "string" ? data.message : "占位接口返回正常"}
-              style={{ borderRadius: 12 }}
+              style={{ borderRadius: "var(--ops-radius)" }}
             />
           </Col>
         </Row>

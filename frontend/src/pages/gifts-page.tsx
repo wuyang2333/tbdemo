@@ -625,7 +625,7 @@ export function GiftsPage() {
                 src={row.image}
                 alt="图片"
                 height={28}
-                style={{ cursor: "zoom-in", borderRadius: 4, verticalAlign: "middle" }}
+                style={{ cursor: "zoom-in", borderRadius: "var(--ops-radius-xs)", verticalAlign: "middle" }}
                 onClick={() => setPreviewImage(row.image)}
                 title="点击查看大图"
               />
@@ -808,13 +808,13 @@ export function GiftsPage() {
         <Col xs={24} sm={8}>
           <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
             <Text type="secondary" style={{ fontSize: 12 }}>未评论</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#fa8c16" }}>{unreviewed}</div>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-warn)" }}>{unreviewed}</div>
           </Card>
         </Col>
         <Col xs={24} sm={8}>
           <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
             <Text type="secondary" style={{ fontSize: 12 }}>未结款</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "#1677ff" }}>{unsettled}</div>
+            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-accent)" }}>{unsettled}</div>
           </Card>
         </Col>
       </Row>
@@ -845,12 +845,12 @@ export function GiftsPage() {
                   <span style={{ marginRight: 14 }}>
                     <span style={{ marginRight: 12 }}>佣金总额 ¥{selectedCommission.toFixed(2)}</span>
                     <span style={{ marginRight: 12 }}>金额总额 ¥{selectedAmount.toFixed(2)}</span>
-                    <span style={{ color: "#181d26", fontWeight: 700, marginRight: 12 }}>
+                    <span style={{ color: "var(--ops-text)", fontWeight: 700, marginRight: 12 }}>
                       总金额 ¥{selectedTotal.toFixed(2)}
                     </span>
                   </span>
                 )}
-                <span style={{ color: "#181d26", fontWeight: 700, marginRight: 10 }}>
+                <span style={{ color: "var(--ops-text)", fontWeight: 700, marginRight: 10 }}>
                   已选 {selectedKeys.length} 单
                 </span>
                 共 {count} 单
@@ -955,7 +955,7 @@ export function GiftsPage() {
           </Row>
           {formImage ? (
             <Space style={{ marginBottom: 16 }}>
-              <img src={formImage} alt="关键词图片" height={40} style={{ borderRadius: 4 }} />
+              <img src={formImage} alt="关键词图片" height={40} style={{ borderRadius: "var(--ops-radius-xs)" }} />
               <Button size="small" icon={<CloseOutlined />} onClick={() => setFormImage("")}>
                 移除图片
               </Button>
@@ -1035,7 +1035,7 @@ export function GiftsPage() {
       >
         {previewImage && (
           <div style={{ textAlign: "center" }}>
-            <img src={previewImage} alt="图片" style={{ maxWidth: "100%", borderRadius: 8 }} />
+            <img src={previewImage} alt="图片" style={{ maxWidth: "100%", borderRadius: "var(--ops-radius-sm)" }} />
           </div>
         )}
       </Modal>

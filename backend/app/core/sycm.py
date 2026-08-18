@@ -1,4 +1,4 @@
-"""生意参谋数据抓取：通过专用 Chrome 的登录态调用生意参谋接口。
+﻿"""生意参谋数据抓取：通过专用 Chrome 的登录态调用生意参谋接口。
 
 - 今天（实时）：调用 portal/live/new/index/overview/v3.json?dateType=today
   （与生意参谋首页「数据概览」实时卡一致，返回 支付金额/访客/浏览量/支付买家数/支付订单数/转化率）
@@ -378,18 +378,28 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
     out: list[dict] = []
     page = 1
     while True:
+        # 注意：不能用 item-list 预设（它带 compareType=cycle，会导致「昨日」单日查询返回空）。
+        # 直接用 api 命令拼 top.json，不传 compareType，才能拿到昨天的商品排行。
         payload = _run_api_json(
             [
                 "--store",
                 profile_name(store["id"]),
-                "item-list",
-                "--date",
-                target_date,
-                "--page",
-                str(page),
-                "--limit",
-                "20",
-                "--raw",
+                "api",
+                "/cc/item/view/top.json",
+                "-p",
+                f"dateRange={target_date}|{target_date}",
+                "-p",
+                "dateType=day",
+                "-p",
+                f"page={page}",
+                "-p",
+                "pageSize=20",
+                "-p",
+                "order=desc",
+                "-p",
+                "orderBy=payAmt",
+                "-p",
+                "device=0",
             ],
             timeout=timeout,
         )
@@ -421,17 +431,81 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
                     "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
                     "add_cart": int(_to_num(_take(r, "itemCartCnt"))),
                     "refund_amount": round(_to_num(_take(r, "sucRefundAmt")), 2),
-                }
+                    "pay_pct": round(_to_num(_take(r, "payPct")), 2),
+                    "item_clt_byr_cnt": int(_to_num(_take(r, "itemCltByrCnt"))),
+                    "uv_avg_value": round(_to_num(_take(r, "uvAvgValue")), 2),
+                    "stay_time_avg": round(_to_num(_take(r, "stayTimeAvg")), 2),
+                    "itm_bounce_rate": round(_to_num(_take(r, "itmBounceRate")) * 100, 2),
+                    "se_guide_uv": int(_to_num(_take(r, "seGuideUv"))),
+                    "se_guide_pay_byr_cnt": int(_to_num(_take(r, "seGuidePayByrCnt"))),
+                    "se_guide_pay_rate": round(_to_num(_take(r, "seGuidePayRate")) * 100, 2),                }
+
             )
         total = data.get("recordCount") or 0
         if len(out) >= total or len(rows) < 20:
             break
         page += 1
     return out
+def fetch_shop_flow_source(store: dict, target_date: str | None = None, timeout: float = 120) -> list[dict]:
+    """流量来源排行 Top（生意参谋 流量看板-流量来源排行）。返回 [{rank, source, uv, desc}]。"""
+    target = target_date or date.today().isoformat()
+    payload = _run_api_json(
+        [
+            "--store", profile_name(store["id"]),
+            "api", "/flow/overview/live/shopFlowSourceTop/v4.json",
+            "-p", f"dateRange={target}|{target}",
+            "-p", "dateType=today" if target == date.today().isoformat() else "day",
+            "-p", "pageSize=50", "-p", "page=1", "-p", "order=desc", "-p", "orderBy=uv",
+            "-p", "device=2", "-p", "flowBizType=all", "-p", "pageType=all", "-p", "indexCode=uv",
+        ],
+        timeout=timeout,
+    )
+    rows = (payload.get("data") or {}).get("data") or []
+    out: list[dict] = []
+    for i, r in enumerate(rows, 1):
+        if not isinstance(r, dict):
+            continue
+        out.append(
+            {
+                "rank": i,
+                "source": str(_take(r, "pageName") or ""),
+                "uv": int(_to_num(_take(r, "uv"))),
+                "desc": str(_take(r, "pageDesc") or ""),
+            }
+        )
+    return out
+
+
+def fetch_shop_refund(store: dict, timeout: float = 120) -> dict:
+    """拉取今日实时退款（生意参谋 首页-数据概括 退款金额-完结时间）。返回 dict。"""
+    payload = _run_live_overview(store, timeout=timeout)
+    _check_content(payload)
+    data = (payload.get("content") or {}).get("data") or {}
+    today_d = (data.get("data") or {}).get("today") or {}
+    yest_d = (data.get("data") or {}).get("yestday") or {}
+
+    def _val(item: dict, field: str) -> float:
+        return _to_num(_take(item, field))
+
+    cycle_raw = (today_d.get("rfdSucAmt") or {}).get("cycleCrc")
+    cycle = round(float(cycle_raw) * 100, 1) if cycle_raw is not None else None
+    return {
+        "amount": round(_val(today_d, "rfdSucAmt"), 2),
+        "pay_amt": round(_val(today_d, "payAmt"), 2),
+        "rate": round(_val(today_d, "payAmtRfdRate") * 100, 2),
+        "ord_rate": round(_val(today_d, "ordRfdRate") * 100, 2),
+        "cycle": cycle,
+        "yest_amount": round(_val(yest_d, "rfdSucAmt"), 2),
+        "yest_pay_amt": round(_val(yest_d, "payAmt"), 2),
+        "yest_rate": round(_val(yest_d, "payAmtRfdRate") * 100, 2),
+        "update_time": (data.get("data") or {}).get("updateTime") or (data.get("updateTime") or ""),
+    }
+
+
 def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120) -> list[dict]:
     """拉取今日商品排行实时数据（商品-商品排行-实时档，全量商品，自动翻页）。"""
     today = date.today().isoformat()
-    fields = ["payAmt", "payItmCnt", "payRate", "itmUv", "itmPv", "payByrCnt", "itemCartCnt", "sucRefundAmt"]
+    fields = ["payAmt", "payItmCnt", "payRate", "itmUv", "itmPv", "payByrCnt", "itemCartCnt", "sucRefundAmt", "payPct", "itemCltByrCnt", "uvAvgValue", "stayTimeAvg", "itmBounceRate", "seGuideUv", "seGuidePayByrCnt", "seGuidePayRate"]
     out: list[dict] = []
     page = 1
     while True:
@@ -496,6 +570,14 @@ def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120
                     "conversion_rate": round(_to_num(_take(r, "payRate")) * 100, 2),
                     "add_cart": int(_to_num(_take(r, "itemCartCnt"))),
                     "refund_amount": round(_to_num(_take(r, "sucRefundAmt")), 2),
+                    "pay_pct": round(_to_num(_take(r, "payPct")), 2),
+                    "item_clt_byr_cnt": int(_to_num(_take(r, "itemCltByrCnt"))),
+                    "uv_avg_value": round(_to_num(_take(r, "uvAvgValue")), 2),
+                    "stay_time_avg": round(_to_num(_take(r, "stayTimeAvg")), 2),
+                    "itm_bounce_rate": round(_to_num(_take(r, "itmBounceRate")) * 100, 2),
+                    "se_guide_uv": int(_to_num(_take(r, "seGuideUv"))),
+                    "se_guide_pay_byr_cnt": int(_to_num(_take(r, "seGuidePayByrCnt"))),
+                    "se_guide_pay_rate": round(_to_num(_take(r, "seGuidePayRate")) * 100, 2),
                     "visitors_cycle": _cycle("itmUv"),
                     "pv_cycle": _cycle("itmPv"),
                     "buyers_cycle": _cycle("payByrCnt"),

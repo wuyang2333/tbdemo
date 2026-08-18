@@ -5,13 +5,14 @@ def test_health(client):
 
 
 def test_settings_route_exists(client, admin_token):
-    """回归测试：设置模块此前后端未挂载路由，访问 404。"""
-    anon = client.get("/api/settings")
+    """设置模块：/api/settings/brand 为管理员级路由，未登录即拦截。"""
+    anon = client.get("/api/settings/brand")
     assert anon.status_code in (401, 403)  # 管理员级，未登录即拦截
 
-    r = client.get("/api/settings", headers={"Authorization": f"Bearer {admin_token}"})
+    r = client.get("/api/settings/brand", headers={"Authorization": f"Bearer {admin_token}"})
     assert r.status_code == 200
-    assert "items" in r.json()
+    assert "brand" in r.json()
+    assert r.json()["brand"]["name"]
 
 
 def test_logs_route_admin_only(client, admin_token):

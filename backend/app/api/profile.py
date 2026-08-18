@@ -1,4 +1,4 @@
-"""个人中心：修改花名、密码、头像。"""
+﻿"""个人中心：修改花名、密码、头像。"""
 
 from __future__ import annotations
 
@@ -30,6 +30,53 @@ class PasswordIn(BaseModel):
 
 class AvatarIn(BaseModel):
     data: str
+
+
+@router.get("/sessions")
+def my_sessions(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    """当前账号的登录会话列表（含 IP / 设备信息）。"""
+    rows = db.execute(
+        "SELECT token, created_at, expires_at, ip, user_agent FROM tokens WHERE user_id = ? ORDER BY created_at DESC",
+        (user["id"],),
+    ).fetchall()
+    return {
+        "items": [
+            {
+                "token": r["token"],
+                "created_at": r["created_at"],
+                "expires_at": r["expires_at"],
+                "ip": r["ip"] or "",
+                "user_agent": r["user_agent"] or "",
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.post("/sessions/revoke-others")
+def revoke_other_sessions(
+    current_token: str = "",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """下线除当前设备外的所有会话。"""
+    token = current_token.strip()
+    if token:
+        db.execute("DELETE FROM tokens WHERE user_id = ? AND token != ?", (user["id"], token))
+    else:
+        db.execute("DELETE FROM tokens WHERE user_id = ?", (user["id"],))
+    return {"ok": True}
+
+
+@router.post("/sessions/{token}/revoke")
+def revoke_my_session(
+    token: str,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """下线当前账号的指定会话（其他设备立即退出）。"""
+    db.execute("DELETE FROM tokens WHERE user_id = ? AND token = ?", (user["id"], token))
+    return {"ok": True}
 
 
 @router.post("/nickname")

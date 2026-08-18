@@ -1,4 +1,4 @@
-import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
+﻿import { BarChartOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, InputNumber, Modal, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
@@ -18,6 +18,10 @@ export function AnalyticsAlertsPage() {
   const [baselineDays, setBaselineDays] = useState(7);
   const [loading, setLoading] = useState(false);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiReply, setAiReply] = useState("");
+  const [aiTarget, setAiTarget] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,6 +58,27 @@ export function AnalyticsAlertsPage() {
     }
   };
 
+  const openAIExplain = async (row: AnalyticsAlert) => {
+    setAiTarget(`${row.metric ?? ""} ${row.message ?? ""}`);
+    setAiOpen(true);
+    setAiLoading(true);
+    setAiReply("");
+    try {
+      const { data } = await http.post<{ reply: string }>("/ai/chat", {
+        messages: [
+          {
+            role: "user",
+            content: `系统提示了一条经营预警：「${row.metric ?? ""} ${row.message ?? ""}」。请结合淘宝店铺运营场景，解释这个预警可能的原因（数据口径、常见业务原因），并给出 2-3 条具体可执行的排查/改善建议。要求务实、简洁、不编造数据。`,
+          },
+        ],
+      });
+      setAiReply(data.reply);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAiLoading(false);
+    }
+  };
   const openConfig = async () => {
     await loadConfig();
     setConfigOpen(true);
@@ -91,6 +116,12 @@ export function AnalyticsAlertsPage() {
         level === "error" ? <Tag color="red">严重</Tag> : level === "warn" ? <Tag color="orange">提醒</Tag> : <Tag>信息</Tag>,
     },
     { title: "说明", dataIndex: "message" },
+    {
+      title: "操作",
+      key: "actions",
+      width: 100,
+      render: (_, row) => <Button size="small" onClick={() => openAIExplain(row)}>AI解读</Button>,
+    },
   ];
 
   return (
@@ -172,6 +203,15 @@ export function AnalyticsAlertsPage() {
               <InputNumber value={config.conversion_down} onChange={(v) => setCfg("conversion_down", v ?? -20)} style={{ width: "100%" }} />
             </div>
           </Space>
+        )}
+      </Modal>
+      <Modal title={`AI 预警解读：${aiTarget}`} open={aiOpen} onCancel={() => setAiOpen(false)} footer={null} width={560}>
+        {aiLoading ? (
+          <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
+        ) : aiReply ? (
+          <Text style={{ whiteSpace: "pre-line", lineHeight: 1.9 }}>{aiReply}</Text>
+        ) : (
+          <Empty />
         )}
       </Modal>
     </div>

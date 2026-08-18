@@ -1,9 +1,10 @@
 import { ArrowLeftOutlined } from "@ant-design/icons";
-import { Button, Card, Col, Progress, Row, Spin, Statistic, Typography, message } from "antd";
+import { Button, Card, Col, Progress, Row, Statistic, Typography, message } from "antd";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
+import { LoadingBlock } from "../components/ui/page-state";
 import type { AnalyticsGoalProgress, AnalyticsReport, AnalyticsSummary } from "../types";
 
 const { Text } = Typography;
@@ -43,7 +44,7 @@ export function BoardPage() {
   }, []);
 
   return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 0%,#1e293b 100%)", color: "#fff", padding: 24 }}>
+    <div style={{ minHeight: "100vh", background: "radial-gradient(900px 520px at 10% -8%, rgba(255,122,31,0.16), transparent 60%), radial-gradient(760px 460px at 96% 4%, rgba(91,141,239,0.14), transparent 55%), linear-gradient(135deg,#0b0c10 0%,#16171c 100%)", color: "#fff", padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <div>
           <Text style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>经营数据大屏</Text>
@@ -57,26 +58,24 @@ export function BoardPage() {
       </div>
 
       {loading ? (
-        <div style={{ textAlign: "center", padding: 120 }}>
-          <Spin size="large" />
-        </div>
+        <LoadingBlock text="正在加载经营数据大屏…" />
       ) : (
         <>
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日销售额" value={report?.today.sales ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "#60a5fa"  } }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日访客" value={report?.today.visitors ?? 0} styles={{ content: {  color: "#34d399"  } }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日订单" value={report?.today.orders ?? 0} styles={{ content: {  color: "#fbbf24"  } }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日转化率" value={report?.today.conversion_rate ?? 0} precision={2} suffix="%" styles={{ content: {  color: "#f472b6"  } }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日推广花费" value={report?.promo_today.spend ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "#f87171"  } }} /></Card></Col>
-            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}><Statistic title="今日推广 ROI" value={report?.promo_today.roi ?? 0} precision={2} styles={{ content: {  color: "#a78bfa"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}><Statistic title="今日销售额" value={report?.today.sales ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "var(--ops-cat-1)"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}><Statistic title="今日访客" value={report?.today.visitors ?? 0} styles={{ content: {  color: "var(--ops-cat-3)"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}><Statistic title="今日订单" value={report?.today.orders ?? 0} styles={{ content: {  color: "var(--ops-cat-0)"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}><Statistic title="今日转化率" value={report?.today.conversion_rate ?? 0} precision={2} suffix="%" styles={{ content: {  color: "var(--ops-cat-5)"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}><Statistic title="今日推广花费" value={report?.promo_today.spend ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "var(--ops-cat-4)"  } }} /></Card></Col>
+            <Col xs={12} md={4}><Card style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}><Statistic title="今日推广 ROI" value={report?.promo_today.roi ?? 0} precision={2} styles={{ content: {  color: "var(--ops-cat-2)"  } }} /></Card></Col>
           </Row>
 
           <Row gutter={[16, 16]}>
             <Col xs={24} md={8}>
-              <Card title="月度目标" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}>
-                <Statistic title="已达成" value={goal?.sales ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "#34d399", fontSize: 28  } }} />
+              <Card title="月度目标" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}>
+                <Statistic title="已达成" value={goal?.sales ?? 0} precision={0} prefix="¥" styles={{ content: {  color: "var(--ops-cat-3)", fontSize: 28  } }} />
                 <div style={{ margin: "10px 0" }}>
-                  <Progress percent={Math.min(goal?.progress_pct ?? 0, 100)} showInfo={false} strokeColor="#34d399" railColor="rgba(255,255,255,0.15)" />
+                  <Progress percent={Math.min(goal?.progress_pct ?? 0, 100)} showInfo={false} strokeColor="var(--ops-cat-3)" railColor="rgba(255,255,255,0.15)" />
                 </div>
                 <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 13 }}>
                   目标 {goal ? fmt(goal.goal) : "未设置"} · 进度 {(goal?.progress_pct ?? 0).toFixed(1)}% · 预测 {goal ? fmt(goal.forecast) : "—"}
@@ -84,7 +83,7 @@ export function BoardPage() {
               </Card>
             </Col>
             <Col xs={24} md={8}>
-              <Card title="今日 vs 昨日" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}>
+              <Card title="今日 vs 昨日" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}>
                 <div style={{ fontSize: 14, lineHeight: 2 }}>
                   <Text style={{ color: "#fff" }}>销售额：{fmt(report?.today.sales ?? 0)}</Text>
                   <Text style={{ marginLeft: 8, color: "rgba(255,255,255,0.6)" }}>昨日 {fmt(report?.yesterday.sales ?? 0)}</Text>
@@ -100,15 +99,15 @@ export function BoardPage() {
               </Card>
             </Col>
             <Col xs={24} md={8}>
-              <Card title="本周累计" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14 }}>
+              <Card title="本周累计" style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "var(--ops-radius-lg)" }}>
                 <div style={{ fontSize: 16, lineHeight: 2 }}>
-                  <Text style={{ color: "#60a5fa" }}>销售额：{fmt(summary?.week.sales ?? 0)}</Text>
+                  <Text style={{ color: "var(--ops-cat-1)" }}>销售额：{fmt(summary?.week.sales ?? 0)}</Text>
                 </div>
                 <div style={{ fontSize: 16, lineHeight: 2 }}>
-                  <Text style={{ color: "#34d399" }}>访客：{summary?.week.visitors ?? 0}</Text>
+                  <Text style={{ color: "var(--ops-cat-3)" }}>访客：{summary?.week.visitors ?? 0}</Text>
                 </div>
                 <div style={{ fontSize: 16, lineHeight: 2 }}>
-                  <Text style={{ color: "#fbbf24" }}>订单：{summary?.week.orders ?? 0}</Text>
+                  <Text style={{ color: "var(--ops-cat-0)" }}>订单：{summary?.week.orders ?? 0}</Text>
                 </div>
               </Card>
             </Col>

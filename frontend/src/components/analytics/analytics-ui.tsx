@@ -1,6 +1,6 @@
 import { Button, Empty, Select, Space, Tag, Typography, message } from "antd";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import http, { getApiErrorMessage } from "../../lib/api";
 import { showSyncFeedback } from "../../lib/sync-feedback";
@@ -64,6 +64,20 @@ export function useSyncStores(onDone: () => void) {
   return { syncing, syncAll };
 }
 
+function useChartHover(count: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [hover, setHover] = useState<{ i: number; x: number } | null>(null);
+  const onMove = (e: { clientX: number }) => {
+    const el = ref.current;
+    if (!el || count < 2) return;
+    const rect = el.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const ratio = x / rect.width;
+    setHover({ i: Math.round(ratio * (count - 1)), x });
+  };
+  return { ref, hover, onMove, onLeave: () => setHover(null) };
+}
+
 export function TrendChart({ trend }: { trend: AnalyticsTrendPoint[] }) {
   const width = 720;
   const height = 210;
@@ -81,17 +95,28 @@ export function TrendChart({ trend }: { trend: AnalyticsTrendPoint[] }) {
       .map(([x, y]) => `${x},${y}`)
       .join(" ");
 
+  const hoverState = useChartHover(trend.length);
+  const h = hoverState.hover;
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 210, display: "block" }}>
-      <polyline points={lineFor("sales")} fill="none" stroke="#ff5000" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-      <polyline points={lineFor("orders")} fill="none" stroke="#1677ff" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-      <text x={pad} y={height - 4} fontSize={10} fill="rgba(128,128,128,0.85)">
-        {trend[0].date}
-      </text>
-      <text x={width - pad} y={height - 4} fontSize={10} fill="rgba(128,128,128,0.85)" textAnchor="end">
-        {trend[trend.length - 1].date}
-      </text>
-    </svg>
+    <div ref={hoverState.ref} style={{ position: "relative" }} onMouseMove={hoverState.onMove} onMouseLeave={hoverState.onLeave}>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 210, display: "block" }}>
+        <polyline points={lineFor("sales")} fill="none" stroke="var(--ops-chart-accent)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={lineFor("orders")} fill="none" stroke="var(--ops-chart-series)" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+        <text x={pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)">
+          {trend[0].date}
+        </text>
+        <text x={width - pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)" textAnchor="end">
+          {trend[trend.length - 1].date}
+        </text>
+      </svg>
+      {h && (
+        <div style={{ position: "absolute", left: h.x, top: 8, transform: "translateX(-50%)", background: "var(--ops-panel)", border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "8px 12px", fontSize: 12, lineHeight: "20px", pointerEvents: "none", whiteSpace: "nowrap", zIndex: 5, boxShadow: "var(--ops-shadow-sm)" }}>
+          <div style={{ fontWeight: 600 }}>{trend[h.i].date}</div>
+          <div>销售额 <b style={{ color: "var(--ops-chart-accent)" }}>{fmtMoney(trend[h.i].sales)}</b></div>
+          <div>订单 <b style={{ color: "var(--ops-chart-series)" }}>{trend[h.i].orders}</b></div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -114,6 +139,8 @@ export function LineChart({ labels, series, height = 200 }: { labels: string[]; 
     const pts = nums.map((v, i) => `${xs[i]},${height - pad - (v / max) * (height - pad * 2)}`);
     return { ...s, path: pts.join(" ") };
   });
+  const hoverState = useChartHover(n);
+  const h = hoverState.hover;
   return (
     <div>
       <Space style={{ marginBottom: 8 }} wrap>
@@ -128,17 +155,33 @@ export function LineChart({ labels, series, height = 200 }: { labels: string[]; 
           );
         })}
       </Space>
-      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height, display: "block" }}>
-        {paths.map((s) => (
-          <polyline key={s.name} points={s.path} fill="none" stroke={s.color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-        ))}
-        <text x={pad} y={height - 4} fontSize={10} fill="rgba(128,128,128,0.85)">
-          {labels[0]}
-        </text>
-        <text x={width - pad} y={height - 4} fontSize={10} fill="rgba(128,128,128,0.85)" textAnchor="end">
-          {labels[n - 1]}
-        </text>
-      </svg>
+      <div ref={hoverState.ref} style={{ position: "relative" }} onMouseMove={hoverState.onMove} onMouseLeave={hoverState.onLeave}>
+        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height, display: "block" }}>
+          {paths.map((s) => (
+            <polyline key={s.name} points={s.path} fill="none" stroke={s.color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+          ))}
+          <text x={pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)">
+            {labels[0]}
+          </text>
+          <text x={width - pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)" textAnchor="end">
+            {labels[n - 1]}
+          </text>
+        </svg>
+        {h && (
+          <div style={{ position: "absolute", left: h.x, top: 8, transform: "translateX(-50%)", background: "var(--ops-panel)", border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "8px 12px", fontSize: 12, lineHeight: "20px", pointerEvents: "none", whiteSpace: "nowrap", zIndex: 5, boxShadow: "var(--ops-shadow-sm)" }}>
+            <div style={{ fontWeight: 600 }}>{labels[h.i]}</div>
+            {series.map((s) => {
+              const v = s.values[h.i];
+              const vText = v === null || v === undefined ? "—" : s.format ? s.format(v) : v;
+              return (
+                <div key={s.name}>
+                  {s.name} <b style={{ color: s.color }}>{vText}</b>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -165,13 +208,13 @@ export function StoreBars({ items }: { items: AnalyticsStoreAgg[] }) {
           >
             {item.store_name}
           </div>
-          <div style={{ flex: 1, height: 18, background: "var(--ops-card-bg-2)", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ flex: 1, height: 18, background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius-xs)", overflow: "hidden" }}>
             <div
               style={{
                 width: `${Math.max((item.sales / max) * 100, 1.5)}%`,
                 height: "100%",
                 background: "var(--ops-accent)",
-                borderRadius: 4,
+                borderRadius: "var(--ops-radius-xs)",
               }}
             />
           </div>
@@ -189,7 +232,7 @@ export function BucketCard({ title, data }: { title: string; data: AnalyticsSumm
     <div
       style={{
         border: "1px solid var(--ops-border)",
-        borderRadius: 12,
+        borderRadius: "var(--ops-radius)",
         padding: "14px 16px",
         height: "100%",
         background: "var(--ops-card-bg)",
@@ -211,7 +254,7 @@ export function BucketCard({ title, data }: { title: string; data: AnalyticsSumm
         </div>
         <div>
           <Text type="secondary" style={{ fontSize: 12 }}>转化率</Text>
-          <div style={{ fontSize: 20, fontWeight: 700, color: "#1677ff" }}>{fmtPct(data.conversion_rate)}</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "var(--ops-accent)" }}>{fmtPct(data.conversion_rate)}</div>
         </div>
       </div>
     </div>
@@ -223,17 +266,17 @@ export function ChangeBadge({ change, prevText }: { change: number | null; prevT
     return (
       <div>
         <Tag>无数据</Tag>
-        {prevText ? <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>{prevText}</div> : null}
+        {prevText ? <div style={{ fontSize: 11, color: "var(--ops-text-3)" }}>{prevText}</div> : null}
       </div>
     );
   }
   const up = change >= 0;
   return (
     <div>
-      <span style={{ color: up ? "#52c41a" : "#ff4d4f", fontWeight: 600, whiteSpace: "nowrap" }}>
+      <span style={{ color: up ? "var(--ops-up)" : "var(--ops-down)", fontWeight: 600, whiteSpace: "nowrap" }}>
         {up ? "▲" : "▼"} {Math.abs(change).toFixed(1)}%
       </span>
-      {prevText ? <div style={{ fontSize: 11, color: "rgba(128,128,128,0.75)" }}>{prevText}</div> : null}
+      {prevText ? <div style={{ fontSize: 11, color: "var(--ops-text-3)" }}>{prevText}</div> : null}
     </div>
   );
 }

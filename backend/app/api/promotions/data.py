@@ -1,7 +1,4 @@
-"""推广管理：万相台推广数据（自动抓取，复用店铺登录态）+ 推广计划管理（计划快照 + 本地备注/标记）。
-
-数据模式：realtime（今日实时，按小时） / yesterday（昨天） / 7d（近七天，按天）。
-"""
+"""推广管理：数据、计划、同步、导出、关键词。"""
 
 from __future__ import annotations
 
@@ -29,158 +26,39 @@ from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
 from backend.app.core.sycm import PROFILE_MISSING_MSG, has_profile
 
+from ._common import (
+    MODES,
+    PlanNoteIn,
+    _now,
+    _log,
+    _scope_filter,
+    _bound_stores,
+    _all_stores,
+    sync_promo_daily_all,
+    _mode,
+    _finalize,
+    _store_daily_rows,
+    _store_realtime_rows,
+    _last_sync,
+    sync_promo_realtime_all,
+    sync_promo_items_realtime_all,
+    _promo_insight_data,
+    _build_promo_prompt,
+    _lookup_item_image,
+    _refresh_plan_items,
+    PlanStatusIn,
+    PlanChatIn,
+    PlanChatBody,
+    _ensure_plan_daily,
+    _collect_plan_data,
+    _build_plan_prompt,
+)
+
 router = APIRouter()
-
-MODES = ("realtime", "yesterday", "7d")
-
-
-class PlanNoteIn(BaseModel):
-    note: str = ""
-    tag: str = ""
-
-
-def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-def _log(db, user: dict, action: str, target: str = "", detail: str = "") -> None:
-    log_op(db, user, "promotions", action, target, detail)
-
-
-def _scope_filter(store_id, user: dict) -> tuple[str, list]:
-    """按当前账号可见店铺生成 SQL 过滤片段；store_id 非空时再叠加指定店铺条件。"""
-    visible = visible_store_ids(user)
-    if visible is None:
-        fragment = ""
-        params: list = []
-    elif not visible:
-        return (" AND 1=0", [])
-    else:
-        fragment = " AND store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
-        params = []
-    if store_id:
-        fragment += " AND store_id = ?"
-        params.append(store_id)
-    return fragment, params
-
-
-def _bound_stores(db) -> list[dict]:
-    return [
-        dict(r)
-        for r in db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
-        if has_profile(r["id"])
-    ]
-
-
-def _all_stores(db) -> list[dict]:
-    """全部店铺（含未配置档案的），供同步函数显式标记失败原因。"""
-    return [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()]
-
-
-def sync_promo_daily_all(db, days: int = 7) -> dict:
-    """同步近 N 天推广按天数据到 promo_daily_data（经营日报推广数据来源）。
-
-    后台每日定时调用（勿加路由装饰器），单店容错。返回 {"results", "total", "ok"}。
-    """
-    today = date_cls.today()
-    start = today - timedelta(days=days - 1)
-    end = today - timedelta(days=1)
-    results = []
-    for store in _all_stores(db):
-        if not has_profile(store["id"]):
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
-            continue
-        try:
-            items = fetch_scene_daily(store, start.isoformat(), end.isoformat())
-            count = _store_daily_rows(db, store["id"], items, _now())
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
-        except AlimamaError as exc:
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
-
-
-def _mode(value: str) -> str:
-    return value if value in MODES else "realtime"
-
-
-def _finalize(item: dict) -> dict:
-    item["ctr"] = round(item["clicks"] / item["impressions"] * 100, 2) if item["impressions"] else 0.0
-    item["roi"] = round(item["sales"] / item["spend"], 2) if item["spend"] else 0.0
-    item["spend"] = round(item["spend"], 2)
-    item["sales"] = round(item["sales"], 2)
-    return item
-
-
-def _store_daily_rows(db, store_id: int, items: list[dict], now: str) -> int:
-    for it in items:
-        db.execute(
-            "INSERT INTO promo_daily_data (store_id, scene, scene_name, data_date, impressions, clicks, ctr, spend, sales, roi, orders, add_cart, conversion_rate, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(store_id, scene, data_date) DO UPDATE SET "
-            "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
-            "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-            "orders = excluded.orders, add_cart = excluded.add_cart, conversion_rate = excluded.conversion_rate",
-            (
-                store_id,
-                it["scene"],
-                it["scene_name"],
-                it["date"],
-                it["impressions"],
-                it["clicks"],
-                it["ctr"],
-                it["spend"],
-                it["sales"],
-                it["roi"],
-                it["orders"],
-                it["add_cart"],
-                it["conversion_rate"],
-                now,
-            ),
-        )
-    return len(items)
-
-
-def _store_realtime_rows(db, store_id: int, items: list[dict], now: str, data_date: str | None = None) -> int:
-    today = data_date or date_cls.today().isoformat()
-    for it in items:
-        imp = int(it.get("impressions") or 0)
-        clicks = int(it.get("clicks") or 0)
-        spend = round(it.get("spend") or 0, 2)
-        sales = round(it.get("sales") or 0, 2)
-        ctr = it.get("ctr") if it.get("ctr") is not None else (round(clicks / imp * 100, 2) if imp else 0.0)
-        roi = it.get("roi") if it.get("roi") is not None else (round(sales / spend, 2) if spend else 0.0)
-        conv = it.get("conversion_rate") if it.get("conversion_rate") is not None else 0.0
-        db.execute(
-            "INSERT INTO promo_realtime (store_id, scene, scene_name, data_date, hour, impressions, clicks, ctr, spend, sales, roi, orders, conversion_rate, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(store_id, scene, data_date, hour) DO UPDATE SET "
-            "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
-            "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-            "orders = excluded.orders, conversion_rate = excluded.conversion_rate",
-            (
-                store_id,
-                it["scene"],
-                it["scene_name"],
-                today,
-                it["hour"],
-                imp,
-                clicks,
-                ctr,
-                spend,
-                sales,
-                roi,
-                int(it.get("orders") or 0),
-                conv,
-                now,
-            ),
-        )
-    return len(items)
-
 
 @router.get("")
 def list_promotions() -> dict:
     return {"items": [], "message": "推广管理：使用推广数据与推广计划功能"}
-
 
 @router.get("/account")
 def promo_account(
@@ -193,7 +71,6 @@ def promo_account(
         "bound_stores": [{"id": s["id"], "name": s["name"]} for s in stores],
         "last_sync": last["value"] if last else None,
     }
-
 
 @router.post("/test")
 def test_promo(
@@ -212,11 +89,12 @@ def test_promo(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
     return {"results": results}
 
-
 @router.get("/data")
 def promo_data(
     mode: str = "realtime",
     scene: str = "",
+    start: str = "",
+    end: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -229,7 +107,60 @@ def promo_data(
     else:
         bound_store_count = sum(1 for s in _bound_stores(db) if s["id"] in visible)
 
+    # 自定义时间区间
+    use_range = bool(start.strip() and end.strip())
+    range_start = range_end = None
+    if use_range:
+        try:
+            range_start = date_cls.fromisoformat(start.strip())
+            range_end = date_cls.fromisoformat(end.strip())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式不正确（应为 YYYY-MM-DD）")
+        if range_start > range_end:
+            range_start, range_end = range_end, range_start
+        mode = "range"
+
+    def _pct(cur, prev):
+        if prev and prev > 0:
+            return round((cur - prev) / prev * 100, 1)
+        return None
+
+    def _store_sales(cur_hour: str | None = None) -> float:
+        """店铺销售额（真实ROI/广告占比用）。实时档用分时今日累计，历史档用日数据区间。"""
+        if cur_hour is not None:
+            row = db.execute(
+                "SELECT COALESCE(SUM(sales),0) AS s FROM store_hourly_data WHERE data_date = ? AND hour <= ?" + scope_frag,
+                [today.isoformat(), cur_hour] + scope_params,
+            ).fetchone()
+        else:
+            if mode == "yesterday":
+                sd = ed = today - timedelta(days=1)
+            elif mode == "range":
+                sd, ed = range_start, range_end
+            else:
+                sd, ed = today - timedelta(days=6), today - timedelta(days=1)
+            row = db.execute(
+                "SELECT COALESCE(SUM(sales),0) AS s FROM store_daily_data WHERE data_date >= ? AND data_date <= ?" + scope_frag,
+                [sd.isoformat(), ed.isoformat()] + scope_params,
+            ).fetchone()
+        return float(row["s"] or 0.0)
+
+    def _final_summary(raw: dict, store_sales: float) -> dict:
+        s = _finalize(raw)
+        s["real_roi"] = round(store_sales / s["spend"], 2) if s["spend"] else 0.0
+        s["ad_share"] = round(s["spend"] / store_sales * 100, 1) if store_sales else 0.0
+        s["cost_per_order"] = round(s["spend"] / s["orders"], 2) if s["orders"] else 0.0
+        return s
+
+    def _alerts(scenes: list[dict]) -> list[dict]:
+        out = []
+        for s in scenes:
+            if s["roi"] > 0 and s["roi"] < 2:
+                out.append({"type": "warn", "message": f"「{s['scene_name']}」ROI {s['roi']:.2f} 偏低（低于 2）"})
+        return out
+
     if mode == "realtime":
+        cur_hour = datetime.now().strftime("%H:00")
         rows = db.execute(
             "SELECT * FROM promo_realtime WHERE data_date = ?" + scope_frag + " ORDER BY hour ASC, scene ASC",
             [today.isoformat()] + scope_params,
@@ -248,10 +179,7 @@ def promo_data(
             for f in ("impressions", "clicks", "spend", "sales", "orders"):
                 item[f] += r[f] or 0
             h = r["hour"]
-            hrow = hour_map.setdefault(
-                h,
-                {"label": h, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0},
-            )
+            hrow = hour_map.setdefault(h, {"label": h, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0})
             for f in ("impressions", "clicks", "spend", "sales", "orders"):
                 hrow[f] += r[f] or 0
         scenes = sorted((_finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
@@ -260,56 +188,56 @@ def promo_data(
             row = hour_map[h]
             trend.append(
                 {
-                    "label": row["label"],
-                    "impressions": row["impressions"],
-                    "clicks": row["clicks"],
-                    "spend": round(row["spend"], 2),
-                    "sales": round(row["sales"], 2),
-                    "orders": row["orders"],
+                    "label": row["label"], "impressions": row["impressions"], "clicks": row["clicks"],
+                    "spend": round(row["spend"], 2), "sales": round(row["sales"], 2), "orders": row["orders"],
                     "roi": round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0,
                 }
             )
+        # 较昨日同时段
+        yest_rows = db.execute(
+            "SELECT * FROM promo_realtime WHERE data_date = ? AND hour <= ?" + scope_frag,
+            [(today - timedelta(days=1)).isoformat(), cur_hour] + scope_params,
+        ).fetchall()
+        y_sum = {"spend": 0.0, "sales": 0.0}
+        for r in yest_rows:
+            y_sum["spend"] += r["spend"] or 0
+            y_sum["sales"] += r["sales"] or 0
+        store_sales = _store_sales(cur_hour=cur_hour)
+        summary = _final_summary(summary, store_sales)
         return {
             "mode": mode,
-            "summary": _finalize(summary),
+            "summary": summary,
+            "compare": {"spend": _pct(summary["spend"], y_sum["spend"]), "sales": _pct(summary["sales"], y_sum["sales"])},
             "scenes": scenes,
+            "alerts": _alerts(scenes),
             "trend": trend,
             "trend_unit": "hour",
             "last_sync": _last_sync(db),
             "bound_stores": bound_store_count,
         }
 
-    # yesterday / 7d：按天报表（分场景）
+    # yesterday / 7d / range：按天报表（分场景）
     if mode == "yesterday":
-        start = today - timedelta(days=1)
-        end = today - timedelta(days=1)
+        start_d = end_d = today - timedelta(days=1)
+    elif mode == "range":
+        start_d, end_d = range_start, range_end
     else:
-        start = today - timedelta(days=6)
-        end = today - timedelta(days=1)
+        start_d, end_d = today - timedelta(days=6), today - timedelta(days=1)
     query = "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?" + scope_frag
-    params: list = [start.isoformat(), end.isoformat()] + scope_params
+    params: list = [start_d.isoformat(), end_d.isoformat()] + scope_params
     if scene:
         query += " AND scene = ?"
         params.append(scene)
     rows = db.execute(query + " ORDER BY data_date ASC, scene ASC", params).fetchall()
 
-    scene_map: dict[str, dict] = {}
-    date_map: dict[str, dict] = {}
+    scene_map = {}
+    date_map = {}
     totals = {"impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0}
     for r in rows:
         key = r["scene"]
         item = scene_map.setdefault(
             key,
-            {
-                "scene": key,
-                "scene_name": r["scene_name"],
-                "impressions": 0,
-                "clicks": 0,
-                "spend": 0.0,
-                "sales": 0.0,
-                "orders": 0,
-                "add_cart": 0,
-            },
+            {"scene": key, "scene_name": r["scene_name"], "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0},
         )
         for f in totals:
             item[f] += r[f] or 0
@@ -320,42 +248,49 @@ def promo_data(
             drow[f] += r[f] or 0
 
     scenes = sorted((_finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
-    span = (end - start).days + 1
+    span = (end_d - start_d).days + 1
     trend = []
     for i in range(span - 1, -1, -1):
-        d = (end - timedelta(days=i)).isoformat()
+        d = (end_d - timedelta(days=i)).isoformat()
         row = date_map.get(d)
-        label = (end - timedelta(days=i)).strftime("%m-%d")
+        label = (end_d - timedelta(days=i)).strftime("%m-%d")
         if not row:
             trend.append({"label": label, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0})
             continue
         trend.append(
             {
-                "label": label,
-                "impressions": row["impressions"],
-                "clicks": row["clicks"],
-                "spend": round(row["spend"], 2),
-                "sales": round(row["sales"], 2),
-                "orders": row["orders"],
+                "label": label, "impressions": row["impressions"], "clicks": row["clicks"],
+                "spend": round(row["spend"], 2), "sales": round(row["sales"], 2), "orders": row["orders"],
                 "roi": round(row["sales"] / row["spend"], 2) if row["spend"] else 0.0,
             }
         )
 
+    # 较上周同期
+    prev_end = start_d - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=span - 1)
+    prev_totals = {"spend": 0.0, "sales": 0.0}
+    if prev_start >= date_cls(2000, 1, 1):
+        prev_rows = db.execute(
+            "SELECT * FROM promo_daily_data WHERE data_date >= ? AND data_date <= ?" + scope_frag,
+            [prev_start.isoformat(), prev_end.isoformat()] + scope_params,
+        ).fetchall()
+        for r in prev_rows:
+            prev_totals["spend"] += r["spend"] or 0
+            prev_totals["sales"] += r["sales"] or 0
+
+    store_sales = _store_sales()
+    summary = _final_summary(totals, store_sales)
     return {
         "mode": mode,
-        "summary": _finalize(dict(totals)),
+        "summary": summary,
+        "compare": {"spend": _pct(summary["spend"], prev_totals["spend"]), "sales": _pct(summary["sales"], prev_totals["sales"])},
         "scenes": scenes,
+        "alerts": _alerts(scenes),
         "trend": trend,
         "trend_unit": "day",
         "last_sync": _last_sync(db),
         "bound_stores": bound_store_count,
     }
-
-
-def _last_sync(db) -> str | None:
-    row = db.execute("SELECT value FROM meta WHERE key = 'promo_last_sync'").fetchone()
-    return row["value"] if row else None
-
 
 @router.post("/sync")
 def sync_promo(
@@ -394,7 +329,6 @@ def sync_promo(
     )
     _log(db, user, "同步万相台数据", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
-
 
 @router.get("/plans")
 def list_plans(
@@ -450,7 +384,6 @@ def list_plans(
         d["mode"] = mode
         items.append(d)
     return {"items": items, "mode": mode}
-
 
 @router.post("/sync-plans")
 def sync_plans(
@@ -545,7 +478,6 @@ def sync_plans(
     _log(db, user, "同步推广计划", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
-
 @router.post("/sync-items")
 def sync_items(
     mode: str = "realtime",
@@ -620,67 +552,6 @@ def sync_items(
     _log(db, user, "同步商品推广数据", "", f"模式={db_mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "mode": db_mode}
 
-
-def sync_promo_realtime_all(db) -> dict:
-    """同步万相台今日实时分时数据到 promo_realtime（后台定时与接口共用）。"""
-    from backend.app.core.alimama import AlimamaError, fetch_realtime
-
-    now = _now()
-    results = []
-    for store in _all_stores(db):
-        if not has_profile(store["id"]):
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
-            continue
-        try:
-            items = fetch_realtime(store)
-            count = _store_realtime_rows(db, store["id"], items, now)
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
-        except AlimamaError as exc:
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
-
-
-def sync_promo_items_realtime_all(db) -> dict:
-    """同步商品级实时推广数据到 promo_item_stats（后台定时与接口共用）。
-
-    走「计划→商品」口径（全站推广+关键词+人群，不含内容营销）。
-    """
-    from backend.app.core.alimama import AlimamaError, fetch_item_promo_plan_based, fetch_promo_item_fallback
-
-    today = date_cls.today().isoformat()
-    now = _now()
-    results = []
-    for store in _all_stores(db):
-        if not has_profile(store["id"]):
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
-            continue
-        try:
-            rows = fetch_item_promo_plan_based(store, today, today, realtime=True)
-            source = "plan_scene"
-            if not rows:
-                rows = fetch_promo_item_fallback(store, today, today, realtime=True)
-                source = "plan"
-            for it in rows:
-                db.execute(
-                    "INSERT INTO promo_item_stats (store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(store_id, item_id, mode) DO UPDATE SET "
-                    "item_title = excluded.item_title, spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-                    "clicks = excluded.clicks, orders = excluded.orders, impressions = excluded.impressions, "
-                    "source = excluded.source, updated_at = excluded.updated_at",
-                    (
-                        store["id"], it["item_id"], it.get("item_title") or "", "realtime",
-                        it.get("spend") or 0, it.get("sales") or 0, it.get("roi") or 0,
-                        it.get("clicks") or 0, it.get("orders") or 0, it.get("impressions") or 0,
-                        source, now,
-                    ),
-                )
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(rows)})
-        except AlimamaError as exc:
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
-
-
 @router.post("/sync-hourly")
 def sync_promo_hourly(
     days: int = 7,
@@ -712,155 +583,6 @@ def sync_promo_hourly(
         results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total, "error": err})
     _log(db, user, "补推广分时", "", f"近 {days} 天 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
-
-
-def _promo_insight_data(mode: str, db, user: dict) -> dict:
-    mode = _mode(mode)
-    today = date_cls.today()
-    visible = visible_store_ids(user)
-    if visible is None:
-        scope_frag = ""
-        scope_params: list = []
-    elif not visible:
-        scope_frag = " AND 1=0"
-        scope_params = []
-    else:
-        scope_frag = " AND store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
-        scope_params = []
-    if mode == "realtime":
-        scene_rows = db.execute(
-            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_realtime "
-            "WHERE data_date = ?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
-            [today.isoformat()] + scope_params,
-        ).fetchall()
-    elif mode == "yesterday":
-        d = (today - timedelta(days=1)).isoformat()
-        scene_rows = db.execute(
-            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
-            "WHERE data_date = ?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
-            [d] + scope_params,
-        ).fetchall()
-    else:
-        start = (today - timedelta(days=6)).isoformat()
-        scene_rows = db.execute(
-            "SELECT scene, scene_name, SUM(spend) AS spend, SUM(sales) AS sales FROM promo_daily_data "
-            "WHERE data_date >= ? AND data_date <= ?" + scope_frag + " GROUP BY scene ORDER BY spend DESC",
-            [start, today.isoformat()] + scope_params,
-        ).fetchall()
-    scenes = []
-    for r in scene_rows:
-        spend = round(r["spend"] or 0, 2)
-        sales = round(r["sales"] or 0, 2)
-        scenes.append({"scene": r["scene"], "scene_name": r["scene_name"] or r["scene"], "spend": spend, "sales": sales, "roi": round(sales / spend, 2) if spend else 0.0})
-    if visible is None:
-        plan_scope = ""
-    elif not visible:
-        plan_scope = " WHERE 1=0"
-    else:
-        plan_scope = " WHERE p.store_id IN (%s)" % ",".join(str(i) for i in sorted(visible))
-    plans = db.execute(
-        "SELECT p.scene, p.scene_name, p.plan_name, p.status, p.day_budget, "
-        "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks "
-        "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
-        + plan_scope
-        + " ORDER BY COALESCE(s.spend,0) DESC",
-        (mode,),
-    ).fetchall()
-    plan_list = []
-    for r in plans:
-        spend = round(r["spend"] or 0, 2)
-        sales = round(r["sales"] or 0, 2)
-        plan_list.append(
-            {
-                "scene_name": r["scene_name"] or r["scene"] or "?",
-                "plan_name": r["plan_name"] or "?",
-                "status": r["status"],
-                "day_budget": round(r["day_budget"] or 0, 2),
-                "spend": spend,
-                "sales": sales,
-                "roi": round(sales / spend, 2) if spend else 0.0,
-                "clicks": int(r["clicks"] or 0),
-            }
-        )
-    total_spend = sum(p["spend"] for p in plan_list)
-    total_sales = sum(p["sales"] for p in plan_list)
-    active = [p for p in plan_list if p["status"] == "在投"]
-    low = [p for p in plan_list if p["spend"] > 0 and p["roi"] < 1]
-    mid = [p for p in plan_list if p["spend"] > 0 and 1 <= p["roi"] < 2]
-    high = [p for p in plan_list if p["spend"] > 0 and p["roi"] >= 2]
-    return {
-        "mode": mode,
-        "scenes": scenes,
-        "plans": plan_list,
-        "total_spend": round(total_spend, 2),
-        "total_sales": round(total_sales, 2),
-        "total_roi": round(total_sales / total_spend, 2) if total_spend else 0.0,
-        "active_count": len(active),
-        "low_count": len(low),
-        "mid_count": len(mid),
-        "high_count": len(high),
-    }
-
-
-def _build_promo_prompt(d: dict) -> str:
-    lines = [
-        f"数据范围：{d['mode']}",
-        f"总花费 {d['total_spend']:.0f} 元，总成交 {d['total_sales']:.0f} 元，整体ROI {d['total_roi']}；在投计划 {d['active_count']} 个，其中ROI≥2有{d['high_count']}个、ROI1~2有{d['mid_count']}个、ROI<1有{d['low_count']}个",
-    ]
-    if d["scenes"]:
-        lines.append("分场景：" + "、".join(f"{s['scene_name']}花费{s['spend']:.0f}元成交{s['sales']:.0f}元ROI{s['roi']}" for s in d["scenes"]))
-    if d["plans"]:
-        top = sorted(d["plans"], key=lambda p: -p["spend"])[:6]
-        lines.append("花费最高的计划：" + "；".join(f"{p['plan_name'][:20]}({p['scene_name']})花费{p['spend']:.0f}元ROI{p['roi']}" for p in top))
-        lowplans = [p for p in d["plans"] if p["spend"] > 0 and p["roi"] < 1]
-        if lowplans:
-            lines.append("ROI<1的计划：" + "；".join(f"{p['plan_name'][:20]}ROI{p['roi']}" for p in lowplans[:6]))
-    prompt = (
-        "你是淘宝店铺的电商推广优化师。根据以下万相台推广数据输出推广诊断，严格按格式：\n"
-        "【整体表现】2-3句话概括（总花费、成交、ROI、计划健康度）\n"
-        "【亮点】\n- 高效计划/场景及原因（2-3条）\n"
-        "【风险】\n- 低效计划、花费失控、预算风险等（3条）\n"
-        "【建议】\n- 具体可执行：点名建议暂停/降价/加预算的计划名（4-5条）\n"
-        "简体中文务实，金额≥1万用X.X万简化；只依据给定数据，不要编造。\n\n"
-        + "\n".join(lines)
-    )
-    return prompt
-
-
-@router.post("/insight")
-def promo_ai_insight(
-    mode: str = "realtime",
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    """AI 推广解读：基于计划/场景数据给出投放优化建议。"""
-    from backend.app.api.analytics import _parse_insight_sections
-    from backend.app.api.model_configs import get_default_config
-    from backend.app.core.ai_client import AIError, chat_completion
-
-    cfg = get_default_config(db)
-    if not cfg or not cfg["api_key"]:
-        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _promo_insight_data(mode, db, user)
-    try:
-        reply = chat_completion(cfg, [{"role": "user", "content": _build_promo_prompt(data)}], timeout=120.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {
-        "sections": _parse_insight_sections(reply),
-        "reply": reply,
-        "mode": data["mode"],
-        "summary": {
-            "total_spend": data["total_spend"],
-            "total_sales": data["total_sales"],
-            "total_roi": data["total_roi"],
-            "active_count": data["active_count"],
-            "high_count": data["high_count"],
-            "mid_count": data["mid_count"],
-            "low_count": data["low_count"],
-        },
-    }
-
 
 @router.get("/alerts")
 def promo_alerts(
@@ -910,7 +632,6 @@ def promo_alerts(
             alerts.append({"level": "warn", "type": "ROI偏低", "message": f"「{name}」今日ROI {rt_roi:.2f} 低于 {roi_low:.2f}，建议关注"})
     alerts.sort(key=lambda a: 0 if a["level"] == "error" else 1)
     return {"items": alerts[:50], "count": len(alerts)}
-
 
 @router.get("/export")
 def export_promo(
@@ -976,7 +697,6 @@ def export_promo(
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
-
 @router.get("/plans/export")
 def export_plans(
     mode: str = "realtime",
@@ -1025,43 +745,6 @@ def export_plans(
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
-
-def _lookup_item_image(db, store_id: int, item_id: str) -> str:
-    """从商品表反查图片（先实时后按天）。"""
-    _r = db.execute(
-        "SELECT image FROM store_item_realtime WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
-        (store_id, item_id),
-    ).fetchone()
-    if _r:
-        return _r["image"]
-    _r = db.execute(
-        "SELECT image FROM store_item_daily WHERE store_id = ? AND item_id = ? AND image != '' LIMIT 1",
-        (store_id, item_id),
-    ).fetchone()
-    return _r["image"] if _r else ""
-
-
-def _refresh_plan_items(db, store: dict) -> None:
-    """抓取店铺的计划↔商品映射并写入缓存表（慢操作，仅在需要时调用）。"""
-    from backend.app.core.alimama import _promo_item_map
-
-    m = _promo_item_map(store)
-    now = _now()
-    for cid, items in m.items():
-        if not items:
-            continue
-        first = items[0]
-        img = _lookup_item_image(db, store["id"], first.get("item_id") or "") if first.get("item_id") else ""
-        db.execute(
-            "INSERT INTO promo_plan_items (store_id, campaign_id, item_id, item_title, image, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(store_id, campaign_id) DO UPDATE SET "
-            "item_id = excluded.item_id, item_title = excluded.item_title, "
-            "image = excluded.image, updated_at = excluded.updated_at",
-            (store["id"], cid, first.get("item_id") or "", first.get("item_title") or "", img, now),
-        )
-
-
 @router.get("/plan-items")
 def plan_items(
     refresh: int = 0,
@@ -1097,7 +780,6 @@ def plan_items(
             "image": r["image"],
         }
     return {"items": result, "from_cache": not need}
-
 
 @router.get("/keywords")
 def promo_keywords(
@@ -1145,7 +827,6 @@ def promo_keywords(
     rows.sort(key=lambda x: -x["spend"])
     return {"items": rows[:100], "count": len(rows), "mode": mode}
 
-
 @router.put("/plans/{plan_id}")
 def update_plan(
     plan_id: int,
@@ -1166,12 +847,6 @@ def update_plan(
     )
     _log(db, user, "编辑推广计划", row["plan_name"], "备注/标记更新")
     return {"ok": True}
-
-
-class PlanStatusIn(BaseModel):
-    status: str = "pause"
-    execute: bool = False  # 前端二次确认后显式传 true，才会真正操作万相台
-
 
 @router.post("/plans/{plan_id}/status")
 def set_plan_status(
@@ -1232,51 +907,6 @@ def set_plan_status(
     _log(db, user, "计划操作", label, f"{target}（万相台已执行，命中 {count} 个单元）")
     return {"ok": True, "execute": True, "count": count, "response": str(resp)[:300]}
 
-
-
-class PlanChatIn(BaseModel):
-    role: str
-    content: str
-
-
-class PlanChatBody(BaseModel):
-    messages: list[PlanChatIn] = []
-
-
-def _ensure_plan_daily(db, store: dict, start, end, user: dict) -> None:
-    """懒加载：把 [start,end] 区间内缺失的按天计划报表补齐到 promo_plan_daily。"""
-    from backend.app.core.alimama import AlimamaError
-
-    visible = visible_store_ids(user)
-    if visible is not None and store["id"] not in visible:
-        return
-    cur = start
-    while cur <= end:
-        d = cur.isoformat()
-        exists = db.execute(
-            "SELECT COUNT(*) AS c FROM promo_plan_daily WHERE store_id = ? AND data_date = ?",
-            (store["id"], d),
-        ).fetchone()["c"]
-        if not exists:
-            try:
-                rows = fetch_plan_reports(store, d, d)
-            except AlimamaError:
-                rows = []
-            now = _now()
-            if not rows:
-                rows = [{"campaign_id": "", "spend": 0.0, "sales": 0.0, "roi": 0.0, "clicks": 0}]
-            for r in rows:
-                db.execute(
-                    "INSERT INTO promo_plan_daily (store_id, campaign_id, data_date, spend, sales, roi, clicks, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(store_id, campaign_id, data_date) DO UPDATE SET "
-                    "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-                    "clicks = excluded.clicks, updated_at = excluded.updated_at",
-                    (store["id"], r["campaign_id"], d, r["spend"], r["sales"], r["roi"], r["clicks"], now),
-                )
-        cur += timedelta(days=1)
-
-
 @router.get("/plans/{plan_id}/trend")
 def plan_trend(
     plan_id: int,
@@ -1327,140 +957,3 @@ def plan_trend(
         "items": out,
         "days": days,
     }
-
-
-def _collect_plan_data(db, store: dict, plan: dict, user: dict) -> dict:
-    """汇总单个计划的静态信息 + 三个模式统计 + 环比 + 最近趋势。"""
-    scope_frag, scope_params = _scope_filter(store["id"], user)
-    modes: dict[str, dict] = {}
-    for r in db.execute(
-        "SELECT * FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ?" + scope_frag,
-        [store["id"], plan["campaign_id"]] + scope_params,
-    ).fetchall():
-        modes[r["mode"]] = dict(r)
-
-    def _line(mode: str, label: str) -> str:
-        st = modes.get(mode)
-        if not st:
-            return label + "：暂无数据"
-        cyc = ""
-        if st.get("prev_spend"):
-            chg = (st["spend"] - st["prev_spend"]) / st["prev_spend"] * 100
-            cyc = "（花费较上期 %+.1f%%）" % chg
-        return "%s：花费 ¥%.2f，成交 ¥%.2f，ROI %.2f，点击 %d%s" % (
-            label, st["spend"], st["sales"], st["roi"], int(st["clicks"]), cyc)
-
-    trend = []
-    for r in db.execute(
-        "SELECT data_date, spend, sales, roi FROM promo_plan_daily "
-        "WHERE store_id = ? AND campaign_id = ? AND data_date >= ?" + scope_frag + " ORDER BY data_date ASC",
-        [store["id"], plan["campaign_id"], (date_cls.today() - timedelta(days=6)).isoformat()] + scope_params,
-    ).fetchall():
-        trend.append("%s:花费%.0f/成交%.0f/ROI%.2f" % (r["data_date"][5:], r["spend"], r["sales"], r["roi"]))
-
-    return {
-        "plan": plan,
-        "store_name": store["name"],
-        "lines": [_line("realtime", "实时"), _line("yesterday", "昨天"), _line("7d", "近7天")],
-        "trend": trend,
-    }
-
-
-def _build_plan_prompt(data: dict) -> str:
-    p = data["plan"]
-    parts = [
-        "你是淘宝万相台推广运营专家。请针对下面这一个推广计划做深入分析，输出结构化解读，严格按格式，每部分独占一段，条目用“- ”开头：",
-        "计划：%s（ID %s）｜店铺：%s" % (p["plan_name"], p["campaign_id"], data["store_name"]),
-        "场景：%s｜状态：%s｜日预算：¥%.2f｜出价：%s" % (
-            p["scene_name"], p["status"], round(p["day_budget"] or 0, 2), p["bid_type"] or "—"),
-    ]
-    parts.extend(data["lines"])
-    if data["trend"]:
-        parts.append("近7天逐日：" + "；".join(data["trend"]))
-    parts.extend(
-        [
-            "【整体表现】2-3句话评价该计划（含花费/成交/ROI关键数字）",
-            "【亮点】\n- 投放亮点（2-3条，确实没有就写“本期暂无突出亮点”）",
-            "【风险】\n- 风险点（如ROI偏低、花费超预算、环比下滑等，2-3条，没有就写“暂无重大风险”）",
-            "【建议】\n- 下一步优化建议（加/减预算、调出价、暂停等，3-4条，要具体可执行）",
-        ]
-    )
-    return "\n".join(parts)
-
-
-@router.post("/plans/{plan_id}/insight")
-def plan_ai_insight(
-    plan_id: int,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    """单个推广计划的 AI 分析。"""
-    from backend.app.api.analytics import _parse_insight_sections
-    from backend.app.api.model_configs import get_default_config
-    from backend.app.core.ai_client import AIError, chat_completion
-
-    cfg = get_default_config(db)
-    if not cfg or not cfg["api_key"]:
-        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    scope_frag, scope_params = _scope_filter(None, user)
-    row = db.execute(
-        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
-        [plan_id] + scope_params,
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="推广计划不存在")
-    store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
-    if not store:
-        raise HTTPException(status_code=400, detail="店铺不存在")
-    data = _collect_plan_data(db, dict(store), dict(row), user)
-    try:
-        reply = chat_completion(cfg, [{"role": "user", "content": _build_plan_prompt(data)}], timeout=120.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {
-        "sections": _parse_insight_sections(reply),
-        "reply": reply,
-        "plan": {"id": row["id"], "plan_name": row["plan_name"], "campaign_id": row["campaign_id"], "scene_name": row["scene_name"]},
-        "date": date_cls.today().isoformat(),
-    }
-
-
-@router.post("/plans/{plan_id}/insight/chat")
-def plan_ai_insight_chat(
-    plan_id: int,
-    body: PlanChatBody,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    """围绕单个计划的 AI 追问。"""
-    from backend.app.api.model_configs import get_default_config
-    from backend.app.core.ai_client import AIError, chat_completion
-
-    cfg = get_default_config(db)
-    if not cfg or not cfg["api_key"]:
-        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    scope_frag, scope_params = _scope_filter(None, user)
-    row = db.execute(
-        "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
-        [plan_id] + scope_params,
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="推广计划不存在")
-    store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
-    if not store:
-        raise HTTPException(status_code=400, detail="店铺不存在")
-    data = _collect_plan_data(db, dict(store), dict(row), user)
-    context = (
-        "你是淘宝万相台推广运营专家。以下是这个推广计划的数据上下文：\n"
-        + "计划：%s（ID %s）\n" % (row["plan_name"], row["campaign_id"])
-        + "\n".join(data["lines"])
-        + "\n用户会围绕这个计划追问，请结合数据回答，简洁务实，不要编造；数据里没有的信息要如实说明。"
-    )
-    msgs = [{"role": "system", "content": context}]
-    for m in body.messages:
-        msgs.append({"role": m.role, "content": m.content})
-    try:
-        reply = chat_completion(cfg, msgs, timeout=120.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"reply": reply}

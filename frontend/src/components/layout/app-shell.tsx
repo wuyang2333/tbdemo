@@ -2,6 +2,7 @@ import {
   ApiOutlined,
   BarChartOutlined,
   BellOutlined,
+  CloseOutlined,
   DashboardOutlined,
   EyeOutlined,
   FileTextOutlined,
@@ -20,6 +21,8 @@ import {
   ShopOutlined,
   ShoppingOutlined,
   SunOutlined,
+  StarFilled,
+  StarOutlined,
   TeamOutlined,
   UserSwitchOutlined,
 } from "@ant-design/icons";
@@ -36,6 +39,7 @@ import { canAccessModule, FOOTER_MODULES, getModule, MAIN_MODULES, MODULES } fro
 import http from "../../lib/api";
 import { useStores } from "../../lib/store";
 import type { ModuleMeta } from "../../types";
+import { ErrorBoundary } from "../ui/page-state";
 
 const { Sider, Header, Content } = Layout;
 const { Text } = Typography;
@@ -62,12 +66,13 @@ const ICONS: Record<string, ReactNode> = {
 };
 
 const ANALYTICS_CHILDREN = [
-  { key: "/analytics/overview", label: "总览" },
+  { key: "/analytics/overview", label: "今日总览" },
   { key: "/analytics/alerts", label: "异常提醒" },
   { key: "/analytics/report", label: "经营日报" },
   { key: "/analytics/insight", label: "AI 解读" },
   { key: "/analytics/hours", label: "时段分析" },
   { key: "/analytics/products", label: "商品分析" },
+  { key: "/analytics/glossary", label: "数据口径" },
 ];
 
 const PROMOTIONS_CHILDREN = [
@@ -79,6 +84,18 @@ const SUBMENU_ITEMS: Record<string, { key: string; label: string }[]> = {
   analytics: ANALYTICS_CHILDREN,
   promotions: PROMOTIONS_CHILDREN,
 };
+
+const FAVORITE_KEYS = "tb-sider-favs";
+
+function buildLabelMap(): Map<string, string> {
+  const map = new Map<string, string>();
+  MAIN_MODULES.concat(FOOTER_MODULES).forEach((m) => map.set(`/${m.id}`, m.name));
+  Object.values(SUBMENU_ITEMS)
+    .flat()
+    .forEach((c) => map.set(c.key, c.label));
+  return map;
+}
+const LABEL_BY_KEY = buildLabelMap();
 
 function toItems(modules: ModuleMeta[]): MenuProps["items"] {
   return modules.map((module) => {
@@ -170,9 +187,27 @@ export function AppShell() {
     const seg = location.pathname.split("/")[1];
     return seg === "analytics" || seg === "promotions" ? [seg] : [];
   });
+  const [favs, setFavs] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(FAVORITE_KEYS);
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem(FAVORITE_KEYS, JSON.stringify(favs));
+  }, [favs]);
+  const toggleFav = (key: string) =>
+    setFavs((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  const isFav = favs.includes(location.pathname);
+  const visibleFavs = favs.filter((k) => LABEL_BY_KEY.has(k));
   const backendOk = useBackendStatus();
 
   const current = getModule(location.pathname.split("/")[1] || "");
+  const currentChild = Object.values(SUBMENU_ITEMS)
+    .flat()
+    .find((c) => c.key === location.pathname);
   const selectedKeys = [location.pathname];
   useEffect(() => {
     const seg = location.pathname.split("/")[1];
@@ -233,8 +268,8 @@ export function AppShell() {
   ];
 
   const darkSider = themeMode === "dark";
-  const borderColor = darkSider ? "rgba(255,255,255,0.08)" : "rgba(18,24,45,0.08)";
-  const secondaryText = darkSider ? "rgba(255,255,255,0.45)" : "rgba(18,24,45,0.5)";
+  const borderColor = "var(--ops-border)";
+  const secondaryText = "var(--ops-text-3)";
 
   return (
     <Layout style={{ minHeight: "100vh", background: "transparent" }}>
@@ -251,7 +286,7 @@ export function AppShell() {
           top: 0,
           bottom: 0,
           overflow: "hidden",
-          background: darkSider ? "#272729" : "#f5f5f7",
+          background: "var(--ops-sider-bg)",
           borderRight: `1px solid ${borderColor}`,
           zIndex: 20,
         }}
@@ -275,8 +310,8 @@ export function AppShell() {
                 style={{
                   width: 34,
                   height: 34,
-                  borderRadius: 10,
-                  background: BRAND.gradient,
+                  borderRadius: "var(--ops-radius)",
+                  background: BRAND.logoUrl ? "transparent" : BRAND.gradient,
                   color: "#fff",
                   fontWeight: 800,
                   fontSize: 17,
@@ -287,7 +322,11 @@ export function AppShell() {
                   boxShadow: "0 6px 16px rgba(255,80,0,0.4)",
                 }}
               >
-                {BRAND.logoText}
+                {BRAND.logoUrl ? (
+                  <img src={BRAND.logoUrl} alt="" style={{ width: "100%", height: "100%", borderRadius: "var(--ops-radius)", objectFit: "cover", display: "block" }} />
+                ) : (
+                  (BRAND.name || "淘").slice(0, 1)
+                )}
               </span>
               {!collapsed && (
                 <span style={{ minWidth: 0 }}>
@@ -296,7 +335,7 @@ export function AppShell() {
                       fontSize: 15,
                       fontWeight: 700,
                       lineHeight: "19px",
-                      color: darkSider ? "rgba(255,255,255,0.94)" : "rgba(18,24,45,0.92)",
+                      color: "var(--ops-text)",
                       whiteSpace: "nowrap",
                     }}
                   >
@@ -320,6 +359,7 @@ export function AppShell() {
               <Button
                 type="text"
                 size="small"
+                aria-label="收起侧栏"
                 icon={<MenuFoldOutlined />}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -338,6 +378,24 @@ export function AppShell() {
               padding: "10px 0 4px",
             }}
           >
+            {!collapsed && visibleFavs.length > 0 && (
+              <div style={{ padding: "4px 12px 6px" }}>
+                <div className="ops-sider-label" style={{ padding: "6px 12px 4px" }}>常用</div>
+                {visibleFavs.map((key) => (
+                  <div
+                    key={key}
+                    className="ops-fav-item"
+                    onClick={() => navigate(key)}
+                    title={LABEL_BY_KEY.get(key) ?? key}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 10px", borderRadius: "var(--ops-radius-sm)", cursor: "pointer", color: "var(--ops-text-2)", fontSize: 13, marginBottom: 2 }}
+                  >
+                    <StarFilled style={{ color: "var(--ops-warn)", fontSize: 12, flexShrink: 0 }} />
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{LABEL_BY_KEY.get(key) ?? key}</span>
+                    <Button type="text" size="small" aria-label="取消收藏" icon={<CloseOutlined style={{ fontSize: 11 }} />} onClick={(e) => { e.stopPropagation(); toggleFav(key); }} className="ops-fav-remove" />
+                  </div>
+                ))}
+              </div>
+            )}
             {!collapsed && <div className="ops-sider-label">工作台</div>}
             <Menu
               theme={darkSider ? "dark" : "light"}
@@ -376,8 +434,8 @@ export function AppShell() {
                   alignItems: "center",
                   gap: 10,
                   padding: "8px 10px",
-                  borderRadius: 12,
-                  background: darkSider ? "rgba(255,255,255,0.05)" : "rgba(18,24,45,0.04)",
+                  borderRadius: "var(--ops-radius)",
+                  background: "var(--ops-panel-2)",
                   marginBottom: 8,
                 }}
               >
@@ -393,7 +451,7 @@ export function AppShell() {
                     style={{
                       fontSize: 13,
                       fontWeight: 600,
-                      color: darkSider ? "rgba(255,255,255,0.92)" : "rgba(18,24,45,0.9)",
+                      color: "var(--ops-text)",
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -409,6 +467,7 @@ export function AppShell() {
                   <Button
                     type="text"
                     size="small"
+                    aria-label="退出登录"
                     icon={<LogoutOutlined style={{ fontSize: 14 }} />}
                     onClick={() => {
                       logout();
@@ -451,7 +510,7 @@ export function AppShell() {
             alignItems: "center",
             justifyContent: "space-between",
             gap: mobile ? 8 : 16,
-            background: darkSider ? "rgba(20,20,22,0.8)" : "rgba(245,245,247,0.8)",
+            background: "var(--ops-header-bg)",
             backdropFilter: "blur(14px)",
             WebkitBackdropFilter: "blur(14px)",
             borderBottom: `1px solid ${borderColor}`,
@@ -461,10 +520,20 @@ export function AppShell() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: mobile ? 4 : 12, minWidth: 0 }}>
-            {mobile && (<Button type="text" icon={<MenuUnfoldOutlined style={{ fontSize: 16 }} />} onClick={() => setDrawerOpen(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} />)}
+            {mobile && (<Button type="text" aria-label="打开菜单" icon={<MenuUnfoldOutlined style={{ fontSize: 16 }} />} onClick={() => setDrawerOpen(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} />)}
             <Text strong style={{ fontSize: mobile ? 16 : 18, whiteSpace: "nowrap" }}>
               {current?.name ?? "总览"}
+              {currentChild ? <span style={{ color: "var(--ops-text-2)", fontWeight: 500 }}> / {currentChild.label}</span> : null}
             </Text>
+            <Tooltip title={isFav ? "取消收藏" : "收藏到常用"}>
+              <Button
+                type="text"
+                size="small"
+                aria-label={isFav ? "取消收藏" : "收藏本页"}
+                icon={isFav ? <StarFilled style={{ color: "var(--ops-warn)" }} /> : <StarOutlined />}
+                onClick={() => toggleFav(location.pathname)}
+              />
+            </Tooltip>
             {!collapsed && current?.description && (
               <Text
                 type="secondary"
@@ -496,6 +565,7 @@ export function AppShell() {
             <Tooltip title={themeMode === "dark" ? "切换为浅色模式" : "切换为暗色模式"}>
               <Button
                 type="text"
+                aria-label="切换主题"
                 icon={
                   themeMode === "dark" ? (
                     <SunOutlined style={{ fontSize: 16 }} />
@@ -544,6 +614,7 @@ export function AppShell() {
                 <Badge count={notifCount} size="small" offset={[-4, 4]}>
                   <Button
                     type="text"
+                    aria-label="通知"
                     icon={<BellOutlined style={{ fontSize: 16 }} />}
                     style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
                   />
@@ -587,13 +658,15 @@ export function AppShell() {
             />
           )}
           <div className="ops-fade-in">
-            <Outlet />
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </Content>
       </Layout>
       <Drawer placement="left" width={280} open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} styles={{ body: { padding: 0 } }}>
         <div style={{ height: 64, display: "flex", alignItems: "center", gap: 11, padding: "0 20px", borderBottom: "1px solid var(--ops-border)" }}>
-          <span style={{ width: 34, height: 34, borderRadius: 10, background: BRAND.gradient, color: "#fff", fontWeight: 800, fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{BRAND.logoText}</span>
+          <span style={{ width: 34, height: 34, borderRadius: "var(--ops-radius)", background: BRAND.logoUrl ? "transparent" : BRAND.gradient, color: "#fff", fontWeight: 800, fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{BRAND.logoUrl ? <img src={BRAND.logoUrl} alt="" style={{ width: "100%", height: "100%", borderRadius: "var(--ops-radius)", objectFit: "cover", display: "block" }} /> : (BRAND.name || "淘").slice(0, 1)}</span>
           <span style={{ fontSize: 15, fontWeight: 700, color: "var(--ops-text)" }}>{BRAND.name}</span>
         </div>
         <div style={{ padding: "10px 0 4px" }}>

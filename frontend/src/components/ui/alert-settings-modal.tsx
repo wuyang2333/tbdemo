@@ -101,7 +101,7 @@ export function AlertSettingsModal({
           <div key={f.key}>
             <div style={{ marginBottom: 4 }}>
               <span style={{ fontWeight: 600 }}>{f.label}</span>
-              {f.hint && <span style={{ marginLeft: 8, fontSize: 12, color: "rgba(128,128,128,0.7)" }}>{f.hint}</span>}
+              {f.hint && <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ops-text-3)" }}>{f.hint}</span>}
             </div>
             <InputNumber
               style={{ width: 180 }}
@@ -124,7 +124,7 @@ export function AlertSettingsModal({
         )}
         <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
           {draftRules.map((r) => (
-            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", borderRadius: 8, padding: "6px 10px" }}>
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ops-card-bg-2)", border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius-sm)", padding: "6px 10px" }}>
               <Text style={{ fontSize: 13, flex: 1 }}>{ruleText(r)}</Text>
               <Switch size="small" checked={r.enabled} onChange={(c) => updateRule(r.id, { enabled: c })} />
               <Button size="small" danger type="text" onClick={() => removeRule(r.id)}>

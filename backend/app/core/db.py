@@ -67,6 +67,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         tcols = {row[1] for row in conn.execute("PRAGMA table_info(tokens)")}
         if "expires_at" not in tcols:
             conn.execute("ALTER TABLE tokens ADD COLUMN expires_at TEXT")
+        if "ip" not in tcols:
+            conn.execute("ALTER TABLE tokens ADD COLUMN ip TEXT")
+        if "user_agent" not in tcols:
+            conn.execute("ALTER TABLE tokens ADD COLUMN user_agent TEXT")
     except sqlite3.OperationalError:
         pass
     conn.execute(
@@ -280,6 +284,14 @@ def _migrate_item_daily(conn: sqlite3.Connection) -> None:
         "add_cart": "INTEGER NOT NULL DEFAULT 0",
         "refund_amount": "REAL NOT NULL DEFAULT 0",
         "image": "TEXT NOT NULL DEFAULT ''",
+        "pay_pct": "REAL NOT NULL DEFAULT 0",
+        "item_clt_byr_cnt": "INTEGER NOT NULL DEFAULT 0",
+        "uv_avg_value": "REAL NOT NULL DEFAULT 0",
+        "stay_time_avg": "REAL NOT NULL DEFAULT 0",
+        "itm_bounce_rate": "REAL NOT NULL DEFAULT 0",
+        "se_guide_uv": "INTEGER NOT NULL DEFAULT 0",
+        "se_guide_pay_byr_cnt": "INTEGER NOT NULL DEFAULT 0",
+        "se_guide_pay_rate": "REAL NOT NULL DEFAULT 0",
     }
     for col, typ in additions.items():
         if col not in cols:
@@ -315,7 +327,11 @@ def _migrate_products_realtime(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE store_item_realtime ADD COLUMN add_cart INTEGER NOT NULL DEFAULT 0")
     if "refund_amount" not in cols:
         conn.execute("ALTER TABLE store_item_realtime ADD COLUMN refund_amount REAL NOT NULL DEFAULT 0")
-    for col in ("visitors_cycle", "pv_cycle", "buyers_cycle", "orders_cycle", "sales_cycle", "conversion_cycle", "add_cart_cycle"):
+    for col in (
+        "visitors_cycle", "pv_cycle", "buyers_cycle", "orders_cycle", "sales_cycle", "conversion_cycle", "add_cart_cycle",
+        "pay_pct", "item_clt_byr_cnt", "uv_avg_value", "stay_time_avg", "itm_bounce_rate",
+        "se_guide_uv", "se_guide_pay_byr_cnt", "se_guide_pay_rate",
+    ):
         if col not in cols:
             conn.execute(f"ALTER TABLE store_item_realtime ADD COLUMN {col} REAL NOT NULL DEFAULT 0")
     conn.commit()
@@ -465,6 +481,8 @@ def init_db() -> None:
                 user_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at TEXT,
+                ip TEXT,
+                user_agent TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             )
             """
@@ -507,6 +525,39 @@ def init_db() -> None:
                 max_uses INTEGER NOT NULL DEFAULT 1,
                 used_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'active'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_source_top (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                data_date TEXT NOT NULL,
+                rank INTEGER NOT NULL DEFAULT 0,
+                source_name TEXT NOT NULL DEFAULT '',
+                uv INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(store_id, data_date, rank)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS refund_today (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                data_date TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                pay_amt REAL NOT NULL DEFAULT 0,
+                rate REAL NOT NULL DEFAULT 0,
+                ord_rate REAL NOT NULL DEFAULT 0,
+                cycle REAL,
+                yest_amount REAL NOT NULL DEFAULT 0,
+                yest_pay_amt REAL NOT NULL DEFAULT 0,
+                yest_rate REAL NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, data_date)
             )
             """
         )

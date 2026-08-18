@@ -167,7 +167,7 @@ export function ModelConfigsPage() {
       dataIndex: "name",
       render: (_, record) => (
         <Space size={6}>
-          {record.is_default && <StarFilled style={{ color: "#0066cc" }} />}
+          {record.is_default && <StarFilled style={{ color: "var(--ops-accent)" }} />}
           <Text strong>{record.name}</Text>
           {record.is_default && <Tag color="orange" style={{ marginInlineEnd: 0 }}>默认</Tag>}
         </Space>

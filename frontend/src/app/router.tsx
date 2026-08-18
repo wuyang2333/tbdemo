@@ -16,6 +16,7 @@ const AnalyticsInsightPage = lazy(() => import("../pages/analytics-insight-page"
 const AnalyticsOverviewPage = lazy(() => import("../pages/analytics-overview-page").then((m) => ({ default: m.AnalyticsOverviewPage })));
 const AnalyticsProductsPage = lazy(() => import("../pages/analytics-products-page").then((m) => ({ default: m.AnalyticsProductsPage })));
 const AnalyticsReportPage = lazy(() => import("../pages/analytics-report-page").then((m) => ({ default: m.AnalyticsReportPage })));
+const AnalyticsGlossaryPage = lazy(() => import("../pages/analytics-glossary-page").then((m) => ({ default: m.AnalyticsGlossaryPage })));
 const BoardPage = lazy(() => import("../pages/board-page").then((m) => ({ default: m.BoardPage })));
 const ContentPage = lazy(() => import("../pages/content-page").then((m) => ({ default: m.ContentPage })));
 const CustomersPage = lazy(() => import("../pages/customers-page").then((m) => ({ default: m.CustomersPage })));
@@ -143,6 +144,7 @@ export function AppRouter() {
           <Route path="/analytics/insight" element={<RequireModule id="analytics"><AnalyticsInsightPage /></RequireModule>} />
           <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />
           <Route path="/analytics/products" element={<RequireModule id="analytics"><AnalyticsProductsPage /></RequireModule>} />
+<Route path="/analytics/glossary" element={<RequireModule id="analytics"><AnalyticsGlossaryPage /></RequireModule>} />
           <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
           <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
           <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />

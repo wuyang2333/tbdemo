@@ -23,6 +23,7 @@ export type AuthUser = {
   parent_id: number | null;
   sub_account_quota: number;
   store_quota: number;
+  expires_at: string | null;
 };
 
 export type AuthResponse = {
@@ -196,6 +197,9 @@ export type PromoSceneAgg = {
   roi: number;
   orders: number;
   add_cart: number;
+  real_roi?: number;
+  ad_share?: number;
+  cost_per_order?: number;
 };
 
 export type PromoTrendPoint = {
@@ -209,9 +213,11 @@ export type PromoTrendPoint = {
 };
 
 export type PromoData = {
-  mode: "realtime" | "yesterday" | "7d";
+  mode: "realtime" | "yesterday" | "7d" | "range";
   summary: PromoSceneAgg;
   scenes: PromoSceneAgg[];
+  alerts: { type: string; message: string }[];
+  compare: { spend: number | null; sales: number | null };
   trend: PromoTrendPoint[];
   trend_unit: "hour" | "day";
   bound_stores: number;
@@ -418,6 +424,7 @@ export type AnalyticsProduct = {
   days: number;
   latest_date: string;
   sales_share?: number;
+  lifecycle?: string;
   live?: boolean;
   date_label?: string;
   add_cart?: number;

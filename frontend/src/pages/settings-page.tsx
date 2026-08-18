@@ -4,8 +4,10 @@ import {
   ReloadOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  UploadOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Col, Input, Row, Select, Space, Switch, Typography, message } from "antd";
+import { Avatar, Button, Card, Col, Form, Input, Row, Select, Space, Switch, Table, Tag, Typography, Upload, message } from "antd";
+import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
@@ -54,7 +56,30 @@ export function SettingsPage() {
   const [reportSaving, setReportSaving] = useState(false);
   const [hourlySaving, setHourlySaving] = useState(false);
   const [testing, setTesting] = useState<"report" | "hourly" | null>(null);
+  const [health, setHealth] = useState<{ db_size_mb: number; disk_free_gb: number; store_count: number; profile_ok: number; last_sync: string | null; backup_count: number; backup_latest: string | null } | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthAt, setHealthAt] = useState("");
+  const [brandForm] = Form.useForm();
+  const [brandSaving, setBrandSaving] = useState(false);
+  const [version, setVersion] = useState<{ name: string; version: string; backend: string; frontend: string } | null>(null);
+  const [loopsData, setLoopsData] = useState<{ name: string; last_run: string | null; last_success: string | null; last_error: string | null; error_count: number }[]>([]);
+  const [retentionDays, setRetentionDays] = useState(90);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<{ deleted: number; cutoff: string } | null>(null);
+  const [logoPreview, setLogoPreview] = useState("");
 
+  const loadHealth = async () => {
+    setHealthLoading(true);
+    try {
+      const { data } = await http.get("/system/healthcheck");
+      setHealth(data);
+      setHealthAt(dayjs().format("HH:mm:ss"));
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setHealthLoading(false);
+    }
+  };
   const load = useCallback(async () => {
     try {
       const [reportRes, hourlyRes] = await Promise.all([
@@ -70,8 +95,94 @@ export function SettingsPage() {
 
   useEffect(() => {
     load();
+    loadBrand();
+    loadVersion();
+    loadLoops();
+    loadCleanupConfig();
   }, [load]);
 
+  const loadBrand = async () => {
+    try {
+      const { data } = await http.get<{ brand: Record<string, string> }>("/settings/brand");
+      brandForm.setFieldsValue(data.brand);
+      setLogoPreview(data.brand.logoUrl || "");
+    } catch {
+      /* 默认品牌 */
+    }
+  };
+  const loadVersion = async () => {
+    try {
+      const { data } = await http.get("/system/version");
+      setVersion(data);
+    } catch {
+      setVersion(null);
+    }
+  };
+  const loadLoops = async () => {
+    try {
+      const { data } = await http.get<{ items: { name: string; last_run: string | null; last_success: string | null; last_error: string | null; error_count: number }[] }>("/system/loops");
+      setLoopsData(data.items);
+    } catch {
+      setLoopsData([]);
+    }
+  };
+  const loadCleanupConfig = async () => {
+    try {
+      const { data } = await http.get<{ retention_days: number }>("/system/cleanup-config");
+      setRetentionDays(data.retention_days);
+    } catch {
+      /* 默认 90 */
+    }
+  };
+  const readLogo = (file: File) => {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      message.error("仅支持 PNG / JPG / WebP 格式的图片");
+      return false;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      message.error("Logo 图片不能超过 2MB");
+      return false;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setLogoPreview(dataUrl);
+      brandForm.setFieldsValue({ logoUrl: dataUrl });
+      message.success("Logo 已上传，点「保存品牌配置」后生效");
+    };
+    reader.onerror = () => {
+      message.error("Logo 上传失败，请重试");
+    };
+    reader.readAsDataURL(file);
+    return false;
+  };
+  const saveBrand = async (values: Record<string, string>) => {
+    const logoUrl = (brandForm.getFieldValue("logoUrl") as string) || logoPreview || "";
+    const payload = { ...values, logoUrl };
+    setBrandSaving(true);
+    try {
+      await http.put("/settings/brand", payload);
+      localStorage.setItem("tb-brand", JSON.stringify(payload));
+      message.success("品牌配置已保存，即将刷新生效");
+      setTimeout(() => window.location.reload(), 800);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setBrandSaving(false);
+    }
+  };
+  const runCleanup = async () => {
+    setCleanupLoading(true);
+    try {
+      const { data } = await http.post<{ deleted: number; cutoff: string }>("/system/cleanup", {});
+      setCleanupResult(data);
+      message.success(`已清理 ${data.deleted} 条历史数据`);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
   const saveReport = async () => {
     setReportSaving(true);
     try {
@@ -125,7 +236,7 @@ export function SettingsPage() {
             variant="borderless"
             title={
               <Space size={8}>
-                <FileTextOutlined style={{ color: "#1677ff" }} />
+                <FileTextOutlined style={{ color: "var(--ops-accent)" }} />
                 <Text strong>经营日报推送</Text>
               </Space>
             }
@@ -189,7 +300,7 @@ export function SettingsPage() {
             variant="borderless"
             title={
               <Space size={8}>
-                <ThunderboltOutlined style={{ color: "#fa8c16" }} />
+                <ThunderboltOutlined style={{ color: "var(--ops-warn)" }} />
                 <Text strong>小时异常推送</Text>
               </Space>
             }
@@ -264,6 +375,129 @@ export function SettingsPage() {
           <Text type="secondary" style={{ fontSize: 12 }}>
             后台循环状态可在「操作日志」或 /api/system/loops 查看；数据库与登录档案建议定期备份。
           </Text>
+        </Space>
+      </Card>
+      <Card variant="borderless" title="系统体检" style={{ marginTop: 16 }}>
+        <Space direction="vertical" style={{ width: "100%" }} size={12}>
+          <Space wrap>
+            <Button icon={<ReloadOutlined />} loading={healthLoading} onClick={loadHealth}>立即体检</Button>
+            {health && <Text type="secondary" style={{ fontSize: 12 }}>最近检查 {healthAt}</Text>}
+          </Space>
+          {health && (
+            <Row gutter={[12, 12]}>
+              {[
+                { label: "数据库大小", value: `${health.db_size_mb} MB` },
+                { label: "磁盘剩余", value: `${health.disk_free_gb} GB` },
+                { label: "店铺数", value: health.store_count },
+                { label: "登录态正常", value: `${health.profile_ok}/${health.store_count}` },
+                { label: "备份数", value: health.backup_count },
+                { label: "最近同步", value: health.last_sync ? dayjs(health.last_sync).format("MM-DD HH:mm") : "—" },
+              ].map((item) => (
+                <Col xs={12} sm={8} key={item.label}>
+                  <Card size="small">
+                    <Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>
+                    <div style={{ fontSize: 18, fontWeight: 700 }}>{item.value}</div>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          )}
+        </Space>
+      </Card>
+      <Card variant="borderless" title="外观 / 品牌" style={{ marginTop: 16 }}>
+        <Form form={brandForm} layout="vertical" onFinish={saveBrand} style={{ maxWidth: 480 }}>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="name" label="系统名称">
+                <Input placeholder="如：我的运营工作台" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="Logo 图片（可选）">
+                <Space direction="vertical">
+                  <Space>
+                    {logoPreview && <Avatar shape="square" size={40} src={logoPreview} />}
+                    <Upload showUploadList={false} accept="image/png,image/jpeg,image/webp" beforeUpload={(file) => readLogo(file)}>
+                      <Button icon={<UploadOutlined />}>上传 Logo</Button>
+                    </Upload>
+                    {logoPreview && (
+                      <Button size="small" onClick={() => { setLogoPreview(""); brandForm.setFieldsValue({ logoUrl: "" }); }}>
+                        清除
+                      </Button>
+                    )}
+                  </Space>
+                </Space>
+                <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 4 }}>
+                  未上传图片时，自动显示系统名称的第一个字
+                </Text>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="primaryColor" label="主题色">
+                <Space>
+                  <Input type="color" style={{ width: 48, padding: 2 }} />
+                  <Input placeholder="var(--ops-accent)" />
+                </Space>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="tagline" label="标语">
+                <Input placeholder="淘宝店铺运营中台" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Button type="primary" htmlType="submit" loading={brandSaving}>保存品牌配置</Button>
+        </Form>
+      </Card>
+
+      <Card variant="borderless" title="关于 / 版本" style={{ marginTop: 16 }}>
+        {version ? (
+          <Space direction="vertical" size={4}>
+            <Text>{version.name} v{version.version}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>后端 {version.backend} · 前端 {version.frontend}</Text>
+          </Space>
+        ) : (
+          <Text type="secondary">加载中…</Text>
+        )}
+      </Card>
+
+      <Card variant="borderless" title="后台循环状态" style={{ marginTop: 16 }}>
+        <Table
+          rowKey="name"
+          size="small"
+          dataSource={loopsData}
+          pagination={false}
+          columns={[
+            { title: "循环", dataIndex: "name" },
+            { title: "上次运行", dataIndex: "last_run", render: (v: string | null) => (v ? dayjs(v).format("MM-DD HH:mm:ss") : "—") },
+            { title: "上次成功", dataIndex: "last_success", render: (v: string | null) => (v ? dayjs(v).format("MM-DD HH:mm:ss") : "—") },
+            {
+              title: "状态",
+              key: "st",
+              render: (_, row: { last_error: string | null; error_count: number }) =>
+                row.last_error ? <Tag color="red">异常</Tag> : <Tag color="green">正常</Tag>,
+            },
+          ]}
+        />
+      </Card>
+
+      <Card variant="borderless" title="数据管理" style={{ marginTop: 16 }}>
+        <Space direction="vertical" style={{ width: "100%" }} size={12}>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            历史数据保留 {retentionDays} 天，超过的部分会自动清理（实时数据不清理）。
+          </Text>
+          <Space wrap>
+            <Button type="primary" danger ghost loading={cleanupLoading} onClick={runCleanup}>
+              立即清理历史数据
+            </Button>
+            {cleanupResult && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                上次清理 {cleanupResult.deleted} 条（{cleanupResult.cutoff} 之前）
+              </Text>
+            )}
+          </Space>
         </Space>
       </Card>
     </div>
