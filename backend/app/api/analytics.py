@@ -1686,6 +1686,8 @@ def _store_filter(store_id: int | None, user: dict) -> tuple[str, list]:
     if store_id:
         clauses.append(" AND store_id = ?")
         params.append(store_id)
+    # 只统计店铺列表里真实存在的店铺，避免已删除店铺的残留数据混入汇总
+    clauses.append(" AND store_id IN (SELECT id FROM stores)")
     return "".join(clauses), params
 
 

@@ -3,6 +3,7 @@ import {
   ArrowRightOutlined,
   BarChartOutlined,
   CarOutlined,
+  DownOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   DashboardOutlined,
@@ -20,19 +21,21 @@ import {
   ShoppingOutlined,
   TeamOutlined,
   ToolOutlined,
+  UpOutlined,
   UserSwitchOutlined,
 } from "@ant-design/icons";
-import { Button, Col, Row, Space, Tag, Typography } from "antd";
+import { Button, Checkbox, Col, message, Modal, Row, Space, Tag, Typography } from "antd";
 import { useCallback, useEffect, useState } from "react";
-import type { CSSProperties } from "react";
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
-import http from "../lib/api";
+import { StoreBars, TrendChart } from "../components/analytics/analytics-ui";
+import http, { getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useAuth } from "../lib/auth";
 import { BRAND } from "../lib/brand";
 import { canAccessModule, MAIN_MODULES, MODULES } from "../lib/modules";
+import type { AnalyticsStoreAgg, AnalyticsTrendPoint } from "../types";
 
 const { Title, Text } = Typography;
 
@@ -42,8 +45,15 @@ type DashboardStats = {
   today_orders?: number;
   today_sales?: number;
   today_visitors?: number;
+  yesterday_orders?: number;
+  yesterday_sales?: number;
+  yesterday_visitors?: number;
   pending_shipments?: number;
   data_date?: string | null;
+  hour_until?: string | null;
+  compare_mode?: string;
+  product_date?: string | null;
+  trend?: AnalyticsTrendPoint[];
 };
 
 const MODULE_ICONS: Record<string, ReactNode> = {
@@ -70,23 +80,42 @@ function formatNumber(value: number): string {
   return value.toLocaleString("zh-CN");
 }
 
+function formatChange(current: number | undefined, previous: number | undefined): string {
+  if (typeof current !== "number" || typeof previous !== "number" || previous === 0) {
+    return current ? "新增" : "—";
+  }
+  const pct = ((current - previous) / previous) * 100;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(1)}%`;
+}
+
 type KpiDef = {
   key: keyof DashboardStats;
   label: string;
   icon: ReactNode;
-  color: string;
   format: (value: number) => string;
+  compareKey?: "yesterday_sales" | "yesterday_orders" | "yesterday_visitors";
 };
 
 const KPI_CARDS: KpiDef[] = [
-  { key: "today_sales", label: "今日销售额", icon: <MoneyCollectOutlined />, color: "#0066cc", format: formatMoney },
-  { key: "today_orders", label: "今日订单", icon: <ShoppingCartOutlined />, color: "#0066cc", format: formatNumber },
-  { key: "pending_shipments", label: "待发货", icon: <CarOutlined />, color: "#0066cc", format: formatNumber },
-  { key: "product_count", label: "在售商品", icon: <ShoppingOutlined />, color: "#0066cc", format: formatNumber },
-  { key: "today_visitors", label: "今日访客", icon: <EyeOutlined />, color: "#0066cc", format: formatNumber },
+  { key: "today_sales", label: "销售额", icon: <MoneyCollectOutlined />, format: formatMoney, compareKey: "yesterday_sales" },
+  { key: "today_orders", label: "订单数", icon: <ShoppingCartOutlined />, format: formatNumber, compareKey: "yesterday_orders" },
+  { key: "pending_shipments", label: "待发货", icon: <CarOutlined />, format: formatNumber },
+  { key: "product_count", label: "在售商品", icon: <ShoppingOutlined />, format: formatNumber },
+  { key: "today_visitors", label: "访客数", icon: <EyeOutlined />, format: formatNumber, compareKey: "yesterday_visitors" },
 ];
 
 const LIVE_MODULES = new Set(["dashboard", "profile", "accounts"]);
+
+type WidgetId = "kpis" | "trend" | "stores" | "shortcuts" | "system";
+const DEFAULT_WIDGETS: WidgetId[] = ["kpis", "trend", "shortcuts", "system"];
+const WIDGET_OPTIONS: { id: WidgetId; label: string }[] = [
+  { id: "kpis", label: "核心指标卡" },
+  { id: "trend", label: "近 14 天趋势" },
+  { id: "stores", label: "按店铺汇总" },
+  { id: "shortcuts", label: "快捷入口" },
+  { id: "system", label: "系统状态" },
+];
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -104,9 +133,46 @@ export function DashboardPage() {
   const [statsFailed, setStatsFailed] = useState(false);
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
   const [now, setNow] = useState(() => new Date());
+  const [widgets, setWidgets] = useState<WidgetId[] | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [storeSummary, setStoreSummary] = useState<AnalyticsStoreAgg[] | null>(null);
 
   const displayName = user?.nickname || user?.username || "运营者";
   const quickModules = MAIN_MODULES.filter((module) => canAccessModule(user, module.id));
+  const widgetOrder = (id: WidgetId) => {
+    const list = widgets ?? DEFAULT_WIDGETS;
+    const index = list.indexOf(id);
+    return index < 0 ? 99 : index;
+  };
+  const widgetOn = (id: WidgetId) => !widgets || widgets.includes(id);
+  const toggleWidget = (id: WidgetId, checked: boolean) => {
+    setWidgets((current) => {
+      const list = current ?? [...DEFAULT_WIDGETS];
+      if (checked) return list.includes(id) ? list : [...list, id];
+      return list.filter((widget) => widget !== id);
+    });
+  };
+  const moveWidget = (id: WidgetId, dir: -1 | 1) => {
+    setWidgets((current) => {
+      const list = [...(current ?? [...DEFAULT_WIDGETS])];
+      const index = list.indexOf(id);
+      const next = index + dir;
+      if (index < 0 || next < 0 || next >= list.length) return list;
+      [list[index], list[next]] = [list[next], list[index]];
+      return list;
+    });
+  };
+  const resetWidgets = () => setWidgets([...DEFAULT_WIDGETS]);
+  const saveWidgets = async () => {
+    if (!widgets) return;
+    try {
+      await http.put("/dashboard/config", { widgets });
+      message.success("看板配置已保存");
+      setConfigOpen(false);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
 
   const loadStats = useCallback(async () => {
     try {
@@ -117,6 +183,27 @@ export function DashboardPage() {
     }
   }, []);
   useAutoRefresh(loadStats);
+  const loadConfig = useCallback(async () => {
+    try {
+      const { data } = await http.get<{ widgets: WidgetId[] }>("/dashboard/config");
+      setWidgets(data.widgets);
+    } catch {
+      setWidgets([...DEFAULT_WIDGETS]);
+    }
+  }, []);
+  useEffect(() => {
+    loadConfig();
+  }, [loadConfig]);
+  useEffect(() => {
+    if (widgets?.includes("stores")) {
+      http
+        .get<{ by_store: AnalyticsStoreAgg[] }>("/analytics/summary?days=14")
+        .then(({ data }) => setStoreSummary(data.by_store))
+        .catch(() => setStoreSummary([]));
+    } else {
+      setStoreSummary(null);
+    }
+  }, [widgets]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -197,29 +284,39 @@ export function DashboardPage() {
                 color={stats?.data_date ? "green" : "default"}
                 style={{ borderRadius: 999, marginInlineEnd: 0 }}
               >
-                {stats?.data_date ? `数据截至 ${stats.data_date}` : "暂无数据"}
+                {stats?.data_date
+                  ? `数据截至 ${stats.data_date}${stats.hour_until ? ` ${stats.hour_until}` : ""}`
+                  : "暂无数据"}
               </Tag>
+              {widgets && (
+                <Button size="small" icon={<SettingOutlined />} onClick={() => setConfigOpen(true)}>
+                  自定义看板
+                </Button>
+              )}
             </div>
           </Col>
         </Row>
       </div>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 18 }}>
+      <div style={{ display: "flex", flexDirection: "column" }}>
+      <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("kpis"), display: widgetOn("kpis") ? undefined : "none" }}>
         {KPI_CARDS.map((item) => {
           const raw = stats ? stats[item.key] : undefined;
           const value = typeof raw === "number" ? raw : 0;
+          const prev = item.compareKey && stats ? stats[item.compareKey] : undefined;
+          const change = statsFailed ? "—" : formatChange(value, typeof prev === "number" ? prev : undefined);
+          const isUp = change.startsWith("+");
+          const isDown = change.startsWith("-");
+          const changeColor = isUp ? "#34c759" : isDown ? "#ff3b30" : "var(--ops-text-secondary)";
           return (
             <Col key={item.key} xs={24} sm={12} md={8} xl={4}>
-              <div
-                className="ops-kpi-card"
-                style={{ "--ops-kpi-color": item.color } as CSSProperties}
-              >
+              <div className="ops-kpi-card">
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <span
                     className="ops-kpi-icon"
                     style={{
-                      background: `${item.color}1f`,
-                      color: item.color,
+                      background: "var(--ops-accent-soft)",
+                      color: "var(--ops-accent)",
                     }}
                   >
                     {item.icon}
@@ -252,9 +349,9 @@ export function DashboardPage() {
                   }}
                 >
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    较昨日
+                    {item.compareKey ? "较昨日" : "最新"}
                   </Text>
-                  <Text style={{ fontSize: 12, fontWeight: 600, color: item.color }}>+0.0%</Text>
+                  <Text style={{ fontSize: 12, fontWeight: 600, color: changeColor }}>{change}</Text>
                 </div>
               </div>
             </Col>
@@ -262,8 +359,49 @@ export function DashboardPage() {
         })}
       </Row>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 18 }}>
-        <Col xs={24} lg={14}>
+      <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("trend"), display: widgetOn("trend") ? undefined : "none" }}>
+        <Col span={24}>
+          <div className="ops-kpi-card" style={{ padding: "20px 22px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <Text strong style={{ fontSize: 16 }}>
+                近 14 天趋势
+              </Text>
+              <Space size={6}>
+                <Tag color="#ff5000" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                  销售额
+                </Tag>
+                <Tag color="#1677ff" style={{ borderRadius: 999, marginInlineEnd: 0 }}>
+                  订单数
+                </Tag>
+              </Space>
+            </div>
+            {stats?.trend && stats.trend.length > 0 ? <TrendChart trend={stats.trend} /> : null}
+          </div>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("stores"), display: widgetOn("stores") ? undefined : "none" }}>
+        <Col span={24}>
+          <div className="ops-kpi-card" style={{ padding: "20px 22px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+              <Text strong style={{ fontSize: 16 }}>按店铺汇总</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>各店铺累计销售额 / 订单 / 访客</Text>
+            </div>
+            {storeSummary ? (
+              storeSummary.length > 0 ? (
+                <StoreBars items={storeSummary} />
+              ) : (
+                <Text type="secondary">暂无店铺数据</Text>
+              )
+            ) : (
+              <Text type="secondary">加载中…</Text>
+            )}
+          </div>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("shortcuts"), display: widgetOn("shortcuts") ? undefined : "none" }}>
+        <Col span={24}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
             <Text strong style={{ fontSize: 16 }}>
               快捷入口
@@ -306,8 +444,9 @@ export function DashboardPage() {
             })}
           </Row>
         </Col>
-
-        <Col xs={24} lg={10}>
+      </Row>
+      <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("system"), display: widgetOn("system") ? undefined : "none" }}>
+        <Col span={24}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 12 }}>
             <Text strong style={{ fontSize: 16 }}>
               系统状态
@@ -411,6 +550,23 @@ export function DashboardPage() {
           </div>
         </Col>
       </Row>
+      </div>
+      <Modal title="自定义看板" open={configOpen} onCancel={() => { setConfigOpen(false); loadConfig(); }} onOk={saveWidgets} okText="保存" width={440}>
+        <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+          {(widgets ?? []).map((id, index) => (
+            <div key={id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--ops-border)", borderRadius: 10 }}>
+              <Checkbox checked onChange={(event) => toggleWidget(id, event.target.checked)} />
+              <Text style={{ flex: 1 }}>{WIDGET_OPTIONS.find((widget) => widget.id === id)?.label ?? id}</Text>
+              <Button size="small" type="text" icon={<UpOutlined />} disabled={index === 0} onClick={() => moveWidget(id, -1)} />
+              <Button size="small" type="text" icon={<DownOutlined />} disabled={index === (widgets?.length ?? 0) - 1} onClick={() => moveWidget(id, 1)} />
+            </div>
+          ))}
+          <Button size="small" type="link" onClick={resetWidgets} style={{ alignSelf: "flex-start", paddingInline: 6 }}>
+            恢复默认
+          </Button>
+        </Space>
+      </Modal>
     </div>
   );
 }
+

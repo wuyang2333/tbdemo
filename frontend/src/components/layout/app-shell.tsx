@@ -1,4 +1,4 @@
-﻿import {
+import {
   ApiOutlined,
   BarChartOutlined,
   BellOutlined,
@@ -23,7 +23,7 @@
   TeamOutlined,
   UserSwitchOutlined,
 } from "@ant-design/icons";
-import { Alert, Avatar, Badge, Button, Dropdown, Input, Layout, Menu, Popover, Select, Space, Tag, Tooltip, Typography } from "antd";
+import { Alert, Avatar, Badge, Button, Drawer, Dropdown, Input, Layout, Menu, Popover, Select, Space, Tag, Tooltip, Typography } from "antd";
 import type { MenuProps } from "antd";
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
@@ -125,6 +125,13 @@ export function AppShell() {
   const { user, logout } = useAuth();
   const { stores, currentStore, setCurrent } = useStores();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobile, setMobile] = useState(() => window.innerWidth < 768);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  useEffect(() => {
+    const onResize = () => setMobile(window.innerWidth < 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [keyword, setKeyword] = useState("");
   const [notifCount, setNotifCount] = useState(0);
   const [notifItems, setNotifItems] = useState<{ id: string; date_label: string; level: string; message: string }[]>([]);
@@ -172,6 +179,9 @@ export function AppShell() {
     if (seg === "analytics" || seg === "promotions") {
       setOpenKeys((keys) => (keys.includes(seg) ? keys : [...keys, seg]));
     }
+  }, [location.pathname]);
+  useEffect(() => {
+    setDrawerOpen(false);
   }, [location.pathname]);
   const siderWidth = collapsed ? 72 : 236;
   const displayName = user?.nickname || user?.username || "运营者";
@@ -229,9 +239,9 @@ export function AppShell() {
   return (
     <Layout style={{ minHeight: "100vh", background: "transparent" }}>
       <Sider
-        collapsed={collapsed}
+        collapsed={mobile || collapsed}
         width={236}
-        collapsedWidth={72}
+        collapsedWidth={mobile ? 0 : 72}
         theme={darkSider ? "dark" : "light"}
         trigger={null}
         style={{
@@ -427,7 +437,7 @@ export function AppShell() {
 
       <Layout
         style={{
-          marginLeft: siderWidth,
+          marginLeft: mobile ? 0 : siderWidth,
           transition: "margin-left .2s",
           background: "transparent",
         }}
@@ -436,11 +446,11 @@ export function AppShell() {
           style={{
             height: 64,
             lineHeight: "64px",
-            padding: "0 24px",
+            padding: mobile ? "0 12px" : "0 24px",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 16,
+            gap: mobile ? 8 : 16,
             background: darkSider ? "rgba(20,20,22,0.8)" : "rgba(245,245,247,0.8)",
             backdropFilter: "blur(14px)",
             WebkitBackdropFilter: "blur(14px)",
@@ -450,8 +460,9 @@ export function AppShell() {
             zIndex: 10,
           }}
         >
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, minWidth: 0 }}>
-            <Text strong style={{ fontSize: 18, whiteSpace: "nowrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: mobile ? 4 : 12, minWidth: 0 }}>
+            {mobile && (<Button type="text" icon={<MenuUnfoldOutlined style={{ fontSize: 16 }} />} onClick={() => setDrawerOpen(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} />)}
+            <Text strong style={{ fontSize: mobile ? 16 : 18, whiteSpace: "nowrap" }}>
               {current?.name ?? "总览"}
             </Text>
             {!collapsed && current?.description && (
@@ -477,22 +488,11 @@ export function AppShell() {
                 placeholder="当前店铺"
                 onChange={(value) => setCurrent(value)}
                 options={stores.map((store) => ({ value: store.id, label: store.name }))}
-                style={{ width: 190 }}
+                style={{ width: mobile ? 130 : 190 }}
               />
             )}
-            <Input
-              value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
-              onPressEnter={handleSearch}
-              prefix={<SearchOutlined style={{ color: "var(--ops-text-secondary)" }} />}
-              placeholder="搜索模块，回车直达"
-              allowClear
-              style={{ width: 220, borderRadius: 999 }}
-            />
-            <span className="ops-pill">
-              <span className={`ops-dot ops-dot--${statusClass}`} />
-              {statusLabel}
-            </span>
+{!mobile && (<Input value={keyword} onChange={(event) => setKeyword(event.target.value)} onPressEnter={handleSearch} prefix={<SearchOutlined style={{ color: "var(--ops-text-secondary)" }} />} placeholder="搜索模块，回车直达" allowClear style={{ width: 220, borderRadius: 999 }} />)}
+{!mobile && (<span className="ops-pill"><span className={`ops-dot ops-dot--${statusClass}`} />{statusLabel}</span>)}
             <Tooltip title={themeMode === "dark" ? "切换为浅色模式" : "切换为暗色模式"}>
               <Button
                 type="text"
@@ -568,7 +568,7 @@ export function AppShell() {
 
         <Content
           style={{
-            padding: 24,
+            padding: mobile ? 12 : 24,
             minHeight: "calc(100vh - 64px)",
             overflow: "auto",
             maxWidth: 1560,
@@ -591,6 +591,21 @@ export function AppShell() {
           </div>
         </Content>
       </Layout>
+      <Drawer placement="left" width={280} open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} styles={{ body: { padding: 0 } }}>
+        <div style={{ height: 64, display: "flex", alignItems: "center", gap: 11, padding: "0 20px", borderBottom: "1px solid var(--ops-border)" }}>
+          <span style={{ width: 34, height: 34, borderRadius: 10, background: BRAND.gradient, color: "#fff", fontWeight: 800, fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{BRAND.logoText}</span>
+          <span style={{ fontSize: 15, fontWeight: 700, color: "var(--ops-text)" }}>{BRAND.name}</span>
+        </div>
+        <div style={{ padding: "10px 0 4px" }}>
+          <div className="ops-sider-label">工作台</div>
+          <Menu mode="inline" selectedKeys={selectedKeys} openKeys={openKeys} onOpenChange={(keys) => setOpenKeys(keys as string[])} onClick={(event) => { handleMenuClick(event); setDrawerOpen(false); }} items={mainItems} className="ops-sider-menu" style={{ borderRight: 0, background: "transparent" }} />
+          <div className="ops-sider-label">系统</div>
+          <Menu mode="inline" selectedKeys={selectedKeys} onClick={(event) => { handleMenuClick(event); setDrawerOpen(false); }} items={footerItems} className="ops-sider-menu" style={{ borderRight: 0, background: "transparent" }} />
+        </div>
+      </Drawer>
     </Layout>
   );
 }
+
+
+

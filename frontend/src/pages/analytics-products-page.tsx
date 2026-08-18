@@ -317,7 +317,7 @@ export function AnalyticsProductsPage() {
       const roi = item.promo_roi;
       const spend = item.promo_spend ?? 0;
       const out: { level: string; type: string; message: string }[] = [];
-      const name = `${item.item_title}（${item.item_id}）`;
+      const name = `商品 ${item.item_id}`;
       if (cyc != null && cyc < -alertConfig.product.sales_drop_pct) out.push({ level: "error", type: "销售额骤降", message: `${name}销售额环比 ${cyc.toFixed(1)}%` });
       if (vcyc != null && vcyc < -alertConfig.product.visitors_drop_pct) out.push({ level: "warning", type: "访客骤降", message: `${name}访客环比 ${vcyc.toFixed(1)}%` });
       if (conv != null && conv < alertConfig.product.conversion_low && (item.visitors ?? 0) > alertConfig.product.min_visitors) out.push({ level: "warning", type: "转化异常", message: `${name}转化率仅 ${conv.toFixed(2)}%` });
@@ -343,7 +343,7 @@ export function AnalyticsProductsPage() {
   for (const rule of alertConfig.rules.filter((r) => r.module === "product")) {
     for (const item of data?.items ?? []) {
       if (evalRule(rule, item as unknown as Record<string, unknown>)) {
-        ruleAlerts.push({ level: "warning", type: `自定义·${ruleText(rule)}`, message: buildRuleMessage(rule, item as unknown as Record<string, unknown>, item.item_title) });
+        ruleAlerts.push({ level: "warning", type: `自定义·${ruleText(rule)}`, message: buildRuleMessage(rule, item as unknown as Record<string, unknown>, `商品 ${item.item_id}`) });
         if (ruleAlerts.length >= 20) break;
       }
     }

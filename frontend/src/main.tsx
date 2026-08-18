@@ -16,3 +16,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </AppProviders>
   </React.StrictMode>
 );
+
+
+// PWA：注册 Service Worker（纯透传，不缓存），支持"添加到主屏幕"
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}

@@ -11,5 +11,7 @@ _staging/
 ChromeSetup64.exe
 .workbuddy/
 logs/
+backups/
+.pytest_cache/
 *.db-shm
 *.db-wal

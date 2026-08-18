@@ -1,15 +1,15 @@
 import sqlite3
 
 
-def test_dashboard_empty(client):
-    token = _login(client)
+def test_dashboard_empty(client, admin_token):
+    token = admin_token
     r = client.get("/api/dashboard", headers={"Authorization": f"Bearer {token}"})
     data = r.json()
     assert data["data_date"] is None
     assert data["today_sales"] == 0
 
 
-def test_dashboard_aggregates_real_data(client):
+def test_dashboard_aggregates_real_data(client, admin_token):
     import os
 
     db_path = os.environ["TAOBAO_DB_PATH"]
@@ -17,6 +17,13 @@ def test_dashboard_aggregates_real_data(client):
     conn.execute(
         """
         INSERT INTO stores (name, status, created_at) VALUES ('测试店', 'active', '2026-08-17T00:00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO store_daily_data
+        (store_id, data_date, visitors, pv, sales, orders, conversion_rate, created_at)
+        VALUES (1, '2026-08-16', 70, 100, 150, 15, 15.0, '2026-08-17T00:00:00')
         """
     )
     conn.execute(
@@ -30,7 +37,7 @@ def test_dashboard_aggregates_real_data(client):
     conn.commit()
     conn.close()
 
-    token = _login(client)
+    token = admin_token
     data = client.get("/api/dashboard", headers={"Authorization": f"Bearer {token}"}).json()
     assert data["store_count"] >= 1  # 测试库含演示店铺
     assert data["data_date"] == "2026-08-16"
@@ -38,18 +45,3 @@ def test_dashboard_aggregates_real_data(client):
     assert data["today_sales"] == 150
     assert data["today_orders"] == 15
     assert data["today_visitors"] == 70
-
-
-_token_cache: str | None = None
-
-
-def _login(client) -> str:
-    global _token_cache
-    if _token_cache is None:
-        reg = client.post(
-            "/api/auth/register",
-            json={"username": "dashuser", "password": "pass123456", "nickname": "总览测试"},
-        )
-        assert reg.status_code == 200, reg.text
-        _token_cache = reg.json()["token"]
-    return _token_cache

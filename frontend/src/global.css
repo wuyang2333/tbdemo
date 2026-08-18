@@ -495,3 +495,27 @@ h4,
   background: var(--ops-hoverbar-btn-hover);
   color: var(--ops-hoverbar-text-hover);
 }
+
+/* ---------- 移动端适配 ---------- */
+@media (max-width: 768px) {
+  .ops-hero {
+    padding: 20px 2px !important;
+  }
+  .ops-kpi-card {
+    padding: 14px;
+  }
+  .ops-module-card {
+    padding: 12px 10px;
+  }
+  .ops-tile {
+    padding: 48px 16px;
+  }
+  /* 表格在手机上横向滚动，避免被压扁 */
+  .ant-table-content {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ops-auth-form {
+    padding: 24px 16px;
+  }
+}
