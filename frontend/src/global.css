@@ -685,3 +685,27 @@ h4,
 .ops-fav-item:hover .ops-fav-remove {
   opacity: 1;
 }
+
+/* 抽屉不透明：半透明玻璃面板影响阅读 */
+.ant-drawer-content {
+  background: var(--ops-bg) !important;
+}
+.ant-drawer-header {
+  background: var(--ops-bg) !important;
+}
+
+/* 抽屉彻底不透明：表面 + 内部卡片全部实底，保证可读 */
+.ant-drawer-content-wrapper .ant-drawer-content,
+.ant-drawer-content-wrapper .ant-drawer-header,
+.ant-drawer-content-wrapper .ant-drawer-footer,
+.ant-drawer-content-wrapper .ant-card,
+.ant-drawer-content-wrapper .ant-card-body {
+  background-color: var(--ops-bg) !important;
+}
+.ant-drawer-content-wrapper .ant-drawer-body {
+  background: transparent;
+}
+
+.ant-drawer-content-wrapper {
+  background: var(--ops-bg) !important;
+}

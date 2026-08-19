@@ -34,7 +34,9 @@ class PlanNoteIn(BaseModel):
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
-def _log(db, user: dict, action: str, target: str = "", detail: str = "") -> None:
+def _log(db, user: dict | None, action: str, target: str = "", detail: str = "") -> None:
+    if user is None:
+        return
     log_op(db, user, "promotions", action, target, detail)
 
 def _scope_filter(store_id, user: dict) -> tuple[str, list]:

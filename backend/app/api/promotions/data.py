@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from datetime import date as date_cls
 from datetime import datetime, timedelta
 
@@ -342,7 +344,10 @@ def list_plans(
         "SELECT p.*, COALESCE(s.spend, 0) AS stat_spend, COALESCE(s.sales, 0) AS stat_sales, "
         "COALESCE(s.roi, 0) AS stat_roi, COALESCE(s.clicks, 0) AS stat_clicks, "
         "COALESCE(s.prev_spend, 0) AS prev_spend, COALESCE(s.prev_sales, 0) AS prev_sales, "
-        "COALESCE(s.prev_roi, 0) AS prev_roi, COALESCE(s.prev_clicks, 0) AS prev_clicks "
+        "COALESCE(s.prev_roi, 0) AS prev_roi, COALESCE(s.prev_clicks, 0) AS prev_clicks, "
+        "COALESCE(s.alipay_dir, 0) AS stat_alipay_dir, COALESCE(s.alipay_indir, 0) AS stat_alipay_indir, "
+        "COALESCE(s.retained_sales, 0) AS stat_retained_sales, COALESCE(s.retained_roi, 0) AS stat_retained_roi, "
+        "COALESCE(s.refund_amt, 0) AS stat_refund_amt, COALESCE(s.extra_json, '') AS stat_extra "
         "FROM promo_plans p "
         "LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
     )
@@ -374,6 +379,18 @@ def list_plans(
         d["sales"] = d.pop("stat_sales", 0) or 0
         d["roi"] = d.pop("stat_roi", 0) or 0
         d["clicks"] = d.pop("stat_clicks", 0) or 0
+        d["alipay_dir"] = d.pop("stat_alipay_dir", 0) or 0
+        d["alipay_indir"] = d.pop("stat_alipay_indir", 0) or 0
+        d["retained_sales"] = d.pop("stat_retained_sales", 0) or 0
+        d["retained_roi"] = d.pop("stat_retained_roi", 0) or 0
+        d["refund_amt"] = d.pop("stat_refund_amt", 0) or 0
+        _extra = d.pop("stat_extra", "") or ""
+        try:
+            d["extra"] = json.loads(_extra) if _extra else {}
+        except (ValueError, TypeError):
+            d["extra"] = {}
+        if mode == "realtime" and d["retained_roi"]:
+            d["roi"] = d["retained_roi"]
         d["prev_spend"] = d.pop("prev_spend", 0) or 0
         d["prev_sales"] = d.pop("prev_sales", 0) or 0
         d["prev_roi"] = d.pop("prev_roi", 0) or 0
@@ -448,13 +465,17 @@ def sync_plans(
                 st = stats_map.get(p["campaign_id"])
                 if st:
                     _pv = prev_map.get(p["campaign_id"]) or {}
+                    _extra_json = json.dumps({k: v for k, v in st.items() if k != "campaign_id"}, ensure_ascii=False)
                     db.execute(
-                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, prev_spend, prev_sales, prev_roi, prev_clicks, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, prev_spend, prev_sales, prev_roi, prev_clicks, alipay_dir, alipay_indir, retained_sales, retained_roi, refund_amt, extra_json, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(store_id, campaign_id, mode) DO UPDATE SET "
                         "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
                         "clicks = excluded.clicks, prev_spend = excluded.prev_spend, prev_sales = excluded.prev_sales, "
-                        "prev_roi = excluded.prev_roi, prev_clicks = excluded.prev_clicks, updated_at = excluded.updated_at",
+                        "prev_roi = excluded.prev_roi, prev_clicks = excluded.prev_clicks, "
+                        "alipay_dir = excluded.alipay_dir, alipay_indir = excluded.alipay_indir, "
+                        "retained_sales = excluded.retained_sales, retained_roi = excluded.retained_roi, "
+                        "refund_amt = excluded.refund_amt, extra_json = excluded.extra_json, updated_at = excluded.updated_at",
                         (
                             store["id"],
                             p["campaign_id"],
@@ -467,6 +488,12 @@ def sync_plans(
                             _pv.get("sales") or 0,
                             _pv.get("roi") or 0,
                             _pv.get("clicks") or 0,
+                            st.get("alipay_dir") or 0,
+                            st.get("alipay_indir") or 0,
+                            st.get("retained_sales") or 0,
+                            st.get("retained_roi") or 0,
+                            st.get("refund_amt") or 0,
+                            _extra_json,
                             now,
                         ),
                     )

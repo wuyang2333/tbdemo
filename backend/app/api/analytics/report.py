@@ -5,7 +5,7 @@ from __future__ import annotations
 import io as _io
 import json as _json
 from datetime import date as date_cls
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -196,6 +196,19 @@ def daily_report(
 
     ac = _report_add_cart_refund(db, ts, sf, sp, is_realtime)
 
+    # 买家数（支付买家数）；客单价 = 销售额 / 买家数
+    def _day_buyers(d: str, realtime: bool) -> int:
+        if realtime:
+            r = db.execute("SELECT SUM(buyers) AS b FROM store_item_realtime WHERE 1=1" + sf, sp).fetchone()
+        else:
+            r = db.execute("SELECT SUM(buyers) AS b FROM store_item_daily WHERE data_date = ?" + sf, [d] + sp).fetchone()
+        return int(r["b"] or 0)
+
+    td["buyers"] = _day_buyers(ts, is_realtime)
+    yd["buyers"] = _day_buyers(ys, False)
+    td["avg_order_value"] = round(td["sales"] / td["buyers"], 2) if td["buyers"] else 0
+    yd["avg_order_value"] = round(yd["sales"] / yd["buyers"], 2) if yd["buyers"] else 0
+
     return {
         "date": ts,
         "is_today": is_realtime,
@@ -269,11 +282,37 @@ def report_ai(
         "你是淘宝店铺的运营分析师。根据下面这份经营日报（默认是昨日数据），写一段120字以内的日报总结，口语化、适合直接发到工作群。"
         "包含：整体表现一句话、今天最值得注意的亮点或问题、一句明天建议。不要编造数据。\n\n" + context
     )
-    try:
-        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"reply": reply, "date": report["date"], "report": report}
+    # 经营总结缓存：同一日期同一店铺 1 小时内复用，避免每次打开都重新生成
+    from .insight import _ensure_report_cache
+
+    _ensure_report_cache(db)
+    cache_key = f"report-summary|{report['date']}|{store_id or ''}"
+    row = db.execute(
+        "SELECT reply, created_at FROM ai_report_cache WHERE cache_key = ?", (cache_key,)
+    ).fetchone()
+    cached = False
+    reply = ""
+    if row:
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            cached = (datetime.now(timezone.utc) - created) < timedelta(hours=1)
+        except ValueError:
+            cached = False
+        if cached:
+            reply = row["reply"]
+    if not cached:
+        try:
+            reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=240.0)
+        except AIError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.execute(
+            "INSERT INTO ai_report_cache (cache_key, reply, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET reply = excluded.reply, created_at = excluded.created_at",
+            (cache_key, reply, datetime.now(timezone.utc).isoformat()),
+        )
+    return {"reply": reply, "date": report["date"], "report": report, "cached": cached}
 
 
 def _report_push_config(db) -> dict:
@@ -420,11 +459,37 @@ def report_analysis(
         "【今日行动建议】3-5条具体可执行的建议（调预算、停投/加投场景、优化哪些商品、补货/定价等），落到具体场景或商品\n\n"
         + context
     )
-    try:
-        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=180.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"sections": _parse_analysis_sections(reply), "reply": reply, "date": report["date"]}
+    # 经营分析缓存：同一日期同一店铺 1 小时内复用，避免每次打开都重新生成
+    from .insight import _ensure_report_cache
+
+    _ensure_report_cache(db)
+    cache_key = f"report-analysis|{report['date']}|{store_id or ''}"
+    row = db.execute(
+        "SELECT reply, created_at FROM ai_report_cache WHERE cache_key = ?", (cache_key,)
+    ).fetchone()
+    cached = False
+    reply = ""
+    if row:
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            cached = (datetime.now(timezone.utc) - created) < timedelta(hours=1)
+        except ValueError:
+            cached = False
+        if cached:
+            reply = row["reply"]
+    if not cached:
+        try:
+            reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=240.0)
+        except AIError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.execute(
+            "INSERT INTO ai_report_cache (cache_key, reply, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET reply = excluded.reply, created_at = excluded.created_at",
+            (cache_key, reply, datetime.now(timezone.utc).isoformat()),
+        )
+    return {"sections": _parse_analysis_sections(reply), "reply": reply, "date": report["date"], "cached": cached}
 
 
 @router.get("/export")

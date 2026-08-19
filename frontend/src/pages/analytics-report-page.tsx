@@ -147,7 +147,7 @@ export function AnalyticsReportPage() {
       const params = new URLSearchParams();
       if (date) params.set("date", date);
       if (storeId) params.set("store_id", String(storeId));
-      const { data: res } = await http.post<{ reply: string }>(`/analytics/report/ai?${params.toString()}`, undefined, { timeout: 120000 });
+      const { data: res } = await http.post<{ reply: string }>(`/analytics/report/ai?${params.toString()}`, undefined, { timeout: 240000 });
       setAiReply(res.reply);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -321,14 +321,14 @@ export function AnalyticsReportPage() {
 
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}销售额`} value={data.today.sales} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.sales, data.yesterday.sales)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}订单`} value={data.today.orders} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.orders, data.yesterday.orders)}</Text>} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}买家数`} value={data.today.buyers} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.buyers, data.yesterday.buyers)}</Text>} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" styles={{ content: {  color: "var(--ops-accent)"  } }} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
             <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}真实ROI`} value={realRoi} precision={2} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(realRoi, prevRealRoi)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="加购" value={data.add_cart} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{data.add_cart ? "次" : "—"}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title="退款额" value={data.refund_amount} precision={2} prefix="¥" styles={{ content: {  color: "var(--ops-danger)"  } }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}退款`} value={data.refund_amount} precision={2} prefix="¥" styles={{ content: {  color: "var(--ops-danger)"  } }} /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}净支付金额`} value={data.today.sales - data.refund_amount} precision={2} prefix="¥" /></Card></Col>
+            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
           </Row>
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>

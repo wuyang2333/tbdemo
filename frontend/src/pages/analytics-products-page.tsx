@@ -24,8 +24,8 @@ const SEG_OPTIONS = [
 ];
 
 const BUILTIN_COL_ORDER: Record<string, string[]> = {
-  realtime: ["rank", "item", "diag", "visitors", "pv", "buyers", "sales", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share"],
-  days: ["rank", "item", "diag", "sales", "orders", "buyers", "visitors", "conversion_rate", "add_cart", "promo_spend", "promo_roi", "real_roi", "promo_share", "sales_share"],
+  realtime: ["rank", "item", "diag", "visitors", "pv", "buyers", "sales", "conversion_rate", "add_cart", "promo_spend", "net_roi", "real_roi", "promo_share"],
+  days: ["rank", "item", "diag", "sales", "orders", "buyers", "visitors", "conversion_rate", "add_cart", "promo_spend", "net_roi", "real_roi", "promo_share", "sales_share"],
 };
 
 const RANGE_PRESETS: { label: string; value: [dayjs.Dayjs, dayjs.Dayjs] }[] = [
@@ -65,6 +65,8 @@ interface ProductInsightResult {
   metrics: ProductInsightMetric[];
   range: string;
   reply: string;
+  cached?: boolean;
+  chat?: { role: string; content: string }[];
   product: { item_id: string; item_title: string; image?: string };
 }
 
@@ -140,8 +142,23 @@ export function AnalyticsProductsPage() {
   const [view, setView] = useState<"realtime" | "yesterday" | "range">("realtime");
   const [range, setRange] = useState<[string, string] | null>(null);
   const [filterItemId, setFilterItemId] = useState("");
-  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
-  const [colOrders, setColOrders] = useState<Record<string, string[]>>({});
+  const [hiddenCols, setHiddenCols] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("tb-products-cols") || "{}").hidden ?? [];
+    } catch {
+      return [];
+    }
+  });
+  const [colOrders, setColOrders] = useState<Record<string, string[]>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("tb-products-cols") || "{}").orders ?? {};
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem("tb-products-cols", JSON.stringify({ hidden: hiddenCols, orders: colOrders }));
+  }, [hiddenCols, colOrders]);
   const [dragCol, setDragCol] = useState<string | null>(null);
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -270,9 +287,11 @@ export function AnalyticsProductsPage() {
       const { data } = await http.post<ProductInsightResult>(
         `/analytics/products/${encodeURIComponent(row.item_id)}/insight?${params.toString()}`,
         undefined,
-        { timeout: 120000 }
+        { timeout: 300000 }
       );
       setDetailResult(data);
+      // 缓存命中时恢复追问历史，可接着聊
+      if (Array.isArray(data.chat)) setDetailChat(data.chat.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -301,7 +320,7 @@ export function AnalyticsProductsPage() {
           store_id: storeId,
           messages: [{ role: "assistant", content: detailResult.reply }, ...next],
         },
-        { timeout: 120000 }
+        { timeout: 300000 }
       );
       setDetailChat([...next, { role: "assistant" as const, content: data.reply }]);
     } catch (error) {
@@ -483,67 +502,56 @@ export function AnalyticsProductsPage() {
           {
             title: "排名",
             dataIndex: "rank",
-            width: 70,
+            width: 56,
             align: "center",
             render: (v: number) => (
               <span style={{ fontWeight: 700, color: v <= 3 ? "var(--ops-danger)" : undefined }}>{v}</span>
             ),
           },
-          { title: "商品", key: "item", width: 200, render: renderItem },
-          {
-            title: "生命周期",
-            dataIndex: "lifecycle",
-            width: 92,
-            render: (v?: string) =>
-              v ? (
-                <Tag color={v === "成长期" ? "green" : v === "衰退期" ? "red" : v === "成熟期" ? "blue" : v === "无销量" ? "default" : "orange"}>
-                  {v}
-                </Tag>
-              ) : null,
-          },
+          { title: "商品", key: "item", width: 190, render: renderItem },
           {
             title: "诊断",
             key: "diag",
-            width: 90,
+            width: 82,
             render: (_, row: AnalyticsProduct) => {
               const d = productDiag(row);
               return <Tag color={d.color}>{d.label}</Tag>;
             },
           },
-          { title: "访客", dataIndex: "visitors", align: "right", width: 110, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
-          { title: "浏览量", dataIndex: "pv", align: "right", width: 110, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
-          { title: "买家", dataIndex: "buyers", align: "right", width: 100, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 130, sorter: numSorter("sales"), render: (v: number, row) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle ?? 0} /> },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 120, sorter: numSorter("conversion_rate"), render: (v: number, row) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle ?? 0} /> },
-          { title: "加购", dataIndex: "add_cart", align: "right", width: 100, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
-          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, sorter: numSorter("promo_spend"), render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
-          { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, sorter: numSorter("promo_roi"), render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
-          { title: "真实ROI", key: "real_roi", align: "right", width: 90, sorter: realRoiSorter, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
-          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, sorter: numSorter("promo_share"), render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 96, sorter: numSorter("visitors"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle ?? 0} /> },
+          { title: "浏览量", dataIndex: "pv", align: "right", width: 96, sorter: numSorter("pv"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.pv_cycle ?? 0} /> },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 88, sorter: numSorter("buyers"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle ?? 0} /> },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 118, sorter: numSorter("sales"), render: (v: number, row) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle ?? 0} /> },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 104, sorter: numSorter("conversion_rate"), render: (v: number, row) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle ?? 0} /> },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 88, sorter: numSorter("add_cart"), render: (v: number, row) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle ?? 0} /> },
+          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 96, sorter: numSorter("promo_spend"), render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
+          { title: "净投产比", key: "net_roi", align: "right", width: 88, sorter: numSorter("promo_net_roi"), render: (_: unknown, row: AnalyticsProduct) => (row.promo_net_roi != null ? row.promo_net_roi.toFixed(2) : "—") },
+          { title: "真实ROI", key: "real_roi", align: "right", width: 82, sorter: realRoiSorter, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
+          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 82, sorter: numSorter("promo_share"), render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)
       : ([
-          { title: "排名", dataIndex: "rank", width: 70, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "var(--ops-danger)" : undefined }}>{v}</span> },
+          { title: "排名", dataIndex: "rank", width: 56, align: "center", render: (v: number) => <span style={{ fontWeight: 700, color: v <= 3 ? "var(--ops-danger)" : undefined }}>{v}</span> },
           { title: "商品", key: "item", width: 200, render: renderItem },
           {
             title: "诊断",
             key: "diag",
-            width: 90,
+            width: 82,
             render: (_, row: AnalyticsProduct) => {
               const d = productDiag(row);
               return <Tag color={d.color}>{d.label}</Tag>;
             },
           },
-          { title: "销售额", dataIndex: "sales", align: "right", width: 120, sorter: numSorter("sales"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle} /> },
-          { title: "销量", dataIndex: "orders", align: "right", width: 90, sorter: numSorter("orders"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.orders_cycle} /> },
-          { title: "买家", dataIndex: "buyers", align: "right", width: 90, sorter: numSorter("buyers"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle} /> },
-          { title: "访客", dataIndex: "visitors", align: "right", width: 100, sorter: numSorter("visitors"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle} /> },
-          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 100, sorter: numSorter("conversion_rate"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle} /> },
-          { title: "加购", dataIndex: "add_cart", align: "right", width: 90, sorter: numSorter("add_cart"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle} /> },
-          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 100, render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
-          { title: "推广ROI", dataIndex: "promo_roi", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? v.toFixed(2) : "—") },
-          { title: "真实ROI", align: "right", width: 90, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
-          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 90, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
-          { title: "占比", dataIndex: "sales_share", align: "right", width: 90, sorter: numSorter("sales_share"), render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "销售额", dataIndex: "sales", align: "right", width: 112, sorter: numSorter("sales"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtMoney(v)} change={row.sales_cycle} /> },
+          { title: "销量", dataIndex: "orders", align: "right", width: 80, sorter: numSorter("orders"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.orders_cycle} /> },
+          { title: "买家", dataIndex: "buyers", align: "right", width: 82, sorter: numSorter("buyers"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.buyers_cycle} /> },
+          { title: "访客", dataIndex: "visitors", align: "right", width: 90, sorter: numSorter("visitors"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.visitors_cycle} /> },
+          { title: "转化率", dataIndex: "conversion_rate", align: "right", width: 92, sorter: numSorter("conversion_rate"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtPct(v)} change={row.conversion_cycle} /> },
+          { title: "加购", dataIndex: "add_cart", align: "right", width: 82, sorter: numSorter("add_cart"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle} /> },
+          { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 96, render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
+          { title: "净投产比", key: "net_roi", align: "right", width: 88, render: (_: unknown, row: AnalyticsProduct) => (row.promo_net_roi != null ? row.promo_net_roi.toFixed(2) : "—") },
+          { title: "真实ROI", align: "right", width: 82, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
+          { title: "广告占比", dataIndex: "promo_share", align: "right", width: 82, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
+          { title: "占比", dataIndex: "sales_share", align: "right", width: 82, sorter: numSorter("sales_share"), render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)),
   ];
 
@@ -764,18 +772,20 @@ export function AnalyticsProductsPage() {
           </div>
         }
         width={640}
+        styles={{ section: { background: "var(--ops-bg)" } }}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         destroyOnHidden
       >
         {detailLoading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
-            <Spin description="AI 正在分析该商品…" />
+            <Spin description="AI 分析中…数据较多，通常需要 1~3 分钟，请耐心等待" />
           </div>
         ) : detailResult ? (
           <div>
             <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
               分析范围：{detailResult.range} · 基于生意参谋商品数据
+              {detailResult.cached ? "（1小时内缓存，未重新分析）" : ""}
             </Text>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
@@ -870,6 +880,7 @@ export function AnalyticsProductsPage() {
       <Drawer
         title={trendItem ? `趋势：${trendItem.item_title}` : "商品趋势"}
         width={620}
+        styles={{ section: { background: "var(--ops-bg)" } }}
         open={trendOpen}
         onClose={() => setTrendOpen(false)}
         destroyOnHidden
@@ -920,6 +931,7 @@ export function AnalyticsProductsPage() {
       <Drawer
         title={promoItem ? `推广联动：${promoItem.item_title}` : "推广联动"}
         width={700}
+        styles={{ section: { background: "var(--ops-bg)" } }}
         open={promoOpen}
         onClose={() => setPromoOpen(false)}
         destroyOnHidden
@@ -998,7 +1010,7 @@ export function AnalyticsProductsPage() {
           { group: "product", key: "min_visitors", label: "最低访客数", hint: "转化提醒的访客门槛（避免低流量误报）", min: 1, max: 1000, step: 10 },
         ]}
       />
-      <Drawer title="退款分析" open={refundOpen} onClose={() => setRefundOpen(false)} width={540}>
+      <Drawer title="退款分析" open={refundOpen} onClose={() => setRefundOpen(false)} width={540} styles={{ section: { background: "var(--ops-bg)" } }}>
         {refundLoading ? (
           <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
         ) : refundData ? (

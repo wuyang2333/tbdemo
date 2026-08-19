@@ -393,7 +393,7 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
                 "-p",
                 f"page={page}",
                 "-p",
-                "pageSize=20",
+                "pageSize=10",
                 "-p",
                 "order=desc",
                 "-p",
@@ -442,7 +442,7 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
 
             )
         total = data.get("recordCount") or 0
-        if len(out) >= total or len(rows) < 20:
+        if len(out) >= total or len(rows) < 10:
             break
         page += 1
     return out

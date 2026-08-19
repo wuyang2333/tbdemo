@@ -76,6 +76,22 @@ def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
         [promo_mode] + sp,
     ).fetchall()
     p_map = {r["item_id"]: r for r in rows}
+    # 净实际投产比：商品→计划映射 + 计划留存成交/花费聚合（复用计划表，无需新字段）
+    plan_mode = "realtime" if promo_mode == "realtime" else "yesterday" if promo_mode == "yesterday" else "7d"
+    plan_sf = sf.replace("store_id", "pi.store_id") if "store_id" in sf else sf
+    plan_rows = db.execute(
+        "SELECT pi.item_id, "
+        "COALESCE(SUM(ps.spend), 0) AS spend, "
+        "COALESCE(SUM(ps.retained_sales), 0) AS retained_sales "
+        "FROM promo_plan_items pi "
+        "JOIN promo_plan_stats ps ON ps.store_id = pi.store_id AND ps.campaign_id = pi.campaign_id AND ps.mode = ? "
+        "WHERE 1=1" + plan_sf + " GROUP BY pi.item_id",
+        [plan_mode] + sp,
+    ).fetchall()
+    net_map: dict[str, float] = {}
+    for r in plan_rows:
+        if r["spend"] and r["retained_sales"]:
+            net_map[r["item_id"]] = round(r["retained_sales"] / r["spend"], 2)
     for it in items:
         p = p_map.get(it["item_id"])
         if p:
@@ -90,6 +106,7 @@ def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
             it["promo_sales"] = None
             it["promo_roi"] = None
             it["promo_share"] = None
+        it["promo_net_roi"] = net_map.get(it["item_id"])
 
 
 def _realtime_product_items(db, sf, sp) -> list[dict]:

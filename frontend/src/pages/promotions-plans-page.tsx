@@ -1,5 +1,5 @@
-import { BarChartOutlined, CopyOutlined, DownloadOutlined, HolderOutlined, LineChartOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined, RobotOutlined, SearchOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Drawer, Empty, Input, Modal, Popover, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { BarChartOutlined, CopyOutlined, DownloadOutlined, HolderOutlined, LineChartOutlined, PauseCircleOutlined, PlayCircleOutlined, ProfileOutlined, ReloadOutlined, RobotOutlined, SearchOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, Checkbox, Col, Drawer, Empty, Input, Modal, Popover, Row, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -18,6 +18,34 @@ import type { PromoPlan } from "../types";
 const { Text } = Typography;
 
 const PLAN_COL_KEY = "promo_plans_cols_v1";
+
+// 详细数据抽屉：展示抓取到的全部字段
+const PLAN_DETAIL_FIELDS: { key: string; label: string; fmt: "money" | "percent" | "num" | "int" }[] = [
+  { key: "charge", label: "花费", fmt: "money" },
+  { key: "alipayInshopAmt", label: "总成交金额", fmt: "money" },
+  { key: "alipayDirAmt", label: "直接成交金额", fmt: "money" },
+  { key: "alipayIndirAmt", label: "间接成交金额", fmt: "money" },
+  { key: "retainedAlipayInshopAmt", label: "留存成交金额(净)", fmt: "money" },
+  { key: "refundDirAmt", label: "直接退款金额", fmt: "money" },
+  { key: "refundIndirAmt", label: "间接退款金额", fmt: "money" },
+  { key: "roi", label: "ROI(站内)", fmt: "num" },
+  { key: "retainedRoi", label: "净实际投产比", fmt: "num" },
+  { key: "adPv", label: "展现量", fmt: "int" },
+  { key: "click", label: "点击", fmt: "int" },
+  { key: "ctr", label: "点击率", fmt: "percent" },
+  { key: "cvr", label: "转化率", fmt: "percent" },
+  { key: "ecpc", label: "点击成本", fmt: "money" },
+  { key: "ecpm", label: "千次展现成本", fmt: "money" },
+  { key: "alipayInshopNum", label: "成交件数", fmt: "int" },
+  { key: "alipayDirNum", label: "直接成交件数", fmt: "int" },
+  { key: "alipayIndirNum", label: "间接成交件数", fmt: "int" },
+  { key: "cartInshopNum", label: "加购件数", fmt: "int" },
+  { key: "cartDirNum", label: "直接加购件数", fmt: "int" },
+  { key: "cartIndirNum", label: "间接加购件数", fmt: "int" },
+  { key: "refundDirNum", label: "直接退款笔数", fmt: "int" },
+  { key: "refundIndirNum", label: "间接退款笔数", fmt: "int" },
+  { key: "retainedAlipayInshopNum", label: "留存成交件数", fmt: "int" },
+];
 const BUILTIN_COL_ORDER = ["scene_name", "plan_name", "item", "status", "day_budget", "bid", "spend", "sales", "roi", "diag", "clicks", "op", "tag", "note"];
 
 function ChangeBadge({ change, unit = "%" }: { change: number | null | undefined; unit?: string }) {
@@ -65,6 +93,8 @@ export function PromotionsPlansPage() {
   const [search, setSearch] = useState("");
   const [hoverKey, setHoverKey] = useState<number | null>(null);
   const [trendOpen, setTrendOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailPlan, setDetailPlan] = useState<PromoPlan | null>(null);
   const [trendPlan, setTrendPlan] = useState<PromoPlan | null>(null);
   const [trendDays, setTrendDays] = useState(7);
   const [trendData, setTrendData] = useState<{ date: string; spend: number; sales: number; roi: number; clicks: number }[]>([]);
@@ -241,6 +271,10 @@ export function PromotionsPlansPage() {
     setTrendData([]);
     loadTrend(row.id, trendDays);
   };
+  const openDetail = (row: PromoPlan) => {
+    setDetailPlan(row);
+    setDetailOpen(true);
+  };
   const changeTrendDays = (d: number) => {
     setTrendDays(d);
     if (trendPlan) loadTrend(trendPlan.id, d);
@@ -321,12 +355,12 @@ export function PromotionsPlansPage() {
   };
 
   const columns: TableColumnsType<PromoPlan> = [
-    { title: "场景", key: "scene_name", dataIndex: "scene_name", width: 120, sorter: (a, b) => a.scene_name.localeCompare(b.scene_name, "zh") },
+    { title: "场景", key: "scene_name", dataIndex: "scene_name", width: 110, sorter: (a, b) => a.scene_name.localeCompare(b.scene_name, "zh") },
     {
       title: "计划名",
       key: "plan_name",
       dataIndex: "plan_name",
-      width: 220,
+      width: 200,
       render: (name: string, row: PromoPlan) => {
         const hovered = hoverKey === row.id;
         return (
@@ -341,6 +375,9 @@ export function PromotionsPlansPage() {
               <button type="button" className="phb-btn" onClick={() => openTrend(row)}>
                 <LineChartOutlined /> 趋势
               </button>
+              <button type="button" className="phb-btn" onClick={() => openDetail(row)}>
+                <ProfileOutlined /> 详细数据
+              </button>
             </div>
             <Tooltip title={name}>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }} onClick={() => openTrend(row)}>
@@ -354,7 +391,7 @@ export function PromotionsPlansPage() {
     {
       title: "商品",
       key: "item",
-      width: 230,
+      width: 210,
       render: (_, row: PromoPlan) => {
         const it = planItems[row.campaign_id];
         const title = it?.item_title || "—";
@@ -379,27 +416,27 @@ export function PromotionsPlansPage() {
         );
       },
     },
-    { title: "状态", key: "status", dataIndex: "status", width: 80, sorter: (a, b) => a.status.localeCompare(b.status, "zh"), render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
-    { title: "日预算", key: "day_budget", dataIndex: "day_budget", align: "right", width: 90, sorter: (a, b) => a.day_budget - b.day_budget, render: (v: number) => (v ? fmtMoney(v) : "—") },
-    { title: "出价", key: "bid", width: 110, sorter: (a, b) => (a.bid_value || 0) - (b.bid_value || 0), render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
-    { title: "花费", key: "spend", dataIndex: "spend", align: "right", width: 120, sorter: (a, b) => a.spend - b.spend, render: (v: number, row: PromoPlan) => (
+    { title: "状态", key: "status", dataIndex: "status", width: 72, sorter: (a, b) => a.status.localeCompare(b.status, "zh"), render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
+    { title: "日预算", key: "day_budget", dataIndex: "day_budget", align: "right", width: 84, sorter: (a, b) => a.day_budget - b.day_budget, render: (v: number) => (v ? fmtMoney(v) : "—") },
+    { title: "出价", key: "bid", width: 96, sorter: (a, b) => (a.bid_value || 0) - (b.bid_value || 0), render: (_, row) => (row.bid_value ? `${row.bid_value}${row.bid_type === "roi" ? " ROI" : ""}` : row.bid_type || "—") },
+    { title: "花费", key: "spend", dataIndex: "spend", align: "right", width: 110, sorter: (a, b) => a.spend - b.spend, render: (v: number, row: PromoPlan) => (
       <div style={{ textAlign: "right" }}>
         <div>{v ? fmtMoney(v) : "—"}</div>
         <ChangeBadge change={row.spend_cycle} />
       </div>
     ) },
-    { title: "成交", key: "sales", dataIndex: "sales", align: "right", width: 130, sorter: (a, b) => a.sales - b.sales, render: (v: number, row: PromoPlan) => (
+    { title: "成交", key: "sales", dataIndex: "sales", align: "right", width: 116, sorter: (a, b) => a.sales - b.sales, render: (v: number, row: PromoPlan) => (
       <div style={{ textAlign: "right" }}>
         <div>{v ? fmtMoney(v) : "—"}</div>
         <ChangeBadge change={row.sales_cycle} />
       </div>
     ) },
     {
-      title: "ROI",
+      title: mode === "realtime" ? "净投产比" : "ROI",
       key: "roi",
       dataIndex: "roi",
       align: "right",
-      width: 90,
+      width: 84,
       sorter: (a, b) => a.roi - b.roi,
       render: (v: number, row: PromoPlan) => {
         const d = diag(row);
@@ -415,17 +452,17 @@ export function PromotionsPlansPage() {
     {
       title: "诊断",
       key: "diag",
-      width: 100,
+      width: 90,
       render: (_, row: PromoPlan) => {
         const d = diag(row);
         return <Tag color={d.color}>{d.label}</Tag>;
       },
     },
-    { title: "点击", key: "clicks", dataIndex: "clicks", align: "right", width: 90, sorter: (a, b) => a.clicks - b.clicks, render: (v: number) => (v ? fmtInt(v) : "—") },
+    { title: "点击", key: "clicks", dataIndex: "clicks", align: "right", width: 82, sorter: (a, b) => a.clicks - b.clicks, render: (v: number) => (v ? fmtInt(v) : "—") },
     {
       title: "操作",
       key: "op",
-      width: 96,
+      width: 92,
       render: (_, row: PromoPlan) =>
         row.scene === "content" ? (
           <Text type="secondary" style={{ fontSize: 12 }}>不支持</Text>
@@ -440,7 +477,7 @@ export function PromotionsPlansPage() {
         ),
     },
     { title: "标记", key: "tag", width: 130, render: (_, row) => <PlanTagCell plan={row} onSaved={() => load(scene, mode)} /> },
-    { title: "备注", key: "note", width: 200, render: (_, row) => <PlanNoteCell plan={row} onSaved={() => load(scene, mode)} /> },
+    { title: "备注", key: "note", width: 180, render: (_, row) => <PlanNoteCell plan={row} onSaved={() => load(scene, mode)} /> },
   ];
 
   const viewKey = mode;
@@ -873,6 +910,55 @@ export function PromotionsPlansPage() {
           </div>
         )}
       </Modal>
+      <Drawer
+        title={detailPlan ? `详细数据：${detailPlan.plan_name}` : "详细数据"}
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        width={520}
+      >
+        {detailPlan ? (
+          <div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
+              <Tag>{detailPlan.scene_name || "未分类"}</Tag>
+              <Tag color={detailPlan.status === "在投" ? "green" : "default"}>{detailPlan.status || "—"}</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>计划ID {detailPlan.campaign_id}</Text>
+            </div>
+            <Row gutter={[10, 10]}>
+              <Col xs={12} sm={8}>
+                <div style={{ background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius)", padding: "10px 12px" }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>日预算</Text>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{detailPlan.day_budget ? fmtMoney(detailPlan.day_budget) : "—"}</div>
+                </div>
+              </Col>
+              {PLAN_DETAIL_FIELDS.map((f) => {
+                const full: Record<string, number> = {
+                  ...(detailPlan.extra ?? {}),
+                  spend: detailPlan.spend,
+                  sales: detailPlan.sales,
+                  roi: detailPlan.roi,
+                  clicks: detailPlan.clicks,
+                  charge: detailPlan.extra?.charge ?? detailPlan.spend,
+                  alipayInshopAmt: detailPlan.extra?.alipayInshopAmt ?? detailPlan.sales,
+                  retainedRoi: detailPlan.extra?.retainedRoi ?? detailPlan.retained_roi ?? 0,
+                };
+                const v = full[f.key];
+                if (v == null || v === undefined) return null;
+                const value = f.fmt === "money" ? fmtMoney(v) : f.fmt === "percent" ? `${(v * 100).toFixed(2)}%` : f.fmt === "int" ? fmtInt(v) : v.toFixed(2);
+                return (
+                  <Col xs={12} sm={8} key={f.key}>
+                    <div style={{ background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius)", padding: "10px 12px" }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{f.label}</Text>
+                      <div style={{ fontSize: 16, fontWeight: 700, marginTop: 2, color: f.key === "retainedRoi" ? "var(--ops-accent)" : undefined }}>{value}</div>
+                    </div>
+                  </Col>
+                );
+              })}
+            </Row>
+          </div>
+        ) : (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
+        )}
+      </Drawer>
     </div>
   );
 }

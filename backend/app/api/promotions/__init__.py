@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from .data import router as _data_router
+from .data import sync_items, sync_plans
 from .insight import router as _insight_router
 from ._common import (
     sync_promo_daily_all,

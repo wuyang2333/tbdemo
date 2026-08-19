@@ -1,4 +1,4 @@
-import { BarChartOutlined, FullscreenOutlined, HistoryOutlined, ReloadOutlined, RiseOutlined, SearchOutlined, ShoppingOutlined, SyncOutlined, TeamOutlined, WarningOutlined } from "@ant-design/icons";
+import { BarChartOutlined, FullscreenOutlined, FundOutlined, HistoryOutlined, MoneyCollectOutlined, ReloadOutlined, RiseOutlined, SearchOutlined, ShoppingOutlined, SyncOutlined, TeamOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Card, Col, Dropdown, Empty, Row, Space, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -16,8 +16,8 @@ const { Text } = Typography;
 
 type TodayCompare = { sales: number | null; orders: number | null; visitors: number | null; conversion: number | null };
 type TodayOverview = {
-  kpi: { sales: number; orders: number; visitors: number; conversion_rate: number; avg_order_value: number; compare: TodayCompare };
-  promo: { spend: number; sales: number; roi: number; compare: { spend: number | null; sales: number | null }; scenes: { scene: string; scene_name: string; spend: number; sales: number; roi: number }[] };
+  kpi: { sales: number; orders: number; visitors: number; conversion_rate: number; avg_order_value: number; buyers: number; compare: TodayCompare };
+  promo: { spend: number; sales: number; roi: number; real_roi: number | null; yesterday_real_roi: number | null; compare: { spend: number | null; sales: number | null }; scenes: { scene: string; scene_name: string; spend: number; sales: number; roi: number }[] };
   funnel: { visitors: number; collect: number; add_cart: number; buyers: number; collect_rate: number; cart_rate: number; pay_rate: number };
   flow: { search_uv: number; search_share: number | null; other_share: number | null; has_data: boolean; data_date: string | null; sources: { source: string; uv: number; rank: number }[] };
   refund: { amount: number; pay_amt: number; rate: number; ord_rate: number; cycle: number | null; yest_amount: number; yest_rate: number; data_date: string | null; updated_at: string };
@@ -124,9 +124,13 @@ export function AnalyticsOverviewPage() {
               <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 {[
                   { label: "今日销售额", value: `¥${today.kpi.sales.toLocaleString()}`, cmp: today.kpi.compare.sales, cmpText: "较昨日同时段", color: "var(--ops-accent)", icon: <BarChartOutlined /> },
-                  { label: "今日订单", value: today.kpi.orders.toLocaleString(), cmp: today.kpi.compare.orders, cmpText: "较昨日同时段", color: "var(--ops-success)", icon: <ShoppingOutlined /> },
+                  { label: "今日买家数", value: (today.kpi.buyers ?? today.funnel.buyers).toLocaleString(), cmp: null, cmpText: "支付买家数（实时）", color: "var(--ops-success)", icon: <ShoppingOutlined /> },
                   { label: "今日访客", value: today.kpi.visitors.toLocaleString(), cmp: today.kpi.compare.visitors, cmpText: "较昨日同时段", color: "var(--ops-cat-2)", icon: <TeamOutlined /> },
                   { label: "今日转化率", value: `${today.kpi.conversion_rate}%`, cmp: null, cmpText: `客单价 ¥${today.kpi.avg_order_value}`, color: "var(--ops-warn)", icon: <RiseOutlined /> },
+                  { label: "今日真实ROI", value: today.promo.real_roi != null ? today.promo.real_roi.toFixed(2) : "—", cmp: null, cmpText: today.promo.yesterday_real_roi != null ? `昨日同时段 ${today.promo.yesterday_real_roi.toFixed(2)}` : "昨日无推广数据", color: "var(--ops-success)", icon: <FundOutlined /> },
+                  { label: "今日退款", value: `¥${today.refund.amount.toLocaleString()}`, cmp: today.refund.cycle, cmpText: `较昨日同时段 · 退款率 ${today.refund.rate}%`, color: "var(--ops-danger)", icon: <WarningOutlined /> },
+                  { label: "今日净支付金额", value: `¥${(today.kpi.sales - today.refund.amount).toLocaleString()}`, cmp: null, cmpText: `总成交 ¥${today.kpi.sales.toLocaleString()} − 退款 ¥${today.refund.amount.toLocaleString()}`, color: "var(--ops-cat-4)", icon: <MoneyCollectOutlined /> },
+                  { label: "今日客单价", value: `¥${today.kpi.avg_order_value.toLocaleString()}`, cmp: null, cmpText: "销售额 ÷ 买家数", color: "var(--ops-accent)", icon: <MoneyCollectOutlined /> },
                 ].map((card) => (
                   <Col xs={12} sm={6} key={card.label}>
                     <Card
@@ -217,7 +221,7 @@ export function AnalyticsOverviewPage() {
               </Row>
 
               <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                <Col xs={24} md={8}>
+                <Col xs={24} md={12}>
                   <Card variant="borderless" title="今日流量结构" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     {today.flow.has_data ? (
                       <>
@@ -250,22 +254,7 @@ export function AnalyticsOverviewPage() {
                     )}
                   </Card>
                 </Col>
-                <Col xs={24} md={8}>
-                  <Card variant="borderless" title="今日退款" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)", borderLeft: "3px solid var(--ops-danger)" }}>
-                    <Space size={8}>
-                      <WarningOutlined style={{ color: "var(--ops-danger)", fontSize: 18 }} />
-                      <Text strong style={{ fontSize: 26, color: "var(--ops-danger)" }}>¥{today.refund.amount.toLocaleString()}</Text>
-                    </Space>
-                    <Text type="secondary" style={{ display: "block", marginTop: 4 }}>
-                      退款率 {today.refund.rate}%（完结时间）
-                      {today.refund.cycle !== null && today.refund.cycle !== undefined && (
-                        <Tag color={today.refund.cycle >= 0 ? "red" : "green"} style={{ marginLeft: 8 }}>{today.refund.cycle >= 0 ? "▲" : "▼"} {Math.abs(today.refund.cycle).toFixed(1)}% 较昨日同时段</Tag>
-                      )}
-                    </Text>
-                    <Text style={{ fontSize: 13, marginTop: 8, display: "block" }}>昨日全天 ¥{today.refund.yest_amount.toLocaleString()} · 生意参谋实时接口每 3 分钟刷新</Text>
-                  </Card>
-                </Col>
-                <Col xs={24} md={8}>
+                <Col xs={24} md={12}>
                   <Card variant="borderless" title="今日说明" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.9 }}>
                       今日数据截至当前小时，较昨日同时段对比；KPI 来自店铺分时表，漏斗/爆款基于商品实时榜，流量/退款来自生意参谋实时接口（流量看板 / 首页-数据概括-完结时间），每 3 分钟自动刷新。

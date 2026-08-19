@@ -337,7 +337,20 @@ def check_hourly_rules(db, cfg: dict | None = None) -> list[str]:
             "roi_l": round(sales_l / spend_l, 2) if spend_l else 0.0,
         }
 
-    messages = []
+    def _fmt_val(field: str, v) -> str:
+        if v is None:
+            return "—"
+        if field in ("sales", "promo_spend"):
+            return f"¥{v:,.0f}"
+        if field in ("visitors", "orders"):
+            return f"{v:,.0f}"
+        if field == "conversion_rate":
+            return f"{v:.1f}%"
+        if field == "promo_roi":
+            return f"{v:.1f}"
+        return str(v)
+
+    triggered: list[str] = []
     for r in rules:
         field = r["field"]
         op = r["operator"]
@@ -360,27 +373,65 @@ def check_hourly_rules(db, cfg: dict | None = None) -> list[str]:
         base = base_map.get(compare, base_map["yesterday"])
         bl = base_label.get(compare, "昨日同时段")
         label = HOURLY_LABELS.get(field, field)
-        prefix = f"{hour_str}"
-        if sc:
-            prefix += f" {SCENE_LABELS.get(sc, sc)}"
+        scene_part = f"{SCENE_LABELS.get(sc, sc)} " if sc else ""
+        cur_val = _fmt_val(field, item.get(field))
         if op == "cycle_drop_pct":
             v = _hpct(item.get(field) or 0, base.get(field) or 0)
             if v is not None and v <= -threshold:
-                messages.append(f"{prefix} {label}较{bl}跌 {abs(v):.0f}%（阈值 {threshold}%）")
+                triggered.append(f"❌ {scene_part}{label} 较{bl}下跌 {abs(v):.1f}%\n   （阈值 {threshold}%｜当前 {cur_val}）")
         elif op == "cycle_up_pct":
             v = _hpct(item.get(field) or 0, base.get(field) or 0)
             if v is not None and v >= threshold:
-                messages.append(f"{prefix} {label}较{bl}涨 {v:.0f}%（阈值 {threshold}%）")
+                triggered.append(f"📈 {scene_part}{label} 较{bl}上涨 {v:.1f}%\n   （阈值 {threshold}%｜当前 {cur_val}）")
         elif op == "lt":
             v = item.get(field)
             if v is not None and v < threshold:
-                val = f"{v:.2f}" if field == "conversion_rate" else f"{v:,.0f}"
-                messages.append(f"{prefix} {label} {val} 低于阈值 {threshold}")
+                val = _fmt_val(field, v)
+                triggered.append(f"⚠️ {scene_part}{label} {val} 低于阈值 {threshold}\n   （当前 {val}）")
         elif op == "gt":
             v = item.get(field)
             if v is not None and v > threshold:
-                val = f"{v:.2f}" if field == "conversion_rate" else f"{v:,.0f}"
-                messages.append(f"{prefix} {label} {val} 超过阈值 {threshold}")
+                val = _fmt_val(field, v)
+                triggered.append(f"⚠️ {scene_part}{label} {val} 超过阈值 {threshold}\n   （当前 {val}）")
+    # 净投产比监控（计划级当日实时累计，每 3 分钟自动同步）：指出哪条计划净投产比有问题
+    plan_msgs: list[str] = []
+    try:
+        _alerts_row = db.execute("SELECT value FROM meta WHERE key = 'analytics_alerts_config'").fetchone()
+        _alerts_all = json.loads(_alerts_row["value"]) if _alerts_row and _alerts_row["value"] else {}
+    except (ValueError, TypeError):
+        _alerts_all = {}
+    plan_cfg = _alerts_all.get("plan", {}) or {}
+    roi_low = float(plan_cfg.get("roi_low") or 1.0)
+    roi_drop_ratio = float(plan_cfg.get("roi_drop_ratio") or 0.6)
+    plan_rows = db.execute(
+        "SELECT p.plan_name, s.campaign_id, s.spend, s.roi, s.retained_roi, s.prev_roi "
+        "FROM promo_plan_stats s "
+        "JOIN promo_plans p ON p.store_id = s.store_id AND p.campaign_id = s.campaign_id "
+        "WHERE s.mode = 'realtime' AND s.spend > 0"
+    ).fetchall()
+    for pr in plan_rows:
+        net = pr["retained_roi"] or 0
+        roi = pr["roi"] or 0
+        prev = pr["prev_roi"] or 0
+        spend = pr["spend"] or 0
+        name = pr["plan_name"] or pr["campaign_id"]
+        if net and net < roi_low:
+            plan_msgs.append(f"❌ 计划「{name}」净投产比 {net}，低于保本线 {roi_low}\n   （当前花费 ¥{spend:,.0f}）")
+        elif prev and roi and roi < prev * roi_drop_ratio:
+            drop_pct = round((1 - roi / prev) * 100)
+            plan_msgs.append(f"⚠️ 计划「{name}」ROI {roi}，较昨日 {prev} 下滑 {drop_pct}%（阈值 {round((1 - roi_drop_ratio) * 100)}%）\n   （当前花费 ¥{spend:,.0f}）")
+    if not triggered and not plan_msgs:
+        return []
+    messages = [f"📊 {now.strftime('%m-%d')} {hour_str} 小时经营预警"]
+    for m in triggered:
+        messages.append(m)
+        messages.append("")
+    if plan_msgs:
+        messages.append("【净投产比异常】")
+        for m in plan_msgs:
+            messages.append(m)
+            messages.append("")
+    messages.pop()
     return messages
 
 

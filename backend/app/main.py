@@ -36,6 +36,8 @@ from backend.app.api import (
 )
 from backend.app.api.auth import get_current_user, require_admin, require_module
 from backend.app.api.promotions import (
+    sync_items,
+    sync_plans,
     sync_promo_daily_all,
     sync_promo_items_realtime_all,
     sync_promo_realtime_all,
@@ -198,6 +200,7 @@ def _run_realtime_sync() -> None:
         ("推广实时分时", lambda: sync_promo_realtime_all(conn)),
         ("商品实时", lambda: sync_items_realtime_all(conn)),
         ("商品级推广", lambda: sync_promo_items_realtime_all(conn)),
+        ("推广计划统计", lambda: sync_plans("realtime", None, conn)),
         ("流量来源", lambda: sync_flow_source_all(conn)),
         ("今日退款", lambda: sync_refund_all(conn)),
     ]
@@ -326,6 +329,13 @@ def _run_promo_daily_once() -> None:
         conn.commit()
         sync_items_daily_all(conn, days=7)
         conn.commit()
+        # 推广计划统计（昨日/近7天）与商品级推广（昨日/7/14/30天）：此前只靠手动同步，这里纳入每日自动补数
+        for _m in ("yesterday", "7d"):
+            sync_plans(_m, None, conn)
+            conn.commit()
+        for _m in ("yesterday", "7", "14", "30"):
+            sync_items(_m, None, conn)
+            conn.commit()
     finally:
         conn.close()
 

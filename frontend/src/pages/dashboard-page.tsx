@@ -48,6 +48,8 @@ type DashboardStats = {
   yesterday_orders?: number;
   yesterday_sales?: number;
   yesterday_visitors?: number;
+  today_real_roi?: number | null;
+  yesterday_real_roi?: number | null;
   pending_shipments?: number;
   data_date?: string | null;
   hour_until?: string | null;
@@ -94,7 +96,8 @@ type KpiDef = {
   label: string;
   icon: ReactNode;
   format: (value: number) => string;
-  compareKey?: "yesterday_sales" | "yesterday_orders" | "yesterday_visitors";
+  compareKey?: "yesterday_sales" | "yesterday_orders" | "yesterday_visitors" | "yesterday_real_roi";
+  ratio?: boolean;
 };
 
 const KPI_CARDS: KpiDef[] = [
@@ -103,6 +106,7 @@ const KPI_CARDS: KpiDef[] = [
   { key: "pending_shipments", label: "待发货", icon: <CarOutlined />, format: formatNumber },
   { key: "product_count", label: "在售商品", icon: <ShoppingOutlined />, format: formatNumber },
   { key: "today_visitors", label: "访客数", icon: <EyeOutlined />, format: formatNumber, compareKey: "yesterday_visitors" },
+  { key: "today_real_roi", label: "真实ROI", icon: <FundOutlined />, format: (value) => (value > 0 ? value.toFixed(2) : "—"), compareKey: "yesterday_real_roi", ratio: true },
 ];
 
 const LIVE_MODULES = new Set(["dashboard", "profile", "accounts"]);
@@ -304,7 +308,11 @@ export function DashboardPage() {
           const raw = stats ? stats[item.key] : undefined;
           const value = typeof raw === "number" ? raw : 0;
           const prev = item.compareKey && stats ? stats[item.compareKey] : undefined;
-          const change = statsFailed ? "—" : formatChange(value, typeof prev === "number" ? prev : undefined);
+          const change = statsFailed
+            ? "—"
+            : item.ratio && (value <= 0 || typeof prev !== "number" || prev <= 0)
+              ? "—"
+              : formatChange(value, typeof prev === "number" ? prev : undefined);
           const isUp = change.startsWith("+");
           const isDown = change.startsWith("-");
           const changeColor = isUp ? "var(--ops-up)" : isDown ? "var(--ops-down)" : "var(--ops-text-secondary)";

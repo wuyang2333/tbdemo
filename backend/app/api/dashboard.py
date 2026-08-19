@@ -151,6 +151,24 @@ def overview(
             "orders": r["orders"],
         }
 
+    # 推广花费分时（用于真实 ROI 的同时段对比）
+    promo_rows = db.execute(
+        """
+        SELECT data_date, hour,
+               COALESCE(SUM(spend), 0) AS spend
+        FROM promo_realtime
+        WHERE data_date IN (?, ?)
+        """
+        + sf
+        + " GROUP BY data_date, hour",
+        (latest, yesterday),
+    ).fetchall()
+    today_spend_hours: dict[str, float] = {}
+    yesterday_spend_hours: dict[str, float] = {}
+    for r in promo_rows:
+        target_sp = today_spend_hours if r["data_date"] == latest else yesterday_spend_hours
+        target_sp[r["hour"]] = target_sp.get(r["hour"], 0.0) + (r["spend"] or 0)
+
     active_hours = [
         h for h, v in today_hours.items() if v["visitors"] or v["sales"] or v["orders"]
     ]
@@ -169,6 +187,12 @@ def overview(
 
         today_row = _segment(today_hours)
         yrow = _segment(yesterday_hours)
+
+        def _spend_segment(hours_map: dict[str, float]) -> float:
+            return round(sum(v for h, v in hours_map.items() if h <= upto), 2)
+
+        today_spend = _spend_segment(today_spend_hours)
+        yesterday_spend = _spend_segment(yesterday_spend_hours)
         hour_until = upto
         compare_mode = "同时段"
     else:
@@ -186,8 +210,22 @@ def overview(
             + sf,
             (yesterday,),
         ).fetchone()
+
+        def _daily_spend(d: str) -> float:
+            r = db.execute(
+                "SELECT COALESCE(SUM(spend), 0) AS spend FROM promo_daily_data WHERE data_date = ?" + sf,
+                (d,),
+            ).fetchone()
+            return round(r["spend"] or 0, 2)
+
+        today_spend = _daily_spend(latest)
+        yesterday_spend = _daily_spend(yesterday)
         hour_until = None
         compare_mode = "全天"
+
+    # 真实 ROI = 总成交 / 推广花费（推广花费为 0 时不展示）
+    today_real_roi = round(today_row["sales"] / today_spend, 2) if today_spend else None
+    yesterday_real_roi = round(yrow["sales"] / yesterday_spend, 2) if yesterday_spend else None
 
     # 近 14 天趋势（缺日补 0，保证图表连续）
     start = date.fromisoformat(latest) - timedelta(days=13)
@@ -242,6 +280,8 @@ def overview(
         "yesterday_orders": yrow["orders"],
         "yesterday_sales": yrow["sales"],
         "yesterday_visitors": yrow["visitors"],
+        "today_real_roi": today_real_roi,
+        "yesterday_real_roi": yesterday_real_roi,
         "pending_shipments": pending,
         "data_date": latest,
         "hour_until": hour_until,

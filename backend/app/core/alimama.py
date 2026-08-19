@@ -313,57 +313,76 @@ def fetch_realtime(store: dict) -> list[dict]:
         out.append(item)
     return out
 def fetch_plan_realtime(store: dict) -> list[dict]:
-    """拉取今天各推广场景的计划实时数据（按计划维度，逐场景，含货品全站/内容营销）。"""
+    """拉取今天各推广场景的计划实时数据（按计划维度，逐场景，含货品全站/内容营销）。
+
+    与万相台页面同口径：unifyType=last_click_by_effect_time + 全天汇总，
+    返回 总成交(站内)/直接/间接/留存成交/退款/净实际投产比。
+    """
     today = date.today().isoformat()
-    fields = ["adPv", "charge", "click", "ctr", "alipayInshopAmt", "alipayInshopNum", "cvr", "roi"]
-    body = {
-        "bizCode": "universalBP",
-        "fromRealTime": True,
-        "source": "baseReport",
-        "from": "pcBaseReport",
-        "byPage": True,
-        "totalTag": True,
-        "needCountAccelerate": True,
-        "rptType": "real_time",
-        "queryDomains": ["campaign"],
-        "queryFieldIn": fields,
-        "startTime": today,
-        "endTime": today,
-        "splitType": "hour",
-        "effectEqual": 15,
-        "havingList": [],
-        "pageSize": 100,
-        "pageNo": 1,
-        "orderField": "charge",
-        "orderBy": "desc",
-        "unifyType": "zhai",
-        "offset": 0,
-    }
-    body_json = json.dumps(body, ensure_ascii=False)
+    fields = ["campaignId", "roi", "retainedRoi", "charge", "adPv", "click", "ctr", "cvr", "ecpc", "ecpm",
+              "alipayInshopAmt", "alipayInshopNum", "alipayDirAmt", "alipayDirNum", "alipayIndirAmt", "alipayIndirNum",
+              "cartInshopNum", "cartDirNum", "cartIndirNum",
+              "refundDirAmt", "refundDirNum", "refundIndirAmt", "refundIndirNum",
+              "retainedAlipayInshopAmt", "retainedAlipayInshopNum"]
     merged: dict[str, dict] = {}
     for _key, biz, _name in SCENES:
-        payload = _run_json(
-            store,
-            ["api", f"/report/query.json?bizCode={biz}", "--body", body_json],
-        )
-        for r in (payload.get("data") or {}).get("list") or []:
-            if not isinstance(r, dict):
-                continue
-            cid = str(r.get("campaignId") or "")
-            if not cid:
-                continue
-            item = merged.setdefault(
-                cid,
-                {"campaign_id": cid, "spend": 0.0, "sales": 0.0, "roi": 0.0, "clicks": 0},
+        page = 1
+        while True:
+            body = {
+                "mx_bizCode": "onebpSite",
+                "bizCode": "onebpSite",
+                "tab": "campaign",
+                "startTime": today,
+                "endTime": today,
+                "byPage": True,
+                "pageSize": 100,
+                "pageNo": page,
+                "computeType": "sum",
+                "effectEqual": "15",
+                "fromRealTime": True,
+                "queryDomains": ["campaign"],
+                "queryFieldIn": fields,
+                "sourceList": ["scene", "campaign_list"],
+                "splitType": "sum",
+                "unifyType": "last_click_by_effect_time",
+            }
+            body_json = json.dumps(body, ensure_ascii=False)
+            payload = _run_json(
+                store,
+                ["api", f"/report/query.json?bizCode={biz}", "--body", body_json],
             )
-            item["spend"] += _num(r.get("charge"))
-            item["sales"] += _num(r.get("alipayInshopAmt"))
-            item["clicks"] += int(_num(r.get("click")))
+            rows = (payload.get("data") or {}).get("list") or []
+            got = 0
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                cid = str(r.get("campaignId") or "")
+                if not cid:
+                    continue
+                got += 1
+                item = merged.setdefault(cid, {"campaign_id": cid})
+                for _f in fields:
+                    if _f == "campaignId":
+                        continue
+                    _v = _num(r.get(_f))
+                    if _f in ("roi", "retainedRoi", "ctr", "cvr", "ecpc", "ecpm"):
+                        item[_f] = max(item.get(_f, 0.0), _v)
+                    else:
+                        item[_f] = item.get(_f, 0.0) + _v
+            if got < 100 or not rows:
+                break
+            page += 1
     out: list[dict] = []
     for item in merged.values():
-        item["spend"] = round(item["spend"], 2)
-        item["sales"] = round(item["sales"], 2)
-        item["roi"] = round(item["sales"] / item["spend"], 2) if item["spend"] else 0.0
+        item["spend"] = round(item.get("charge") or 0, 2)
+        item["sales"] = round(item.get("alipayInshopAmt") or 0, 2)
+        item["alipay_dir"] = round(item.get("alipayDirAmt") or 0, 2)
+        item["alipay_indir"] = round(item.get("alipayIndirAmt") or 0, 2)
+        item["retained_sales"] = round(item.get("retainedAlipayInshopAmt") or 0, 2)
+        item["refund_amt"] = round((item.get("refundDirAmt") or 0) + (item.get("refundIndirAmt") or 0), 2)
+        item["roi"] = round(item.get("roi") or 0, 2)
+        item["retained_roi"] = round(item.get("retainedRoi") or 0, 2)
+        item["clicks"] = int(item.get("click") or 0)
         out.append(item)
     return out
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import io as _io
 import json as _json
 from datetime import date as date_cls
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -328,7 +328,7 @@ def ai_insight(
     data = _collect_insight(mode, store_id, user, db)
     prompt = _build_insight_prompt(data)
     try:
-        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0)
+        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=240.0)
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {
@@ -370,9 +370,27 @@ def ai_insight_chat(
         if m.role in ("user", "assistant") and (m.content or "").strip():
             msgs.append({"role": m.role, "content": m.content})
     try:
-        reply = chat_completion(cfg, msgs, timeout=120.0)
+        reply = chat_completion(cfg, msgs, timeout=240.0)
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # 追问也缓存：存下完整对话，1 小时内重开可接着聊
+    _ensure_report_cache(db)
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in body.messages[-12:]
+        if m.role in ("user", "assistant") and (m.content or "").strip()
+    ]
+    history.append({"role": "assistant", "content": reply})
+    db.execute(
+        "INSERT INTO ai_report_cache (cache_key, reply, chat, created_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(cache_key) DO UPDATE SET chat = excluded.chat, created_at = excluded.created_at",
+        (
+            _report_cache_key(item_id, body.mode, body.store_id, start, end),
+            "",
+            _json.dumps(history, ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
     return {"reply": reply}
 
 
@@ -611,7 +629,55 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, user: d
         if prow
         else None
     )
+    # 推广计划全量数据（商品→计划映射，计划表口径含净投产比/退款/留存等）
+    plan_mode = promo_mode if promo_mode in ("realtime", "yesterday") else "7d"
+    plan_sf = sf.replace("store_id", "pi.store_id") if "store_id" in sf else sf
+    plan_rows = db.execute(
+        "SELECT p.plan_name, ps.* FROM promo_plan_items pi "
+        "JOIN promo_plan_stats ps ON ps.store_id = pi.store_id AND ps.campaign_id = pi.campaign_id AND ps.mode = ? "
+        "JOIN promo_plans p ON p.store_id = pi.store_id AND p.campaign_id = pi.campaign_id "
+        "WHERE pi.item_id = ?" + plan_sf,
+        [plan_mode, item_id] + sp,
+    ).fetchall()
+    plans = []
+    for r in plan_rows:
+        _extra = {}
+        try:
+            _extra = _json.loads(r["extra_json"]) if r["extra_json"] else {}
+        except (ValueError, TypeError):
+            _extra = {}
+        plans.append(
+            {
+                "plan_name": r["plan_name"] or r["campaign_id"],
+                "campaign_id": r["campaign_id"],
+                "spend": round(r["spend"] or 0, 2),
+                "sales": round(r["sales"] or 0, 2),
+                "roi": round(r["roi"] or 0, 2),
+                "retained_roi": round(r["retained_roi"] or 0, 2),
+                "retained_sales": round(r["retained_sales"] or 0, 2),
+                "refund_amt": round(r["refund_amt"] or 0, 2),
+                "alipay_dir": round(r["alipay_dir"] or 0, 2),
+                "alipay_indir": round(r["alipay_indir"] or 0, 2),
+                "clicks": int(r["clicks"] or 0),
+                "prev_spend": round(r["prev_spend"] or 0, 2),
+                "prev_sales": round(r["prev_sales"] or 0, 2),
+                "prev_roi": round(r["prev_roi"] or 0, 2),
+                **{_k: _v for _k, _v in _extra.items() if isinstance(_v, (int, float))},
+            }
+        )
+    plan_agg = None
+    if plans:
+        _ts = sum(p["spend"] for p in plans)
+        _tr = sum(p["retained_sales"] for p in plans)
+        plan_agg = {
+            "plans_count": len(plans),
+            "spend": round(_ts, 2),
+            "retained_sales": round(_tr, 2),
+            "net_roi": round(_tr / _ts, 2) if _ts else None,
+        }
     return {
+        "plans": plans,
+        "plan_agg": plan_agg,
         "item_id": item_id,
         "title": title or item_id,
         "image": image,
@@ -624,6 +690,21 @@ def _collect_product_data(item_id: str, store_id: int | None, mode: str, user: d
         "store_total_sales": store_total,
         "promo": promo,
     }
+
+
+# 推广计划明细字段规格：(键, 中文名, 格式)  money=金额(元) pct=百分比(×100) int/num=原值
+_PLAN_FIELD_SPEC = [
+    ("spend", "花费", "money"), ("sales", "总成交", "money"), ("alipay_dir", "直接成交", "money"),
+    ("alipay_indir", "间接成交", "money"), ("refund_amt", "退款", "money"), ("retained_sales", "留存成交", "money"),
+    ("roi", "站内ROI", "num"), ("retained_roi", "净投产比", "num"),
+    ("adPv", "展现", "int"), ("click", "点击", "int"), ("ctr", "点击率", "pct"), ("cvr", "转化率", "pct"),
+    ("ecpc", "点击成本", "money"), ("ecpm", "千次展现成本", "money"),
+    ("alipayInshopNum", "成交件数", "int"), ("alipayDirNum", "直接成交件数", "int"), ("alipayIndirNum", "间接成交件数", "int"),
+    ("cartInshopNum", "加购件数", "int"), ("cartDirNum", "直接加购件数", "int"), ("cartIndirNum", "间接加购件数", "int"),
+    ("refundDirNum", "直接退款笔数", "int"), ("refundIndirNum", "间接退款笔数", "int"),
+    ("retainedAlipayInshopNum", "留存成交件数", "int"),
+    ("prev_spend", "昨日花费", "money"), ("prev_sales", "昨日总成交", "money"), ("prev_roi", "昨日ROI", "num"),
+]
 
 
 def _product_data_lines(d: dict) -> list[str]:
@@ -670,6 +751,26 @@ def _product_data_lines(d: dict) -> list[str]:
         promo = d["promo"]
         share = round(min(promo["sales"] / (d["cur"]["sales"] or 1) * 100, 100.0), 1)
         lines.append(f"推广：花费 {promo['spend']:.0f} 元，广告成交 {promo['sales']:.0f} 元，推广ROI {promo['roi']}，广告成交占该商品销售额 {share}%")
+    if d.get("plans"):
+        _plan_parts = []
+        for _pp in d["plans"]:
+            _sub = []
+            for _k, _label, _kind in _PLAN_FIELD_SPEC:
+                _v = _pp.get(_k)
+                if _v is None or _v == 0:
+                    continue
+                if _kind == "money":
+                    _txt = str(round(_v)) + "元"
+                elif _kind == "pct":
+                    _txt = str(round(_v * 100, 2)) + "%"
+                else:
+                    _txt = str(_v)
+                _sub.append(_label + " " + _txt)
+            _plan_parts.append(_pp["plan_name"] + "：" + "，".join(_sub))
+        lines.append("推广计划明细（" + str(len(d["plans"])) + "个）：" + "；".join(_plan_parts))
+    if d.get("plan_agg") and d["plan_agg"].get("net_roi") is not None:
+        _pa = d["plan_agg"]
+        lines.append("推广计划汇总：花费合计" + str(round(_pa["spend"])) + "元，留存成交合计" + str(round(_pa["retained_sales"])) + "元，整体净投产比" + str(_pa["net_roi"]))
     if d["trend"]:
         lines.append("逐日销售额：" + "、".join(d["trend"]))
     return lines
@@ -711,6 +812,8 @@ def _product_metrics(d: dict) -> list[dict]:
                 {"label": "广告占比", "value": f"{share}%", "change": None, "unit": "val"},
             ]
         )
+    if d.get("plan_agg") and d["plan_agg"].get("net_roi") is not None:
+        metrics.append({"label": "净投产比", "value": str(d["plan_agg"]["net_roi"]), "change": None, "unit": "val"})
     metrics.extend(
         [
             {"label": "客单价", "value": f"¥{cur['pay_pct']:,.0f}", "change": None, "unit": "val"},
@@ -735,6 +838,28 @@ class ProductChatIn(BaseModel):
     messages: list[ProductMsgIn] = []
 
 
+def _ensure_report_cache(db) -> None:
+    """AI 报告/追问缓存表：同一商品同一口径 1 小时内复用。"""
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_report_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cache_key TEXT NOT NULL UNIQUE,
+            reply TEXT NOT NULL,
+            chat TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cols = [r[1] for r in db.execute("PRAGMA table_info(ai_report_cache)")]
+    if "chat" not in cols:
+        db.execute("ALTER TABLE ai_report_cache ADD COLUMN chat TEXT NOT NULL DEFAULT '[]'")
+
+
+def _report_cache_key(item_id: str, mode: str, store_id: int | None, start: str, end: str) -> str:
+    return f"{item_id}|{mode}|{store_id or ''}|{start}|{end}"
+
+
 @router.post("/products/{item_id}/insight")
 def product_ai_insight(
     item_id: str,
@@ -749,10 +874,40 @@ def product_ai_insight(
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
     data = _collect_product_data(item_id, store_id, mode, user, db, start=start, end=end)
-    try:
-        reply = chat_completion(cfg, [{"role": "user", "content": _build_product_prompt(data)}], timeout=120.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # AI 报告缓存：同一商品同一口径 1 小时内复用，避免重复消耗 token
+    _ensure_report_cache(db)
+    cache_key = _report_cache_key(item_id, mode, store_id, start, end)
+    row = db.execute(
+        "SELECT reply, created_at, chat FROM ai_report_cache WHERE cache_key = ?", (cache_key,)
+    ).fetchone()
+    cached = False
+    reply = ""
+    chat_list: list[dict] = []
+    if row:
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            cached = (datetime.now(timezone.utc) - created) < timedelta(hours=1)
+        except ValueError:
+            cached = False
+        if cached:
+            reply = row["reply"]
+            try:
+                chat_list = _json.loads(row["chat"] or "[]")
+            except (ValueError, TypeError):
+                chat_list = []
+    if not cached:
+        try:
+            reply = chat_completion(cfg, [{"role": "user", "content": _build_product_prompt(data)}], timeout=240.0)
+        except AIError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.execute(
+            "INSERT INTO ai_report_cache (cache_key, reply, created_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET reply = excluded.reply, created_at = excluded.created_at",
+            (cache_key, reply, datetime.now(timezone.utc).isoformat()),
+        )
     return {
         "sections": _parse_insight_sections(reply),
         "reply": reply,
@@ -760,6 +915,8 @@ def product_ai_insight(
         "range": data["range_label"],
         "product": {"item_id": data["item_id"], "item_title": data["title"], "image": data["image"]},
         "date": date_cls.today().isoformat(),
+        "cached": cached,
+        "chat": chat_list,
     }
 
 
@@ -786,7 +943,7 @@ def product_ai_insight_chat(
         if m.role in ("user", "assistant") and (m.content or "").strip():
             msgs.append({"role": m.role, "content": m.content})
     try:
-        reply = chat_completion(cfg, msgs, timeout=120.0)
+        reply = chat_completion(cfg, msgs, timeout=240.0)
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"reply": reply}

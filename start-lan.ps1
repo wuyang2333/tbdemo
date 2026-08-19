@@ -41,12 +41,23 @@ if (Test-Port 5173) {
 
 Write-Host '[3/3] 等待服务就绪 ...'
 $ok = $false
-for ($i = 0; $i -lt 30; $i++) {
+$beOk = $false
+for ($i = 0; $i -lt 40; $i++) {
   Start-Sleep -Milliseconds 500
   try {
     $r = Invoke-WebRequest -Uri 'http://127.0.0.1:5173' -UseBasicParsing -TimeoutSec 2
-    if ($r.StatusCode -eq 200) { $ok = $true; break }
+    if ($r.StatusCode -eq 200) { $ok = $true }
   } catch {}
+  try {
+    $b = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/api/health' -UseBasicParsing -TimeoutSec 2
+    if ($b.StatusCode -eq 200) { $beOk = $true }
+  } catch {}
+  if ($ok -and $beOk) { break }
+}
+if (-not $beOk) {
+  Write-Host '[错误] 后端启动失败，请看 logsackend.err.log'
+  Read-Host '按回车退出'
+  exit 1
 }
 $lan = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).IPAddress
 if (-not $lan) { $lan = '本机IP' }

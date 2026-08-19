@@ -34,7 +34,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 const PROVIDER_DEFAULTS: Record<string, { base_url: string; model: string }> = {
   openai: { base_url: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  deepseek: { base_url: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  deepseek: { base_url: "https://api.deepseek.com/v1", model: "deepseek-v4-flash" },
   dashscope: { base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
   moonshot: { base_url: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
   custom: { base_url: "", model: "" },
@@ -259,7 +259,7 @@ export function ModelConfigsPage() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ provider: "openai", base_url: "", api_key: "", model: "", temperature: 0.7 }}
+          initialValues={{ provider: "openai", base_url: "", api_key: "", model: "", temperature: 0.4 }}
         >
           <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
             <Input placeholder="例如：DeepSeek 主力 / 通义千问" />
@@ -286,8 +286,18 @@ export function ModelConfigsPage() {
           >
             <Input.Password placeholder={editing ? "留空不修改" : "粘贴你的 API Key"} />
           </Form.Item>
-          <Form.Item name="model" label="模型名称" extra="例如 deepseek-chat / qwen-plus / gpt-4o-mini">
-            <Input placeholder="模型名称" />
+          <Form.Item name="model" label="模型名称" extra={providerValue === "deepseek" ? "DeepSeek 官方两种模型二选一" : "例如 deepseek-chat / qwen-plus / gpt-4o-mini"}>
+            {providerValue === "deepseek" ? (
+              <Select
+                placeholder="选择 DeepSeek 模型"
+                options={[
+                  { value: "deepseek-v4-flash", label: "deepseek-v4-flash（快，默认）" },
+                  { value: "deepseek-v4-pro", label: "deepseek-v4-pro（更强，更慢）" },
+                ]}
+              />
+            ) : (
+              <Input placeholder="模型名称" />
+            )}
           </Form.Item>
           <Form.Item name="temperature" label="温度（越高回答越有创造性）">
             <Slider min={0} max={1.5} step={0.1} />

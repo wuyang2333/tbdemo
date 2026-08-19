@@ -247,6 +247,12 @@ export type PromoPlan = {
   prev_sales?: number;
   prev_roi?: number;
   prev_clicks?: number;
+  alipay_dir?: number;
+  alipay_indir?: number;
+  retained_sales?: number;
+  retained_roi?: number;
+  refund_amt?: number;
+  extra?: Record<string, number>;
   note: string;
   tag: string;
   updated_at: string;
@@ -320,8 +326,8 @@ export type AnalyticsForecast = {
 export type AnalyticsReport = {
   date: string;
   is_today: boolean;
-  today: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number };
-  yesterday: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number };
+  today: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number; buyers: number };
+  yesterday: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number; buyers: number };
   last_week: AnalyticsBucket & { avg_order_value: number; repeat_rate?: number };
   promo_today: { spend: number; sales: number; roi: number };
   promo_yesterday: { spend: number; sales: number; roi: number };
@@ -442,6 +448,7 @@ export type AnalyticsProduct = {
   promo_spend?: number | null;
   promo_sales?: number | null;
   promo_roi?: number | null;
+  promo_net_roi?: number | null;
   promo_share?: number | null;
 };
 

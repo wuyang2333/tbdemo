@@ -736,6 +736,12 @@ def init_db() -> None:
             ("prev_sales", "REAL NOT NULL DEFAULT 0"),
             ("prev_roi", "REAL NOT NULL DEFAULT 0"),
             ("prev_clicks", "INTEGER NOT NULL DEFAULT 0"),
+            ("alipay_dir", "REAL NOT NULL DEFAULT 0"),
+            ("alipay_indir", "REAL NOT NULL DEFAULT 0"),
+            ("retained_sales", "REAL NOT NULL DEFAULT 0"),
+            ("retained_roi", "REAL NOT NULL DEFAULT 0"),
+            ("refund_amt", "REAL NOT NULL DEFAULT 0"),
+            ("extra_json", "TEXT NOT NULL DEFAULT ''"),
         ):
             if _pc not in _plan_stats_cols:
                 conn.execute(f"ALTER TABLE promo_plan_stats ADD COLUMN {_pc} {_pt}")

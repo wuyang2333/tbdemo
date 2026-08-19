@@ -236,6 +236,8 @@ def summary_today(
         "spend": pts["spend"],
         "sales": pts["sales"],
         "roi": round(pts["sales"] / pts["spend"], 2) if pts["spend"] else 0,
+        "real_roi": round(t["sales"] / pts["spend"], 2) if pts["spend"] else None,
+        "yesterday_real_roi": round(y["sales"] / pys["spend"], 2) if pys["spend"] else None,
         "compare": {"spend": _pct(pts["spend"], pys["spend"]), "sales": _pct(pts["sales"], pys["sales"])},
         "scenes": sorted(scenes.values(), key=lambda x: x["spend"], reverse=True),
     }
@@ -252,6 +254,9 @@ def summary_today(
         "cart_rate": round(sum(r["add_cart"] or 0 for r in rt_rows) / (rv or 1) * 100, 1),
         "pay_rate": round(sum(r["buyers"] or 0 for r in rt_rows) / (rv or 1) * 100, 1),
     }
+    # 今日买家数 = 支付买家数（实时商品榜）；客单价 = 销售额 / 买家数
+    kpi["buyers"] = funnel["buyers"]
+    kpi["avg_order_value"] = round(kpi["sales"] / funnel["buyers"], 2) if funnel["buyers"] else 0
     # 流量结构：今日实时流量来源排行（flow_source_top，生意参谋 流量看板-流量来源）
     fs_rows = db.execute(
         "SELECT * FROM flow_source_top WHERE data_date = ? AND 1=1" + sf,

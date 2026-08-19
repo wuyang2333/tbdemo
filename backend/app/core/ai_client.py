@@ -30,7 +30,7 @@ def effective_model(cfg: dict) -> str:
     return cfg.get("model") or PROVIDER_DEFAULTS.get(cfg.get("provider", ""), {}).get("model") or ""
 
 
-def chat_completion(cfg: dict, messages: list[dict], timeout: float = 60.0) -> str:
+def chat_completion(cfg: dict, messages: list[dict], timeout: float = 60.0, max_tokens: int | None = None) -> str:
     """调用 OpenAI 兼容的 /chat/completions，返回助手回复文本。"""
     api_key = (cfg.get("api_key") or "").strip()
     base_url = effective_base_url(cfg)
@@ -51,8 +51,12 @@ def chat_completion(cfg: dict, messages: list[dict], timeout: float = 60.0) -> s
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": float(cfg.get("temperature") or 0.7),
+        "temperature": float(cfg.get("temperature") or 0.4),
+        # 直接回答，关闭思考过程：速度提升约 6 倍
+        "thinking": {"type": "disabled"},
     }
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
 
     try:
         resp = httpx.post(url, headers=headers, json=payload, timeout=timeout)
@@ -70,5 +74,6 @@ def chat_completion(cfg: dict, messages: list[dict], timeout: float = 60.0) -> s
         raise AIError("模型返回内容格式异常，请检查接口地址和模型名称是否正确") from exc
 
     if not content:
-        raise AIError("模型返回了空内容，请换一个模型试试")
+        finish = data["choices"][0].get("finish_reason") if data.get("choices") else "?"
+        raise AIError(f"模型返回了空内容（finish_reason={finish}），可能是回复长度被限制或模型异常，请重试或调大回复长度")
     return content

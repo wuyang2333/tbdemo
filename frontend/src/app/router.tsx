@@ -10,7 +10,6 @@ import { canAccessModule } from "../lib/modules";
 // 页面路由全部懒加载：首屏只加载当前页面，降低初始 bundle 体积
 const AccountsPage = lazy(() => import("../pages/accounts-page").then((m) => ({ default: m.AccountsPage })));
 const AiPage = lazy(() => import("../pages/ai-page").then((m) => ({ default: m.AiPage })));
-const AnalyticsAlertsPage = lazy(() => import("../pages/analytics-alerts-page").then((m) => ({ default: m.AnalyticsAlertsPage })));
 const AnalyticsHoursPage = lazy(() => import("../pages/analytics-hours-page").then((m) => ({ default: m.AnalyticsHoursPage })));
 const AnalyticsInsightPage = lazy(() => import("../pages/analytics-insight-page").then((m) => ({ default: m.AnalyticsInsightPage })));
 const AnalyticsOverviewPage = lazy(() => import("../pages/analytics-overview-page").then((m) => ({ default: m.AnalyticsOverviewPage })));
@@ -139,7 +138,6 @@ export function AppRouter() {
           />
           <Route path="/analytics" element={<Navigate to="/analytics/overview" replace />} />
           <Route path="/analytics/overview" element={<RequireModule id="analytics"><AnalyticsOverviewPage /></RequireModule>} />
-          <Route path="/analytics/alerts" element={<RequireModule id="analytics"><AnalyticsAlertsPage /></RequireModule>} />
           <Route path="/analytics/report" element={<RequireModule id="analytics"><AnalyticsReportPage /></RequireModule>} />
           <Route path="/analytics/insight" element={<RequireModule id="analytics"><AnalyticsInsightPage /></RequireModule>} />
           <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />

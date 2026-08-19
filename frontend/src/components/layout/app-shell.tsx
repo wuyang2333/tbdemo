@@ -67,7 +67,6 @@ const ICONS: Record<string, ReactNode> = {
 
 const ANALYTICS_CHILDREN = [
   { key: "/analytics/overview", label: "今日总览" },
-  { key: "/analytics/alerts", label: "异常提醒" },
   { key: "/analytics/report", label: "经营日报" },
   { key: "/analytics/insight", label: "AI 解读" },
   { key: "/analytics/hours", label: "时段分析" },
@@ -589,7 +588,7 @@ export function AppShell() {
                     <a
                       onClick={() => {
                         setNotifOpen(false);
-                        navigate("/analytics/alerts");
+                        navigate("/analytics/overview");
                       }}
                     >
                       查看全部
