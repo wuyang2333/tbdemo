@@ -1,5 +1,24 @@
-﻿import { DeleteOutlined, KeyOutlined, TeamOutlined, UserAddOutlined } from "@ant-design/icons";
-import { Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography, message } from "antd";
+import {
+  DeleteOutlined,
+  KeyOutlined,
+  ShopOutlined,
+  TeamOutlined,
+  UserAddOutlined,
+} from "@ant-design/icons";
+import {
+  Button,
+  Card,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -18,37 +37,55 @@ type SubAccountRow = {
   created_at: string;
   last_login_at: string | null;
   last_login_ip: string | null;
+  allowed_store_ids: number[];
+  store_names: string[];
 };
+
+type StoreOption = { value: number; label: string };
 
 export function TeamPage() {
   const { user } = useAuth();
-  const isOwner = user?.role === "member" && !user?.parent_id;
   const isSub = !!user?.parent_id;
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const [items, setItems] = useState<SubAccountRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [storeOptions, setStoreOptions] = useState<StoreOption[]>([]);
   const [form] = Form.useForm<{ username: string; nickname: string; password: string; confirm: string }>();
   const [createOpen, setCreateOpen] = useState(false);
   const [createSaving, setCreateSaving] = useState(false);
+  const [selectedStores, setSelectedStores] = useState<number[]>([]);
   const [passwordTarget, setPasswordTarget] = useState<SubAccountRow | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [passwordSaving, setPasswordSaving] = useState(false);
+  const [assignTarget, setAssignTarget] = useState<SubAccountRow | null>(null);
+  const [assignStores, setAssignStores] = useState<number[]>([]);
+  const [assignSaving, setAssignSaving] = useState(false);
 
   const load = useCallback(async () => {
-    if (!isOwner) {
+    if (!user || isSub) {
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const { data } = await http.get<{ items: SubAccountRow[] }>("/accounts/my/sub-accounts");
-      setItems(data.items);
+      const storesReq = isAdmin
+        ? http.get<{ items: { id: number; name: string }[] }>("/stores")
+        : Promise.resolve<{ data: { items: { id: number; name: string }[] } }>({ data: { items: [] } });
+      const [subs, stores] = await Promise.all([
+        http.get<{ items: SubAccountRow[] }>("/accounts/my/sub-accounts"),
+        storesReq,
+      ]);
+      setItems(subs.data.items);
+      if (isAdmin) {
+        setStoreOptions(stores.data.items.map((store) => ({ value: store.id, label: store.name })));
+      }
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
       setLoading(false);
     }
-  }, [isOwner]);
+  }, [user, isSub, isAdmin]);
 
   useEffect(() => {
     load();
@@ -61,9 +98,11 @@ export function TeamPage() {
         username: values.username.trim(),
         nickname: values.nickname.trim(),
         password: values.password,
+        allowed_store_ids: isAdmin ? selectedStores : undefined,
       });
-      message.success("子账号创建成功，可登录查看你绑定的店铺数据");
+      message.success(isAdmin ? "子账号创建成功，已按所选店铺授权" : "子账号创建成功，可登录查看你绑定的店铺数据");
       setCreateOpen(false);
+      setSelectedStores([]);
       form.resetFields();
       load();
     } catch (error) {
@@ -102,6 +141,26 @@ export function TeamPage() {
     }
   };
 
+  const openAssign = (row: SubAccountRow) => {
+    setAssignTarget(row);
+    setAssignStores(row.allowed_store_ids ?? []);
+  };
+
+  const saveAssign = async () => {
+    if (!assignTarget) return;
+    setAssignSaving(true);
+    try {
+      await http.post(`/accounts/my/sub-accounts/${assignTarget.id}/stores`, { store_ids: assignStores });
+      message.success("店铺权限已更新");
+      setAssignTarget(null);
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAssignSaving(false);
+    }
+  };
+
   const columns: TableColumnsType<SubAccountRow> = [
     {
       title: "账号",
@@ -109,6 +168,21 @@ export function TeamPage() {
       render: (value: string) => <Text strong>{value}</Text>,
     },
     { title: "花名", dataIndex: "nickname", render: (value: string) => value || "—" },
+    {
+      title: "可见店铺",
+      dataIndex: "store_names",
+      width: 240,
+      render: (names: string[]) =>
+        names.length > 0 ? (
+          <Space size={4} wrap>
+            {names.map((name) => (
+              <Tag key={name}>{name}</Tag>
+            ))}
+          </Space>
+        ) : (
+          <Text type="secondary">未分配</Text>
+        ),
+    },
     {
       title: "最近登录",
       dataIndex: "last_login_at",
@@ -123,9 +197,9 @@ export function TeamPage() {
     {
       title: "操作",
       key: "actions",
-      width: 180,
+      width: isAdmin ? 260 : 180,
       render: (_, row) => (
-        <Space size={4}>
+        <Space size={4} wrap>
           <Button
             size="small"
             icon={<KeyOutlined />}
@@ -136,7 +210,17 @@ export function TeamPage() {
           >
             重置密码
           </Button>
-          <Popconfirm title={`删除子账号 ${row.username}？`} okText="删除" okButtonProps={{ danger: true }} onConfirm={() => remove(row)}>
+          {isAdmin && (
+            <Button size="small" icon={<ShopOutlined />} onClick={() => openAssign(row)}>
+              分配店铺
+            </Button>
+          )}
+          <Popconfirm
+            title={`删除子账号 ${row.username}？`}
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => remove(row)}
+          >
             <Button size="small" danger icon={<DeleteOutlined />}>
               删除
             </Button>
@@ -162,15 +246,31 @@ export function TeamPage() {
             title="团队说明"
             extra={
               <Space size={8}>
-                <Tag color="blue">子账号 {items.length}/{user?.sub_account_quota ?? 2} 个</Tag>
-                <Tag color="blue">店铺 {user?.store_quota ?? 3} 家</Tag>
+                {isAdmin ? (
+                  <>
+                    <Tag color="blue">子账号 {items.length} 个（不限配额）</Tag>
+                    <Tag color="blue">可分配店铺 {storeOptions.length} 家</Tag>
+                  </>
+                ) : (
+                  <>
+                    <Tag color="blue">子账号 {items.length}/{user?.sub_account_quota ?? 2} 个</Tag>
+                    <Tag color="blue">店铺 {user?.store_quota ?? 3} 家</Tag>
+                  </>
+                )}
               </Space>
             }
           >
-            <Text type="secondary">
-              作为主账号，你可以创建子账号给团队成员使用。子账号登录后会自动看到你绑定的店铺数据
-              （你在店铺管理里新绑定店铺，子账号也会同步可见）。子账号不能自行绑定/解绑店铺。
-            </Text>
+            {isAdmin ? (
+              <Text type="secondary">
+                作为管理员/超级管理员，你可以创建子账号并手动分配可见店铺。子账号只能看到你分配的店铺数据，
+                不能自行绑定/解绑店铺；子账号数量不受配额限制。
+              </Text>
+            ) : (
+              <Text type="secondary">
+                作为主账号，你可以创建子账号给团队成员使用。子账号登录后会自动看到你绑定的店铺数据
+                （你在店铺管理里新绑定店铺，子账号也会同步可见）。子账号不能自行绑定/解绑店铺。
+              </Text>
+            )}
           </Card>
           <Card
             variant="borderless"
@@ -181,6 +281,7 @@ export function TeamPage() {
                 icon={<UserAddOutlined />}
                 onClick={() => {
                   form.resetFields();
+                  setSelectedStores([]);
                   setCreateOpen(true);
                 }}
               >
@@ -188,7 +289,13 @@ export function TeamPage() {
               </Button>
             }
           >
-            <Table<SubAccountRow> rowKey="id" loading={loading} columns={columns} dataSource={items} pagination={false} />
+            <Table<SubAccountRow>
+              rowKey="id"
+              loading={loading}
+              columns={columns}
+              dataSource={items}
+              pagination={false}
+            />
           </Card>
         </>
       )}
@@ -248,6 +355,20 @@ export function TeamPage() {
           >
             <Input.Password placeholder="再次输入密码" autoComplete="new-password" />
           </Form.Item>
+          {isAdmin && (
+            <Form.Item label="可见店铺">
+              <Select
+                mode="multiple"
+                style={{ width: "100%" }}
+                placeholder="选择子账号可见店铺（可留空，之后可再调整）"
+                value={selectedStores}
+                onChange={setSelectedStores}
+                options={storeOptions}
+                optionFilterProp="label"
+                allowClear
+              />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
 
@@ -261,7 +382,34 @@ export function TeamPage() {
       >
         <Space orientation="vertical" style={{ width: "100%" }}>
           <Text type="secondary">重置后该子账号需重新登录。</Text>
-          <Input.Password value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="新密码（6-64 位）" />
+          <Input.Password
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+            placeholder="新密码（6-64 位）"
+          />
+        </Space>
+      </Modal>
+
+      <Modal
+        title={`分配店铺：${assignTarget?.username ?? ""}`}
+        open={!!assignTarget}
+        onOk={saveAssign}
+        onCancel={() => setAssignTarget(null)}
+        confirmLoading={assignSaving}
+        okText="保存"
+      >
+        <Space orientation="vertical" style={{ width: "100%" }}>
+          <Text type="secondary">设置该子账号可见的店铺（不选则看不到任何店铺数据）。</Text>
+          <Select
+            mode="multiple"
+            style={{ width: "100%" }}
+            placeholder="选择可见店铺"
+            value={assignStores}
+            onChange={setAssignStores}
+            options={storeOptions}
+            optionFilterProp="label"
+            allowClear
+          />
         </Space>
       </Modal>
     </div>

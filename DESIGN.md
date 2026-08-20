@@ -30,21 +30,21 @@
 
 ### 常用 CSS 变量（深色/浅色）
 
-| 变量 | 深色 | 浅色 |
-|---|---|---|
-| `--ops-bg` | `#0b0c10` | `#f3f5f9` |
-| `--ops-panel`（卡片/面板） | `rgba(255,255,255,.045)` | `rgba(255,255,255,.66)` |
-| `--ops-panel-2` | `rgba(255,255,255,.03)` | `rgba(255,255,255,.5)` |
-| `--ops-border` | `rgba(255,255,255,.09)` | `rgba(18,24,45,.10)` |
-| `--ops-text` | `#f6f7f9` | `#1b1d22` |
-| `--ops-text-2` | `#a7aeb8` | `#525a66` |
-| `--ops-text-3` | `#6f7782` | `#9298a3` |
-| `--ops-accent` | `#ff7a1f` | `#ff7a1f` |
-| `--ops-accent-soft` | `rgba(255,122,31,.16)` | `rgba(255,122,31,.14)` |
-| `--ops-accent-grad` | `linear-gradient(135deg,#ffb061,#ff5a1f)` | 同 |
-| `--ops-up` / `--ops-down` | `#37c871` / `#ff5b5b` | `#16a34a` / `#dc2626` |
-| `--ops-warn` | `#ffb061` | `#fa8c16` |
-| `--ops-radius` / `--ops-radius-sm` | `16px` / `11px` | 同 |
+| 变量                                 | 深色                                        | 浅色                      |
+| ---------------------------------- | ----------------------------------------- | ----------------------- |
+| `--ops-bg`                         | `#0b0c10`                                 | `#f3f5f9`               |
+| `--ops-panel`（卡片/面板）               | `rgba(255,255,255,.045)`                  | `rgba(255,255,255,.66)` |
+| `--ops-panel-2`                    | `rgba(255,255,255,.03)`                   | `rgba(255,255,255,.5)`  |
+| `--ops-border`                     | `rgba(255,255,255,.09)`                   | `rgba(18,24,45,.10)`    |
+| `--ops-text`                       | `#f6f7f9`                                 | `#1b1d22`               |
+| `--ops-text-2`                     | `#a7aeb8`                                 | `#525a66`               |
+| `--ops-text-3`                     | `#6f7782`                                 | `#9298a3`               |
+| `--ops-accent`                     | `#ff7a1f`                                 | `#ff7a1f`               |
+| `--ops-accent-soft`                | `rgba(255,122,31,.16)`                    | `rgba(255,122,31,.14)`  |
+| `--ops-accent-grad`                | `linear-gradient(135deg,#ffb061,#ff5a1f)` | 同                       |
+| `--ops-up` / `--ops-down`          | `#37c871` / `#ff5b5b`                     | `#16a34a` / `#dc2626`   |
+| `--ops-warn`                       | `#ffb061`                                 | `#fa8c16`               |
+| `--ops-radius` / `--ops-radius-sm` | `16px` / `11px`                           | 同                       |
 
 旧命名（`--ops-card-bg`、`--ops-card-bg-2`、`--ops-text-secondary`、`--ops-hoverbar-*`、`--ops-shadow*`）保留为**别名**，供迁移期兼容；新代码请用新命名。
 

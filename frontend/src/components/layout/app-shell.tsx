@@ -221,7 +221,7 @@ export function AppShell() {
   const displayName = user?.nickname || user?.username || "运营者";
 
   const mainItems = toItems(MAIN_MODULES.filter((module) => canAccessModule(user, module.id))) ?? [];
-  if (user?.role === "member" && !user?.parent_id) {
+  if (user?.role !== "member" || !user?.parent_id) {
     mainItems.push({ key: "/team", icon: ICONS.team, label: "我的团队" });
   }
   const footerItems = toItems(FOOTER_MODULES.filter((module) => canAccessModule(user, module.id)));

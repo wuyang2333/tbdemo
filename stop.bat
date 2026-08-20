@@ -1,18 +1,18 @@
 @echo off
-title ÌÔ±¦ÔËÓª¹¤×÷Ì¨ - Í£Ö¹·þÎñ
+title ï¿½Ô±ï¿½ï¿½ï¿½Óªï¿½ï¿½ï¿½ï¿½Ì¨ - Í£Ö¹ï¿½ï¿½ï¿½ï¿½
 echo ==============================================
-echo    ÕýÔÚÍ£Ö¹·þÎñ...
+echo    ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½ï¿½ï¿½...
 echo ==============================================
 
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000" ^| findstr "LISTENING"') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8008" ^| findstr "LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
 )
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5173" ^| findstr "LISTENING"') do (
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":5178" ^| findstr "LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
 )
 
 echo.
-echo ·þÎñÒÑÍ£Ö¹¡£
+echo ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£Ö¹ï¿½ï¿½
 echo.
 timeout /t 2 /nobreak >nul
 exit

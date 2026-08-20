@@ -479,7 +479,7 @@ export function DashboardPage() {
                 icon: <FundOutlined />,
                 label: "接口文档",
                 right: (
-                  <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noreferrer">
+                  <a href="http://127.0.0.1:8008/docs" target="_blank" rel="noreferrer">
                     Swagger UI <ArrowRightOutlined style={{ fontSize: 11 }} />
                   </a>
                 ),

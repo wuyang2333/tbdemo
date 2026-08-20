@@ -43,6 +43,7 @@ from backend.app.api.promotions import (
     sync_promo_realtime_all,
 )
 from backend.app.api.stores import (
+    backfill_store_daily,
     run_inspect_once,
     sync_all_stores,
     sync_flow_source_all,
@@ -188,6 +189,25 @@ def _run_sycm_sync() -> None:
         conn.close()
 
 
+_midnight_backfilled_key: str = ""
+
+
+def _sync_store_daily_step(conn) -> None:
+    """店铺日数据同步：凌晨 0-1 点改补昨日完整日（按天接口），其余时间写今日实时累计。
+
+    避免凌晨 00:00 用「今日实时接口」写入昨天的不完整快照，导致昨日行被错误数据冻结。
+    """
+    global _midnight_backfilled_key
+    now = datetime.now()
+    if now.hour < 1:
+        key = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        if _midnight_backfilled_key != key:
+            backfill_store_daily(conn, days=1)
+            _midnight_backfilled_key = key
+    else:
+        sync_all_stores(conn)
+
+
 def _run_realtime_sync() -> None:
     """每 3 分钟全量同步：店铺日数据 + 分时（今日/昨日）+ 推广实时分时 + 商品实时 + 商品级实时推广。
 
@@ -195,7 +215,7 @@ def _run_realtime_sync() -> None:
     """
     conn = connect_db()
     steps = [
-        ("店铺日数据", lambda: sync_all_stores(conn)),
+        ("店铺日数据", lambda: _sync_store_daily_step(conn)),
         ("分时数据", lambda: sync_hourly_all(conn)),
         ("推广实时分时", lambda: sync_promo_realtime_all(conn)),
         ("商品实时", lambda: sync_items_realtime_all(conn)),
@@ -329,6 +349,9 @@ def _run_promo_daily_once() -> None:
         conn.commit()
         sync_items_daily_all(conn, days=7)
         conn.commit()
+        # 店铺日数据：补昨日 + 近 2 天（按天接口权威完整日），修正凌晨实时快照可能留下的错误行
+        backfill_store_daily(conn, days=3)
+        conn.commit()
         # 推广计划统计（昨日/近7天）与商品级推广（昨日/7/14/30天）：此前只靠手动同步，这里纳入每日自动补数
         for _m in ("yesterday", "7d"):
             sync_plans(_m, None, conn)
@@ -395,10 +418,8 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5174",
+            "http://localhost:5178",
+            "http://127.0.0.1:5178",
         ],
         allow_credentials=True,
         allow_methods=["*"],
@@ -517,7 +538,7 @@ app = create_app()
 
 
 # ---- 生产模式：托管前端构建产物（frontend/dist 存在时）----
-# 开发模式（vite dev :5173）不受影响；打包分发时用单端口 8000 访问页面。
+# 开发模式（vite dev :5178）不受影响；打包分发时用单端口 8008 访问页面。
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():
     from fastapi.responses import FileResponse, JSONResponse

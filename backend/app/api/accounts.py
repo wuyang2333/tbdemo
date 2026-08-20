@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from backend.app.api.auth import (
     USERNAME_PATTERN,
+    _effective_payload,
     get_current_user,
     hash_password,
     require_admin,
@@ -50,6 +51,19 @@ def _check_store_quota(db, target_row, new_ids: list[int] | None) -> None:
             status_code=400,
             detail=f"该账号最多绑定 {quota} 家店铺，如需更多请联系平台调整配额",
         )
+
+
+def _validate_store_ids(db, store_ids: list[int]) -> None:
+    """校验店铺 id 都存在（管理员/超管分配店铺用）。"""
+    ids = list(dict.fromkeys(store_ids))
+    if not ids:
+        return
+    placeholders = ",".join("?" * len(ids))
+    rows = db.execute(f"SELECT id FROM stores WHERE id IN ({placeholders})", tuple(ids)).fetchall()
+    valid = {r["id"] for r in rows}
+    bad = [sid for sid in ids if sid not in valid]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"店铺不存在或无法分配：{bad}")
 
 
 class RoleIn(BaseModel):
@@ -532,13 +546,26 @@ class SubAccountIn(BaseModel):
     password: str
     nickname: str = ""
     allowed_modules: list[str] | None = None
+    allowed_store_ids: list[int] | None = None
 
 
-def _sub_payload(row) -> dict:
-    item = user_payload(row)
+class SubStoresIn(BaseModel):
+    store_ids: list[int] = []
+
+
+def _sub_payload(row, db) -> dict:
+    item = _effective_payload(db, row)
     item["created_at"] = row["created_at"]
     item["last_login_at"] = row["last_login_at"]
     item["last_login_ip"] = row["last_login_ip"]
+    store_ids = item.get("allowed_store_ids") or []
+    names: list[str] = []
+    if store_ids:
+        placeholders = ",".join("?" * len(store_ids))
+        rows = db.execute(f"SELECT id, name FROM stores WHERE id IN ({placeholders})", tuple(store_ids)).fetchall()
+        name_map = {r["id"]: r["name"] for r in rows}
+        names = [name_map.get(sid, f"店铺#{sid}") for sid in store_ids]
+    item["store_names"] = names
     return item
 
 
@@ -548,7 +575,7 @@ def list_sub_accounts(actor: dict = Depends(require_tenant_owner), db=Depends(ge
     rows = db.execute(
         "SELECT * FROM users WHERE parent_id = ? ORDER BY id ASC", (actor["id"],)
     ).fetchall()
-    return {"items": [_sub_payload(r) for r in rows]}
+    return {"items": [_sub_payload(r, db) for r in rows]}
 
 
 @router.post("/my/sub-accounts")
@@ -568,26 +595,58 @@ def create_sub_account(
         raise HTTPException(status_code=400, detail="花名不能为空")
     if len(nickname) > 20:
         raise HTTPException(status_code=400, detail="花名不能超过 20 个字符")
-    count = db.execute("SELECT COUNT(*) AS c FROM users WHERE parent_id = ?", (actor["id"],)).fetchone()["c"]
-    quota = actor.get("sub_account_quota") or 2
-    if count >= quota:
-        raise HTTPException(status_code=400, detail=f"子账号配额已用完（上限 {quota} 个），如需更多请联系平台调整配额")
+    if actor["role"] not in ("admin", "super_admin"):
+        count = db.execute("SELECT COUNT(*) AS c FROM users WHERE parent_id = ?", (actor["id"],)).fetchone()["c"]
+        quota = actor.get("sub_account_quota") or 2
+        if count >= quota:
+            raise HTTPException(status_code=400, detail=f"子账号配额已用完（上限 {quota} 个），如需更多请联系平台调整配额")
     exists = db.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
     if exists:
         raise HTTPException(status_code=400, detail="用户名已存在，换个名字试试")
     salt = secrets.token_bytes(16)
     now = datetime.now(timezone.utc).isoformat()
     modules_json = json.dumps(body.allowed_modules or [], ensure_ascii=False) if body.allowed_modules is not None else None
+    if actor["role"] in ("admin", "super_admin"):
+        store_ids = body.allowed_store_ids or []
+        _validate_store_ids(db, store_ids)
+        store_json = json.dumps(store_ids)
+    else:
+        store_json = "[]"
     cur = db.execute(
         """
         INSERT INTO users (username, password_hash, salt, nickname, created_at, role, status, allowed_modules, allowed_store_ids, parent_id)
-        VALUES (?, ?, ?, ?, ?, 'member', 'active', ?, '[]', ?)
+        VALUES (?, ?, ?, ?, ?, 'member', 'active', ?, ?, ?)
         """,
-        (username, hash_password(body.password, salt), salt.hex(), nickname, now, modules_json, actor["id"]),
+        (username, hash_password(body.password, salt), salt.hex(), nickname, now, modules_json, store_json, actor["id"]),
     )
     row = db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone()
     log_op(db, actor, "accounts", "create_sub", username, "创建子账号")
-    return {"item": _sub_payload(row)}
+    return {"item": _sub_payload(row, db)}
+
+
+@router.post("/my/sub-accounts/{sub_id}/stores")
+def set_sub_stores(
+    sub_id: int,
+    body: SubStoresIn,
+    actor: dict = Depends(require_tenant_owner),
+    db=Depends(get_db),
+) -> dict:
+    """分配子账号可见店铺（管理员/超管的子账号支持手动分配）。"""
+    if actor["role"] not in ("admin", "super_admin"):
+        raise HTTPException(status_code=400, detail="普通主账号的子账号自动跟随你的店铺，无需单独分配")
+    row = db.execute(
+        "SELECT * FROM users WHERE id = ? AND parent_id = ?", (sub_id, actor["id"])
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="子账号不存在")
+    store_ids = list(dict.fromkeys(body.store_ids or []))
+    _validate_store_ids(db, store_ids)
+    db.execute(
+        "UPDATE users SET allowed_store_ids = ? WHERE id = ?",
+        (json.dumps(store_ids), sub_id),
+    )
+    log_op(db, actor, "accounts", "sub_stores", row["username"], f"分配子账号可见店铺 {len(store_ids)} 家")
+    return {"ok": True, "store_ids": store_ids}
 
 
 @router.post("/my/sub-accounts/{sub_id}/password")

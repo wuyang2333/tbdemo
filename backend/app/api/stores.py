@@ -175,11 +175,12 @@ def sync_store_row(db, row) -> dict:
     data_date = metrics["date"]
     db.execute(
         """
-        INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, conversion_rate, repeat_rate, old_buyer_cnt, repeat_sales, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, buyers, conversion_rate, repeat_rate, old_buyer_cnt, repeat_sales, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(store_id, data_date) DO UPDATE SET
             visitors = excluded.visitors, pv = excluded.pv, sales = excluded.sales,
-            orders = excluded.orders, conversion_rate = excluded.conversion_rate,
+            orders = excluded.orders, buyers = excluded.buyers,
+            conversion_rate = excluded.conversion_rate,
             repeat_rate = excluded.repeat_rate, old_buyer_cnt = excluded.old_buyer_cnt,
             repeat_sales = excluded.repeat_sales
         """,
@@ -190,6 +191,7 @@ def sync_store_row(db, row) -> dict:
             metrics["pv"],
             metrics["sales"],
             metrics["orders"],
+            metrics.get("buyers", 0),
             metrics["conversion_rate"],
             metrics.get("repeat_rate", 0),
             metrics.get("old_buyer_cnt", 0),
@@ -468,13 +470,11 @@ def sync_all(
     return result
 
 
-@router.post("/sync-history")
-def sync_history(
-    days: int = 30,
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    """补拉最近 N 天（不含今天）的店铺每日数据到 store_daily_data。"""
+def backfill_store_daily(db, days: int = 3) -> dict:
+    """补拉最近 N 天（不含今天）的店铺每日数据到 store_daily_data（按天接口，权威完整日）。
+
+    供手动「补拉历史数据」与每日自动补数共用；单店/单日容错，返回 {"results","total","ok","days"}。
+    """
     if not (1 <= days <= 90):
         days = 30
     today = date_cls.today()
@@ -491,16 +491,18 @@ def sync_history(
             try:
                 metrics = fetch_store_daily(store, target)
                 db.execute(
-                    "INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, conversion_rate, repeat_rate, old_buyer_cnt, repeat_sales, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "INSERT INTO store_daily_data (store_id, data_date, visitors, pv, sales, orders, buyers, conversion_rate, repeat_rate, old_buyer_cnt, repeat_sales, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(store_id, data_date) DO UPDATE SET "
                     "visitors = excluded.visitors, pv = excluded.pv, sales = excluded.sales, orders = excluded.orders, "
+                    "buyers = excluded.buyers, "
                     "conversion_rate = excluded.conversion_rate, repeat_rate = excluded.repeat_rate, "
                     "old_buyer_cnt = excluded.old_buyer_cnt, repeat_sales = excluded.repeat_sales",
                     (
                         store["id"], target, metrics["visitors"], metrics["pv"], metrics["sales"],
-                        metrics["orders"], metrics["conversion_rate"], metrics.get("repeat_rate", 0),
-                        metrics.get("old_buyer_cnt", 0), metrics.get("repeat_sales", 0), _fmt(_now()),
+                        metrics["orders"], metrics.get("buyers", 0), metrics["conversion_rate"],
+                        metrics.get("repeat_rate", 0), metrics.get("old_buyer_cnt", 0),
+                        metrics.get("repeat_sales", 0), _fmt(_now()),
                     ),
                 )
                 total += 1
@@ -508,8 +510,19 @@ def sync_history(
                 err = str(exc)
                 break
         results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total, "error": err})
-    _log(db, user, "补拉历史数据", "全部店铺", f"近 {days} 天 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
+
+
+@router.post("/sync-history")
+def sync_history(
+    days: int = 30,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """补拉最近 N 天（不含今天）的店铺每日数据到 store_daily_data。"""
+    result = backfill_store_daily(db, days)
+    _log(db, user, "补拉历史数据", "全部店铺", f"近 {result['days']} 天 成功 {result['ok']} / {result['total']} 家")
+    return result
 
 
 def sync_hourly_all(db) -> dict:

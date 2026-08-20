@@ -191,6 +191,8 @@ def _migrate_analytics(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE store_daily_data ADD COLUMN old_buyer_cnt INTEGER NOT NULL DEFAULT 0")
     if "repeat_sales" not in cols:
         conn.execute("ALTER TABLE store_daily_data ADD COLUMN repeat_sales REAL NOT NULL DEFAULT 0")
+    if "buyers" not in cols:
+        conn.execute("ALTER TABLE store_daily_data ADD COLUMN buyers INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS store_hourly_data (
@@ -624,6 +626,7 @@ def init_db() -> None:
                 pv INTEGER NOT NULL DEFAULT 0,
                 sales REAL NOT NULL DEFAULT 0,
                 orders INTEGER NOT NULL DEFAULT 0,
+                buyers INTEGER NOT NULL DEFAULT 0,
                 conversion_rate REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 UNIQUE(store_id, data_date)

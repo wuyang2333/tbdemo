@@ -92,12 +92,16 @@ def user_payload(row) -> dict:
 
 
 def _effective_payload(db, row) -> dict:
-    """构建用户 payload；子账号（parent_id）继承主账号的可见店铺。"""
+    """构建用户 payload；子账号（parent_id）继承主账号的可见店铺。
+
+    仅普通主账号（member 且非子账号）的子账号自动继承店铺；
+    管理员/超管的子账号按自身分配（手动分配），不继承上级的空列表。
+    """
     payload = user_payload(row)
     pid = payload.get("parent_id")
     if pid:
-        parent = db.execute("SELECT allowed_store_ids FROM users WHERE id = ?", (pid,)).fetchone()
-        if parent and parent["allowed_store_ids"]:
+        parent = db.execute("SELECT role, allowed_store_ids FROM users WHERE id = ?", (pid,)).fetchone()
+        if parent and parent["role"] == "member" and parent["allowed_store_ids"]:
             try:
                 payload["allowed_store_ids"] = json.loads(parent["allowed_store_ids"])
             except (ValueError, TypeError):

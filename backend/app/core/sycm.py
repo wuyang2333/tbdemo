@@ -200,6 +200,7 @@ def _parse_live_overview(payload: dict) -> dict:
         "pv": int(_to_num(_take(today, "pv"))),
         "sales": round(_to_num(_take(today, "payAmt")), 2),
         "orders": int(_to_num(_take(today, "payOrdCnt") or _take(today, "payByrCnt"))),
+        "buyers": int(_to_num(_take(today, "payByrCnt"))),
         "conversion_rate": round(_to_num(_take(today, "payRate")) * 100, 2),
         "repeat_rate": round(_to_num(_take(today, "reVisitAmtRatio")) * 100, 1),
         "update_time": (data.get("data") or {}).get("updateTime") or (data.get("updateTime") or ""),
@@ -238,6 +239,7 @@ def _parse_day_overview(payload: dict) -> dict:
         "pv": int(_to_num(_take(self_, "pv"))),
         "sales": round(_to_num(_take(self_, "payAmt")), 2),
         "orders": int(_to_num(_take(self_, "payOrdCnt") or _take(self_, "payByrCnt"))),
+        "buyers": int(_to_num(_take(self_, "payByrCnt"))),
         "conversion_rate": round(_to_num(_take(self_, "payRate")) * 100, 2),
         "repeat_rate": round(_to_num(_take(self_, "reVisitAmtRatio")) * 100, 1),
         "old_buyer_cnt": int(_to_num(_take(self_, "payOldByrCnt"))),
@@ -378,8 +380,10 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
     out: list[dict] = []
     page = 1
     while True:
-        # 注意：不能用 item-list 预设（它带 compareType=cycle，会导致「昨日」单日查询返回空）。
-        # 直接用 api 命令拼 top.json，不传 compareType，才能拿到昨天的商品排行。
+        # 实测（2026-08-20）：商品排行 top.json 对「最近一个完整日」必须带
+        # compareType=cycle，否则 recordCount=0 返回空；对更早的日期带不带都行。
+        # 之前注释声称带 compareType 会导致昨日单日查询为空，属于误判（当时
+        # 可能撞上了风控或日期未出数），实际带上的效果才是对的，统一带上。
         payload = _run_api_json(
             [
                 "--store",
@@ -400,6 +404,8 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
                 "orderBy=payAmt",
                 "-p",
                 "device=0",
+                "-p",
+                "compareType=cycle",
             ],
             timeout=timeout,
         )

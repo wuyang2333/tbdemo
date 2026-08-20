@@ -197,11 +197,14 @@ def daily_report(
     ac = _report_add_cart_refund(db, ts, sf, sp, is_realtime)
 
     # 买家数（支付买家数）；客单价 = 销售额 / 买家数
+    # 优先取 store_daily_data.buyers（按天接口权威字段），无则回退商品日表聚合
     def _day_buyers(d: str, realtime: bool) -> int:
         if realtime:
             r = db.execute("SELECT SUM(buyers) AS b FROM store_item_realtime WHERE 1=1" + sf, sp).fetchone()
         else:
-            r = db.execute("SELECT SUM(buyers) AS b FROM store_item_daily WHERE data_date = ?" + sf, [d] + sp).fetchone()
+            r = db.execute("SELECT COALESCE(SUM(buyers),0) AS b FROM store_daily_data WHERE data_date = ?" + sf, [d] + sp).fetchone()
+            if not r["b"]:
+                r = db.execute("SELECT SUM(buyers) AS b FROM store_item_daily WHERE data_date = ?" + sf, [d] + sp).fetchone()
         return int(r["b"] or 0)
 
     td["buyers"] = _day_buyers(ts, is_realtime)
