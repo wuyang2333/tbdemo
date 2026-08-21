@@ -8,7 +8,6 @@ import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
-import { LineChart } from "../components/promotions/promotions-ui";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
 import { HourlyPushButton } from "../components/ui/hourly-push";
@@ -481,21 +480,6 @@ export function AnalyticsHoursPage() {
               </div>
             </Card>
           )}
-
-          <Card variant="borderless" title="分时转化率曲线（成交 ÷ 访客）" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
-            <LineChart
-              labels={items.map((p) => p.hour.slice(0, 2))}
-              series={[
-                { name: "转化率", color: "var(--ops-accent)", values: items.map((p) => p.conversion_rate), format: (v: number) => `${v.toFixed(2)}%` },
-              ]}
-            />
-            {items.length > 0 && (
-              <Space style={{ marginTop: 8 }} wrap>
-                <Tag color="orange">转化率最高 {items.reduce((a, b) => (b.conversion_rate > a.conversion_rate ? b : a)).hour}</Tag>
-                <Tag>转化率最低 {items.reduce((a, b) => (b.conversion_rate < a.conversion_rate ? b : a)).hour}</Tag>
-              </Space>
-            )}
-          </Card>
 
           <Card
             variant="borderless"

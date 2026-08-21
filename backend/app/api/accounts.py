@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from backend.app.api.notifications import notify
+
 from backend.app.api.auth import (
     USERNAME_PATTERN,
     _effective_payload,
@@ -291,6 +293,7 @@ def approve_user(
     if row["status"] != "pending":
         raise HTTPException(status_code=400, detail="该账号不是待审核状态")
     db.execute("UPDATE users SET status = 'active' WHERE id = ?", (user_id,))
+    notify(db, user_id, "注册审核通过", "你的账号已通过审核，现在可以登录了", "/login")
     log_op(db, actor, "accounts", "审核通过", row["username"], f"账号 {row['username']} 审核通过")
     return {"ok": True, "username": row["username"]}
 
@@ -304,6 +307,7 @@ def reject_user(
     row = _get_user_or_404(db, user_id)
     if row["status"] != "pending":
         raise HTTPException(status_code=400, detail="该账号不是待审核状态")
+    notify(db, user_id, "注册申请被拒绝", "你的注册申请未通过审核，如有疑问请联系管理员", "/login")
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     log_op(db, actor, "accounts", "拒绝注册", row["username"], f"账号 {row['username']} 注册被拒绝并删除")
     return {"ok": True, "username": row["username"]}
@@ -324,6 +328,7 @@ def set_role(
     if target["role"] == "super_admin" and body.role != "super_admin" and _super_admin_count(db) <= 1:
         raise HTTPException(status_code=400, detail="系统至少需要保留一名超级管理员")
     db.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
+    notify(db, user_id, "账号权限已变更", "管理员已调整你的账号角色权限", "/profile")
     return {"ok": True}
 
 
@@ -343,6 +348,9 @@ def set_status(
     db.execute("UPDATE users SET status = ? WHERE id = ?", (body.status, user_id))
     if body.status == "disabled":
         db.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
+        notify(db, user_id, "账号已被禁用", "你的账号已被禁用，暂时无法登录，如有疑问请联系管理员")
+    else:
+        notify(db, user_id, "账号已启用", "你的账号已恢复，可以正常登录")
     return {"ok": True}
 
 
@@ -363,6 +371,7 @@ def set_password(
         (hash_password(body.password, salt), salt.hex(), user_id),
     )
     db.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
+    notify(db, user_id, "密码已被重置", "管理员已重置你的登录密码，请使用新密码登录")
     return {"ok": True}
 
 

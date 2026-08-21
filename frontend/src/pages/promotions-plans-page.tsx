@@ -384,6 +384,7 @@ export function PromotionsPlansPage() {
                 {name}
               </div>
             </Tooltip>
+            <div style={{ fontSize: 11, color: "var(--ops-text-3)" }}>ID {row.campaign_id}</div>
           </div>
         );
       },

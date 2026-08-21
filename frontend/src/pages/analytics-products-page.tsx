@@ -549,7 +549,7 @@ export function AnalyticsProductsPage() {
           { title: "加购", dataIndex: "add_cart", align: "right", width: 82, sorter: numSorter("add_cart"), render: (v: number, row: AnalyticsProduct) => <MetricCell value={fmtInt(v)} change={row.add_cart_cycle} /> },
           { title: "推广花费", dataIndex: "promo_spend", align: "right", width: 96, render: (v: number | null | undefined) => (v != null ? fmtMoney(v) : "—") },
           { title: "净投产比", key: "net_roi", align: "right", width: 88, render: (_: unknown, row: AnalyticsProduct) => (row.promo_net_roi != null ? row.promo_net_roi.toFixed(2) : "—") },
-          { title: "真实ROI", align: "right", width: 82, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
+          { title: "真实ROI", key: "real_roi", align: "right", width: 82, render: (_: unknown, row: AnalyticsProduct) => (row.promo_spend ? (row.sales / row.promo_spend).toFixed(2) : "—") },
           { title: "广告占比", dataIndex: "promo_share", align: "right", width: 82, render: (v: number | null | undefined) => (v != null ? `${v.toFixed(1)}%` : "—") },
           { title: "占比", dataIndex: "sales_share", align: "right", width: 82, sorter: numSorter("sales_share"), render: (v: number) => (v != null ? `${v.toFixed(1)}%` : "—") },
         ] as TableColumnsType<AnalyticsProduct>)),

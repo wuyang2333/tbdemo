@@ -190,7 +190,13 @@ export function AnalyticsReportPage() {
   const runAnalysis = async (force = false, targetDate?: string) => {
     const d = targetDate ?? date;
     const key = `${d || ""}|${storeId || ""}`;
-    if (!force && analysisByDate[key]) return;
+    const existing = analysisByDate[key];
+    // 旧缓存可能因解析失败全是空板块：只有存在非空内容时才跳过重新生成
+    const hasContent =
+      !!existing &&
+      !!existing.sections &&
+      Object.values(existing.sections).some((value) => typeof value === "string" && value.trim().length > 0);
+    if (!force && hasContent) return;
     setAnalysisLoading(true);
     try {
       const params = new URLSearchParams();
@@ -384,7 +390,7 @@ export function AnalyticsReportPage() {
               <div style={{ display: "grid", gap: 10 }}>
                 {[
                   { key: "经营分析" as const, color: "var(--ops-accent-light)", bg: "var(--ops-accent-soft)" },
-                  { key: "推广分析" as const, color: "var(--ops-accent)", bg: "rgba(255,122,31,0.08)" },
+                  { key: "推广分析" as const, color: "var(--ops-accent)", bg: "var(--ops-accent-soft)" },
                   { key: "异常分析" as const, color: "var(--ops-danger)", bg: "rgba(255,77,79,0.08)" },
                   { key: "总结" as const, color: "var(--ops-success)", bg: "rgba(82,196,26,0.08)" },
                   { key: "今日行动建议" as const, color: "var(--ops-warn)", bg: "rgba(250,140,22,0.08)" },

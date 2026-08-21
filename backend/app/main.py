@@ -35,6 +35,7 @@ from backend.app.api import (
     tasks,
 )
 from backend.app.api.auth import get_current_user, require_admin, require_module
+from backend.app.api.notifications import changelog_router, notifications_router
 from backend.app.api.promotions import (
     sync_items,
     sync_plans,
@@ -465,6 +466,18 @@ def create_app() -> FastAPI:
         announcements.router,
         prefix="/api/announcements",
         tags=["announcements"],
+        dependencies=[Depends(get_current_user)],
+    )
+    app.include_router(
+        notifications_router,
+        prefix="/api/notifications",
+        tags=["notifications"],
+        dependencies=[Depends(get_current_user)],
+    )
+    app.include_router(
+        changelog_router,
+        prefix="/api/changelog",
+        tags=["changelog"],
         dependencies=[Depends(get_current_user)],
     )
     app.include_router(

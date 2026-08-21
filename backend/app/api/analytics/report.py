@@ -420,12 +420,26 @@ def _build_analysis_context(r: dict) -> str:
 
 
 _ANALYSIS_KEYS = ["经营分析", "推广分析", "异常分析", "总结", "今日行动建议"]
+_ANALYSIS_HEADINGS = {
+    "经营分析": ["经营分析"],
+    "推广分析": ["推广分析"],
+    "异常分析": ["异常分析"],
+    "总结": ["总结"],
+    "今日行动建议": ["今日行动建议", "行动建议"],
+}
 
 
 def _parse_analysis_sections(reply: str) -> dict:
+    """解析 AI 经营分析为分节 dict。
+
+    兼容两种模型输出格式：
+    1) 【经营分析】... 方括号格式（原设计）
+    2) ## 一、经营分析 / ### 经营分析 等 Markdown 标题格式（部分模型不遵守方括号）
+    """
     import re as _re
 
     sections = {k: "" for k in _ANALYSIS_KEYS}
+
     matches = list(_re.finditer(r"【(.+?)】", reply))
     for i, m in enumerate(matches):
         key = m.group(1)
@@ -433,6 +447,19 @@ def _parse_analysis_sections(reply: str) -> dict:
             start = m.end()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(reply)
             sections[key] = reply[start:end].strip()
+
+    head_re = _re.compile(r"^#{1,4}\s*[一二三四五六七八九十]、?\s*(.+?)\s*$", _re.M)
+    heads = list(head_re.finditer(reply))
+    for i, h in enumerate(heads):
+        title = h.group(1).strip()
+        for key, aliases in _ANALYSIS_HEADINGS.items():
+            if sections[key]:
+                continue
+            if any(a in title for a in aliases):
+                start = h.end()
+                end = heads[i + 1].start() if i + 1 < len(heads) else len(reply)
+                sections[key] = reply[start:end].strip()
+                break
     return sections
 
 

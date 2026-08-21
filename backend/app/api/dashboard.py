@@ -12,8 +12,8 @@ from backend.app.core.db import get_db
 router = APIRouter()
 
 
-ALLOWED_WIDGETS = {"kpis", "trend", "stores", "shortcuts", "system"}
-DEFAULT_WIDGETS = ["kpis", "trend", "shortcuts", "system"]
+ALLOWED_WIDGETS = {"kpis", "stores", "shortcuts", "system", "notice", "tasks", "changelog"}
+DEFAULT_WIDGETS = ["kpis", "shortcuts", "system", "notice", "tasks", "changelog"]
 
 
 class DashboardConfigIn(BaseModel):

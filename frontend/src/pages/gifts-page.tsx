@@ -1,4 +1,4 @@
-import { AppstoreOutlined, CloseOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { CloseOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   AutoComplete,
   Button,
@@ -6,7 +6,7 @@ import {
   Col,
   DatePicker,
   Divider,
-  Dropdown,
+  Empty,
   Form,
   Input,
   InputNumber,
@@ -20,13 +20,14 @@ import {
   Typography,
   message,
 } from "antd";
-import type { MenuProps, TableColumnsType } from "antd";
+import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Key } from "react";
+import type { HTMLAttributes, Key, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageFooter } from "../components/ui/page-footer";
+import { ColumnSettings, type ColDef } from "../components/ui/column-settings";
 import { PageHeader } from "../components/ui/page-header";
 import type { Gift, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
 
@@ -72,6 +73,71 @@ const SETTLE_OPTIONS = (Object.entries(SETTLE_META) as [GiftSettleStatus, { labe
   label: meta.label,
 }));
 
+const GIFT_COL_DEFS: ColDef[] = [
+  { key: "date", title: "日期" },
+  { key: "order_time", title: "下单时间" },
+  { key: "store_name", title: "店铺" },
+  { key: "keyword", title: "关键词" },
+  { key: "spec", title: "规格" },
+  { key: "price", title: "金额" },
+  { key: "commission", title: "佣金" },
+  { key: "wangwang", title: "旺旺号" },
+  { key: "order_no", title: "订单编号" },
+  { key: "review_status", title: "评论状态" },
+  { key: "settle_status", title: "结款状态" },
+];
+
+const MIN_COL_WIDTH = 60;
+
+function ResizableHeaderCell(props: any) {
+  const { children, width, onResize, ...restProps } = props;
+  const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const startResize = (event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startWidth = Math.max(MIN_COL_WIDTH, Number(width) || 100);
+    dragging.current = { startX: event.clientX, startWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const next = Math.max(MIN_COL_WIDTH, dragging.current.startWidth + (ev.clientX - dragging.current.startX));
+      onResize?.(next);
+    };
+    const onUp = () => {
+      dragging.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  return (
+    <th {...restProps} style={{ ...restProps.style, position: "relative" }}>
+      {children}
+      {onResize ? (
+        <div
+          onMouseDown={startResize}
+          title="拖动调整列宽"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 6,
+            cursor: "col-resize",
+            zIndex: 2,
+          }}
+        />
+      ) : null}
+    </th>
+  );
+}
+
 export function GiftsPage() {
   const [items, setItems] = useState<Gift[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
@@ -89,7 +155,7 @@ export function GiftsPage() {
   const [saving, setSaving] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Key[]>([]);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(20);
   const [cellEdit, setCellEdit] = useState<{ id: number; field: EditableField; value: string | number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [imageTarget, setImageTarget] = useState<Gift | null>(null);
@@ -98,6 +164,36 @@ export function GiftsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formFileInputRef = useRef<HTMLInputElement>(null);
   const enterRef = useRef(false);
+  // 列设置：显隐 + 顺序（localStorage 持久化）
+  const [colHidden, setColHidden] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gifts_col_hidden_v1") || "[]") as string[];
+    } catch {
+      return [];
+    }
+  });
+  const [colOrder, setColOrder] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gifts_col_order_v1") || "[]") as string[];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem("gifts_col_hidden_v1", JSON.stringify(colHidden));
+    localStorage.setItem("gifts_col_order_v1", JSON.stringify(colOrder));
+  }, [colHidden, colOrder]);
+  // 手动列宽（localStorage 持久化）
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("gifts_col_widths_v1") || "{}") as Record<string, number>;
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem("gifts_col_widths_v1", JSON.stringify(colWidths));
+  }, [colWidths]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -166,12 +262,9 @@ export function GiftsPage() {
     });
   }, [items, keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
 
-  const pageRows = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, page, pageSize]);
-  const amountSubtotal = pageRows.reduce((sum, row) => sum + Number(row.price), 0);
-  const commissionSubtotal = pageRows.reduce((sum, row) => sum + Number(row.commission), 0);
+  const filteredAmount = filtered.reduce((sum, row) => sum + Number(row.price), 0);
+  const filteredCommission = filtered.reduce((sum, row) => sum + Number(row.commission), 0);
+  const filteredNet = filteredAmount + filteredCommission;
   const selectedRows = useMemo(
     () => filtered.filter((item) => selectedKeys.includes(item.id)),
     [filtered, selectedKeys]
@@ -534,20 +627,6 @@ export function GiftsPage() {
     });
   };
 
-  const batchMenuItems: MenuProps["items"] = [
-    { key: "reviewed", label: "标记已评论", onClick: () => batchSet("review_status", "reviewed") },
-    { key: "unreviewed", label: "标记未评论", onClick: () => batchSet("review_status", "none") },
-    { key: "settled", label: "标记已结款", onClick: () => batchSet("settle_status", "settled") },
-    { key: "unsettled", label: "标记未结款", onClick: () => batchSet("settle_status", "unsettled") },
-    { type: "divider" },
-    { key: "copy", label: "复制勾选订单", onClick: () => copyTable() },
-    { key: "export", label: "导出勾选订单（Excel）", onClick: () => exportExcel() },
-    { type: "divider" },
-    { key: "delete", label: "删除勾选订单", danger: true, onClick: () => batchDelete() },
-    { type: "divider" },
-    { key: "clear", label: "取消选择", onClick: () => setSelectedKeys([]) },
-  ];
-
   const exportExcel = async () => {
     if (selectedKeys.length === 0) {
       message.warning("请先在表格里勾选要导出的订单");
@@ -595,6 +674,7 @@ export function GiftsPage() {
       title: "下单时间",
       key: "order_time",
       width: 72,
+      sorter: (a: Gift, b: Gift) => dayjs(a.order_time).valueOf() - dayjs(b.order_time).valueOf(),
       render: (_, row) =>
         renderEditableCell(
           row,
@@ -604,10 +684,10 @@ export function GiftsPage() {
     },
     {
       title: "店铺",
+      key: "store_name",
       dataIndex: "store_name",
       width: 140,
-      filters: storeFilterOptions.map((option) => ({ text: option.label, value: option.value })),
-      onFilter: (value, row) => row.store_name === value,
+      ellipsis: true,
       render: (_, row) => {
         const label = row.store_name === "未关联店铺" ? <Text type="secondary">未关联店铺</Text> : row.store_name;
         return renderEditableCell(row, "store_id", label);
@@ -615,8 +695,10 @@ export function GiftsPage() {
     },
     {
       title: "关键词",
+      key: "keyword",
       dataIndex: "keyword",
       width: 130,
+      ellipsis: true,
       render: (_, row) => (
         <Space size={4}>
           {row.image ? (
@@ -654,36 +736,47 @@ export function GiftsPage() {
     },
     {
       title: "规格",
+      key: "spec",
       dataIndex: "spec",
       width: 110,
+      ellipsis: true,
       render: (_, row) => renderEditableCell(row, "spec", row.spec || "-"),
     },
     {
       title: "金额",
+      key: "price",
       dataIndex: "price",
+      sorter: (a: Gift, b: Gift) => Number(a.price) - Number(b.price),
       width: 90,
       render: (_, row) => renderEditableCell(row, "price", `¥${Number(row.price).toFixed(2)}`),
     },
     {
       title: "佣金",
+      key: "commission",
       dataIndex: "commission",
+      sorter: (a: Gift, b: Gift) => Number(a.commission) - Number(b.commission),
       width: 90,
       render: (_, row) => renderEditableCell(row, "commission", `¥${Number(row.commission).toFixed(2)}`),
     },
     {
       title: "旺旺号",
+      key: "wangwang",
       dataIndex: "wangwang",
       width: 120,
+      ellipsis: true,
       render: (_, row) => renderEditableCell(row, "wangwang", row.wangwang || "-"),
     },
     {
       title: "订单编号",
+      key: "order_no",
       dataIndex: "order_no",
       width: 160,
+      ellipsis: true,
       render: (_, row) => renderEditableCell(row, "order_no", row.order_no ? <Text code>{row.order_no}</Text> : <Text type="secondary">未填写</Text>),
     },
     {
       title: "评论状态",
+      key: "review_status",
       dataIndex: "review_status",
       width: 90,
       render: (_, row) => (
@@ -694,6 +787,7 @@ export function GiftsPage() {
     },
     {
       title: "结款状态",
+      key: "settle_status",
       dataIndex: "settle_status",
       width: 90,
       render: (_, row) => (
@@ -703,6 +797,31 @@ export function GiftsPage() {
       ),
     },
   ];
+
+  const columnsWithWidths = useMemo(() => {
+    const keyOf = (col: TableColumnsType<Gift>[number]) =>
+      String((col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string) ?? "");
+    return columns.map((col) => {
+      const key = keyOf(col);
+      const base = { ...col } as Record<string, unknown>;
+      if (key && colWidths[key]) base.width = colWidths[key];
+      base.onHeaderCell = () =>
+        ({
+          width: key && colWidths[key] ? colWidths[key] : (col as { width?: number }).width,
+          onResize: (next: number) => setColWidths((prev) => (key ? { ...prev, [key]: next } : prev)),
+        } as unknown as HTMLAttributes<HTMLTableCellElement>);
+      return base as unknown as TableColumnsType<Gift>[number];
+    });
+  }, [columns, colWidths]);
+
+  const visibleColumns = useMemo(() => {
+    const defs = colOrder.length > 0 ? colOrder : GIFT_COL_DEFS.map((def) => def.key);
+    const keyOf = (col: TableColumnsType<Gift>[number]) =>
+      String((col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string) ?? "");
+    return [...columnsWithWidths]
+      .filter((col) => !colHidden.includes(keyOf(col)))
+      .sort((a, b) => defs.indexOf(keyOf(a)) - defs.indexOf(keyOf(b)));
+  }, [columnsWithWidths, colHidden, colOrder]);
 
   return (
     <div>
@@ -790,11 +909,15 @@ export function GiftsPage() {
             重置
           </Button>
           <Divider orientation="vertical" />
-          <Dropdown menu={{ items: batchMenuItems }}>
-            <Button type="primary" ghost icon={<AppstoreOutlined />}>
-              批量操作
-            </Button>
-          </Dropdown>
+          <ColumnSettings
+            columns={GIFT_COL_DEFS}
+            hidden={colHidden}
+            order={colOrder}
+            onChange={(next) => {
+              setColHidden(next.hidden);
+              setColOrder(next.order);
+            }}
+          />
         </Space>
       </Card>
 
@@ -806,25 +929,98 @@ export function GiftsPage() {
           </Card>
         </Col>
         <Col xs={24} sm={8}>
-          <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>未评论</Text>
+          <Card
+            variant="borderless"
+            onClick={() => setReviewFilter((current) => (current === "none" ? undefined : "none"))}
+            style={{
+              cursor: "pointer",
+              borderColor: reviewFilter === "none" ? "var(--ops-accent)" : undefined,
+              boxShadow: reviewFilter === "none" ? "0 0 0 1px var(--ops-accent)" : undefined,
+            }}
+            styles={{ body: { padding: "16px 20px" } }}
+          >
+            <Text type="secondary" style={{ fontSize: 12 }}>未评论{reviewFilter === "none" ? "（筛选中）" : ""}</Text>
             <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-warn)" }}>{unreviewed}</div>
           </Card>
         </Col>
         <Col xs={24} sm={8}>
-          <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>未结款</Text>
+          <Card
+            variant="borderless"
+            onClick={() => setSettleFilter((current) => (current === "unsettled" ? undefined : "unsettled"))}
+            style={{
+              cursor: "pointer",
+              borderColor: settleFilter === "unsettled" ? "var(--ops-accent)" : undefined,
+              boxShadow: settleFilter === "unsettled" ? "0 0 0 1px var(--ops-accent)" : undefined,
+            }}
+            styles={{ body: { padding: "16px 20px" } }}
+          >
+            <Text type="secondary" style={{ fontSize: 12 }}>未结款{settleFilter === "unsettled" ? "（筛选中）" : ""}</Text>
             <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-accent)" }}>{unsettled}</div>
           </Card>
         </Col>
       </Row>
 
       <Card variant="borderless">
+        {selectedKeys.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              alignItems: "center",
+              marginBottom: 12,
+              padding: "10px 14px",
+              border: "1px solid var(--ops-accent-soft)",
+              borderRadius: "var(--ops-radius)",
+              background: "var(--ops-accent-soft)",
+            }}
+          >
+            <Text strong style={{ fontSize: 13 }}>已选 {selectedKeys.length} 单</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              金额 ¥{selectedAmount.toFixed(2)} · 佣金 ¥{selectedCommission.toFixed(2)} · 净额 ¥{selectedTotal.toFixed(2)}
+            </Text>
+            <Space size={8} wrap>
+              <Button size="small" onClick={() => batchSet("review_status", "reviewed")}>
+                标记已评论
+              </Button>
+              <Button size="small" onClick={() => batchSet("review_status", "none")}>
+                标记未评论
+              </Button>
+              <Button size="small" onClick={() => batchSet("settle_status", "settled")}>
+                标记已结款
+              </Button>
+              <Button size="small" onClick={() => batchSet("settle_status", "unsettled")}>
+                标记未结款
+              </Button>
+              <Button size="small" onClick={copyTable}>
+                复制
+              </Button>
+              <Button size="small" onClick={exportExcel}>
+                导出 Excel
+              </Button>
+              <Button size="small" danger onClick={batchDelete}>
+                删除
+              </Button>
+              <Button size="small" type="text" onClick={() => setSelectedKeys([])}>
+                取消选择
+              </Button>
+            </Space>
+          </div>
+        )}
         <Table<Gift>
           rowKey="id"
           loading={loading}
-          columns={columns}
+          columns={visibleColumns}
           dataSource={filtered}
+          components={{ header: { cell: ResizableHeaderCell } }}
+          locale={{
+            emptyText: (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="暂无礼品单，点右上角「新增礼品单」创建，或调整筛选条件"
+              />
+            ),
+          }}
           rowSelection={{
             selectedRowKeys: selectedKeys,
             onChange: (keys) => setSelectedKeys(keys),
@@ -842,37 +1038,39 @@ export function GiftsPage() {
             showTotal: (count) => (
               <span>
                 {selectedKeys.length > 0 && (
-                  <span style={{ marginRight: 14 }}>
-                    <span style={{ marginRight: 12 }}>佣金总额 ¥{selectedCommission.toFixed(2)}</span>
-                    <span style={{ marginRight: 12 }}>金额总额 ¥{selectedAmount.toFixed(2)}</span>
-                    <span style={{ color: "var(--ops-text)", fontWeight: 700, marginRight: 12 }}>
-                      总金额 ¥{selectedTotal.toFixed(2)}
-                    </span>
+                  <span style={{ color: "var(--ops-text)", fontWeight: 700, marginRight: 10 }}>
+                    已选 {selectedKeys.length} 单
                   </span>
                 )}
-                <span style={{ color: "var(--ops-text)", fontWeight: 700, marginRight: 10 }}>
-                  已选 {selectedKeys.length} 单
-                </span>
                 共 {count} 单
               </span>
             ),
           }}
-          summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell index={0} colSpan={1} />
-              <Table.Summary.Cell index={1} colSpan={5}>
-                <Text strong>本页小计</Text>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={6}>
-                <Text strong>¥{amountSubtotal.toFixed(2)}</Text>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={7}>
-                <Text strong>¥{commissionSubtotal.toFixed(2)}</Text>
-              </Table.Summary.Cell>
-              <Table.Summary.Cell index={8} colSpan={5} />
-            </Table.Summary.Row>
-          )}
-          scroll={{ x: 1360 }}
+          summary={() => {
+            // 第一个空单元格对应勾选列，保证合计与数据列对齐
+            const renderCells = (label: string, amount: number, commission: number, net: number) => [
+              <Table.Summary.Cell key="__selection" index={0} />,
+              ...visibleColumns.map((col, index) => {
+                const key = String((col.key as string) ?? ((col as { dataIndex?: string }).dataIndex as string) ?? "");
+                let content: ReactNode = "";
+                if (index === 0)
+                  content = (
+                    <Text strong>
+                      {label} <Text type="secondary" style={{ fontSize: 11 }}>净额 ¥{net.toFixed(2)}</Text>
+                    </Text>
+                  );
+                if (key === "price") content = <Text strong>¥{amount.toFixed(2)}</Text>;
+                if (key === "commission") content = <Text strong>¥{commission.toFixed(2)}</Text>;
+                return (
+                  <Table.Summary.Cell key={`${key}-${index + 1}`} index={index + 1}>
+                    {content}
+                  </Table.Summary.Cell>
+                );
+              }),
+            ];
+            return <Table.Summary.Row>{renderCells("筛选后合计", filteredAmount, filteredCommission, filteredNet)}</Table.Summary.Row>;
+          }}
+          scroll={{ x: 1360, y: 520 }}
         />
       </Card>
 
