@@ -8,21 +8,21 @@
 
 :root {
   color-scheme: dark;
-  --ops-bg: #0b0c10;
-  --ops-panel: rgba(255, 255, 255, 0.045);
-  --ops-panel-2: rgba(255, 255, 255, 0.03);
+  --ops-bg: #0a0b0f;
+  --ops-panel: #14161b;
+  --ops-panel-2: #101216;
   --ops-border: rgba(255, 255, 255, 0.09);
   --ops-border-strong: rgba(255, 255, 255, 0.16);
-  --ops-text: #f6f7f9;
-  --ops-text-2: #a7aeb8;
+  --ops-text: #f6f7f8;
+  --ops-text-2: #a7adb8;
   --ops-text-3: #6f7782;
-  --ops-accent: #ff7a1f;
-  --ops-accent-light: #ffb061;
-  --ops-accent-soft: rgba(255, 122, 31, 0.16);
-  --ops-accent-grad: linear-gradient(135deg, #ffb061, #ff5a1f);
-  --ops-series: #5b8def;
+  --ops-accent: #5e6ad2;
+  --ops-accent-light: #828fff;
+  --ops-accent-soft: rgba(94, 106, 210, 0.16);
+  --ops-accent-grad: linear-gradient(135deg, #828fff, #5e6ad2);
+  --ops-series: #5e6ad2;
   --ops-warn: #ffb061;
-  --ops-cat-0: #ff7a1f;
+  --ops-cat-0: #5e6ad2;
   --ops-cat-1: #5b8def;
   --ops-cat-2: #b18cff;
   --ops-cat-3: #37c871;
@@ -36,30 +36,30 @@
   --ops-radius-sm: 8px;
   --ops-radius-xs: 6px;
   --ops-radius-lg: 16px;
-  --ops-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-  --ops-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-  --ops-shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 10px 34px rgba(0, 0, 0, 0.30);
-  --ops-card-bg: rgba(255, 255, 255, 0.045);
-  --ops-card-bg-2: rgba(255, 255, 255, 0.03);
-  --ops-text-secondary: #a7aeb8;
-  --ops-hoverbar-bg: rgba(20, 21, 26, 0.92);
+  --ops-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.18);
+  --ops-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --ops-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px rgba(0, 0, 0, 0.2);
+  --ops-card-bg: #14161b;
+  --ops-card-bg-2: #101216;
+  --ops-text-secondary: #a7adb8;
+  --ops-hoverbar-bg: rgba(10, 11, 15, 0.96);
   --ops-hoverbar-border: rgba(255, 255, 255, 0.12);
-  --ops-hoverbar-text: #f6f7f9;
-  --ops-hoverbar-text-hover: #ffb061;
-  --ops-hoverbar-btn-hover: rgba(255, 122, 31, 0.16);
-  --ops-sider-bg: rgba(255, 255, 255, 0.05);
-  --ops-header-bg: rgba(11, 12, 16, 0.6);
-  --ops-aurora-a: rgba(255, 122, 31, 0.20);
-  --ops-aurora-b: rgba(91, 141, 239, 0.16);
-  --ops-chart-accent: #ff7a1f;
-  --ops-chart-series: #5b8def;
+  --ops-hoverbar-text: #f6f7f8;
+  --ops-hoverbar-text-hover: #828fff;
+  --ops-hoverbar-btn-hover: rgba(94, 106, 210, 0.16);
+  --ops-sider-bg: #0d0e13;
+  --ops-header-bg: rgba(10, 11, 15, 0.92);
+  --ops-aurora-a: rgba(94, 106, 210, 0.14);
+  --ops-aurora-b: rgba(94, 106, 210, 0.08);
+  --ops-chart-accent: #5e6ad2;
+  --ops-chart-series: #5e6ad2;
   --ops-chart-up: #ff5b5b;
   --ops-chart-down: #37c871;
 }
 
 [data-theme="light"] {
   color-scheme: light;
-  --ops-bg: #f3f5f9;
+  --ops-bg: #f7f8fa;
   --ops-panel: rgba(255, 255, 255, 0.66);
   --ops-panel-2: rgba(255, 255, 255, 0.5);
   --ops-border: rgba(18, 24, 45, 0.10);
@@ -67,13 +67,13 @@
   --ops-text: #1b1d22;
   --ops-text-2: #525a66;
   --ops-text-3: #6b7280;
-  --ops-accent: #ff7a1f;
-  --ops-accent-light: #ffb061;
-  --ops-accent-soft: rgba(255, 122, 31, 0.14);
-  --ops-accent-grad: linear-gradient(135deg, #ffb061, #ff5a1f);
-  --ops-series: #5b8def;
+  --ops-accent: #5e6ad2;
+  --ops-accent-light: #828fff;
+  --ops-accent-soft: rgba(94, 106, 210, 0.12);
+  --ops-accent-grad: linear-gradient(135deg, #828fff, #5e6ad2);
+  --ops-series: #5e6ad2;
   --ops-warn: #fa8c16;
-  --ops-cat-0: #ff7a1f;
+  --ops-cat-0: #5e6ad2;
   --ops-cat-1: #5b8def;
   --ops-cat-2: #7c5ce0;
   --ops-cat-3: #16a34a;
@@ -87,23 +87,23 @@
   --ops-radius-sm: 8px;
   --ops-radius-xs: 6px;
   --ops-radius-lg: 16px;
-  --ops-shadow: 0 2px 10px rgba(18, 24, 45, 0.08);
-  --ops-shadow-sm: 0 1px 3px rgba(18, 24, 45, 0.08);
-  --ops-shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 12px 32px rgba(18, 24, 45, 0.08);
-  --ops-card-bg: rgba(255, 255, 255, 0.66);
-  --ops-card-bg-2: rgba(255, 255, 255, 0.5);
+  --ops-shadow: 0 1px 2px rgba(18, 24, 45, 0.06), 0 8px 24px rgba(18, 24, 45, 0.06);
+  --ops-shadow-sm: 0 1px 2px rgba(18, 24, 45, 0.05);
+  --ops-shadow-card: 0 1px 2px rgba(18, 24, 45, 0.06), 0 10px 28px rgba(18, 24, 45, 0.07);
+  --ops-card-bg: #ffffff;
+  --ops-card-bg-2: #f2f3f6;
   --ops-text-secondary: #525a66;
   --ops-hoverbar-bg: rgba(255, 255, 255, 0.92);
   --ops-hoverbar-border: rgba(18, 24, 45, 0.12);
   --ops-hoverbar-text: #1b1d22;
-  --ops-hoverbar-text-hover: #ff7a1f;
-  --ops-hoverbar-btn-hover: rgba(255, 122, 31, 0.12);
-  --ops-sider-bg: rgba(255, 255, 255, 0.8);
-  --ops-header-bg: rgba(243, 245, 249, 0.72);
-  --ops-aurora-a: rgba(255, 122, 31, 0.16);
-  --ops-aurora-b: rgba(91, 141, 239, 0.12);
-  --ops-chart-accent: #ff7a1f;
-  --ops-chart-series: #5b8def;
+  --ops-hoverbar-text-hover: #5e6ad2;
+  --ops-hoverbar-btn-hover: rgba(94, 106, 210, 0.12);
+  --ops-sider-bg: #ffffff;
+  --ops-header-bg: rgba(247, 248, 250, 0.92);
+  --ops-aurora-a: rgba(94, 106, 210, 0.12);
+  --ops-aurora-b: rgba(94, 106, 210, 0.06);
+  --ops-chart-accent: #5e6ad2;
+  --ops-chart-series: #5e6ad2;
   --ops-chart-up: #dc2626;
   --ops-chart-down: #16a34a;
 }
@@ -136,7 +136,7 @@ body {
   z-index: 1;
 }
 
-/* Apple 式大标题：负字距 + 600，不超 700 */
+/* Linear 式大标题：负字距 -0.02em + 600，不超 700 */
 h1,
 h2,
 h3,
@@ -146,12 +146,12 @@ h4,
 .ant-typography h3,
 .ant-typography h4 {
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   color: var(--ops-text);
 }
 
 ::selection {
-  background: rgba(255, 122, 31, 0.28);
+  background: rgba(94, 106, 210, 0.35);
   color: inherit;
 }
 
@@ -400,7 +400,7 @@ h4,
   text-transform: uppercase;
 }
 
-/* ---------- 登录页：左侧近黑 tile ---------- */
+/* ---------- 登录页：左侧近黑 tile（Linear 式） ---------- */
 .ops-auth-shell {
   position: relative;
   min-height: 100vh;
@@ -419,10 +419,11 @@ h4,
   justify-content: space-between;
   padding: 48px 52px;
   color: rgba(255, 255, 255, 0.94);
+  border-right: 1px solid var(--ops-border);
   background:
     radial-gradient(720px 460px at 12% -10%, var(--ops-aurora-a), transparent 60%),
     radial-gradient(680px 420px at 96% 8%, var(--ops-aurora-b), transparent 55%),
-    linear-gradient(180deg, #121317 0%, #0b0c10 100%);
+    linear-gradient(180deg, #101116 0%, #0a0b0f 100%);
 }
 
 .ops-auth-brand::before {
@@ -446,7 +447,7 @@ h4,
 .ops-auth-brand h2,
 .ops-auth-brand h3 {
   color: #ffffff;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
 .ops-auth-form {

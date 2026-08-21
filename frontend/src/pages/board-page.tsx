@@ -44,7 +44,7 @@ export function BoardPage() {
   }, []);
 
   return (
-    <div style={{ minHeight: "100vh", background: "radial-gradient(900px 520px at 10% -8%, rgba(255,122,31,0.16), transparent 60%), radial-gradient(760px 460px at 96% 4%, rgba(91,141,239,0.14), transparent 55%), linear-gradient(135deg,#0b0c10 0%,#16171c 100%)", color: "#fff", padding: 24 }}>
+    <div style={{ minHeight: "100vh", background: "radial-gradient(900px 520px at 10% -8%, rgba(94,106,210,0.18), transparent 60%), radial-gradient(760px 460px at 96% 4%, rgba(94,106,210,0.10), transparent 55%), linear-gradient(135deg,#0a0b0f 0%,#12131a 100%)", color: "#fff", padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <div>
           <Text style={{ fontSize: 22, fontWeight: 800, color: "#fff" }}>经营数据大屏</Text>

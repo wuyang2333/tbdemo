@@ -67,7 +67,7 @@ export function LoginPage() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                boxShadow: "0 8px 24px rgba(255,80,0,0.45)",
+                boxShadow: "0 8px 24px rgba(94,106,210,0.45)",
               }}
             >
               {BRAND.logoUrl ? (
@@ -108,10 +108,10 @@ export function LoginPage() {
                   border: "1px solid rgba(255,255,255,0.1)",
                   fontSize: 13,
                   color: "rgba(255,255,255,0.9)",
-                  backdropFilter: "blur(4px)",
+                  
                 }}
               >
-                <span style={{ color: "#ff9a5f", fontSize: 16 }}>{feature.icon}</span>
+                <span style={{ color: "var(--ops-accent-light)", fontSize: 16 }}>{feature.icon}</span>
                 {feature.label}
               </span>
             ))}

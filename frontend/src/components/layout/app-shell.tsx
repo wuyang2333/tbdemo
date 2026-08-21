@@ -318,7 +318,7 @@ export function AppShell() {
                   alignItems: "center",
                   justifyContent: "center",
                   flexShrink: 0,
-                  boxShadow: "0 6px 16px rgba(255,80,0,0.4)",
+                  boxShadow: "0 6px 16px rgba(94,106,210,0.45)",
                 }}
               >
                 {BRAND.logoUrl ? (
@@ -510,8 +510,6 @@ export function AppShell() {
             justifyContent: "space-between",
             gap: mobile ? 8 : 16,
             background: "var(--ops-header-bg)",
-            backdropFilter: "blur(14px)",
-            WebkitBackdropFilter: "blur(14px)",
             borderBottom: `1px solid ${borderColor}`,
             position: "sticky",
             top: 0,
