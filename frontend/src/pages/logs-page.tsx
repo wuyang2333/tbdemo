@@ -11,6 +11,9 @@ import type { OpLog } from "../types";
 const MODULE_OPTIONS = [
   { value: "", label: "全部模块" },
   { value: "stores", label: "店铺管理" },
+  { value: "products", label: "商品管理" },
+  { value: "promotions", label: "推广管理" },
+  { value: "system", label: "系统任务" },
   { value: "gifts", label: "礼品单" },
   { value: "accounts", label: "账号管理" },
 ];
@@ -26,6 +29,12 @@ const ACTION_LABELS: Record<string, string> = {
   perm: "权限设置",
   create: "新增",
   delete: "删除",
+  retry_sync: "重试同步",
+  sync: "同步数据",
+  maintenance_enable: "进入维护模式",
+  maintenance_update: "更新维护设置",
+  maintenance_resume: "恢复后台任务",
+  maintenance_auto_resume: "维护到期自动恢复",
 };
 
 export function LogsPage() {

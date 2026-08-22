@@ -309,7 +309,7 @@ export function AnalyticsReportPage() {
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
             <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
             <Button icon={<SettingOutlined />} onClick={openPush}>推送设置</Button>
-            <HourlyPushButton />
+            <HourlyPushButton scope="report" />
             <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
             <Button icon={<DownloadOutlined />} onClick={exportPdf}>导出 PDF</Button>
             <Button icon={<SyncOutlined />} loading={syncing} onClick={syncDaily}>同步数据</Button>

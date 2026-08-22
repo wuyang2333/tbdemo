@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import http, { getApiErrorMessage } from "../../lib/api";
 import { showSyncFeedback } from "../../lib/sync-feedback";
+import { useStores } from "../../lib/store";
 import type { AnalyticsStoreAgg, AnalyticsSummary, AnalyticsTrendPoint } from "../../types";
 
 const { Text } = Typography;
@@ -46,14 +47,20 @@ export function daySwitch(days: number, onDays: (d: number) => void) {
 }
 
 export function useSyncStores(onDone: () => void) {
+  const { currentStore } = useStores();
   const [syncing, setSyncing] = useState(false);
   const syncAll = async () => {
     setSyncing(true);
     try {
-      const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
-        "/stores/sync-all"
-      );
-      showSyncFeedback("同步", [{ ok: data.ok, total: data.total, results: data.results }]);
+      if (currentStore) {
+        await http.post(`/stores/${currentStore.id}/sync`);
+        message.success(`“${currentStore.name}”同步成功`);
+      } else {
+        const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
+          "/stores/sync-all"
+        );
+        showSyncFeedback("同步", [{ ok: data.ok, total: data.total, results: data.results }]);
+      }
       onDone();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -287,20 +294,22 @@ export function StoreScopeSelect({
   value: number | undefined;
   onChange: (v: number | undefined) => void;
 }) {
-  const [stores, setStores] = useState<{ id: number; name: string }[]>([]);
+  const { stores, currentStore, setCurrent } = useStores();
   useEffect(() => {
-    http
-      .get<{ items: { id: number; name: string }[] }>("/stores")
-      .then(({ data }) => setStores(data.items))
-      .catch(() => setStores([]));
-  }, []);
+    const next = currentStore?.id;
+    if (value !== next) onChange(next);
+  }, [currentStore?.id, onChange, value]);
   return (
     <Select
       allowClear
       placeholder="全部店铺"
       style={{ width: 160 }}
       value={value}
-      onChange={(v) => onChange(v ?? undefined)}
+      onChange={async (v) => {
+        const next = v ?? undefined;
+        await setCurrent(next ?? null);
+        onChange(next);
+      }}
       options={stores.map((s) => ({ value: s.id, label: s.name }))}
     />
   );

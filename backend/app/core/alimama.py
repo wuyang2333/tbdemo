@@ -12,6 +12,13 @@ import sys
 from datetime import date
 from pathlib import Path
 
+from backend.app.core.scrape_guard import exclusive_scrape
+from backend.app.core.scrape_resilience import (
+    ensure_login_available,
+    is_login_error,
+    retry_with_backoff,
+    trip_login_circuit,
+)
 from backend.app.core.sycm import has_profile, profile_path
 
 CLI_DIR = Path(__file__).resolve().parent.parent.parent / "alimama_cli"
@@ -66,16 +73,17 @@ def _run_cli(store: dict, args: list[str], timeout: float = 120) -> tuple[str, s
     env["ALIMAMA_COOKIE_FILE"] = str(profile_path(store["id"]))
     cmd = [str(PYTHON), str(CLI_SCRIPT), *args]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            env=env,
-            cwd=str(CLI_DIR),
-        )
+        with exclusive_scrape():
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                env=env,
+                cwd=str(CLI_DIR),
+            )
     except FileNotFoundError as exc:
         raise AlimamaError(f"无法启动 Python：{exc}") from exc
     except subprocess.TimeoutExpired as exc:
@@ -83,7 +91,7 @@ def _run_cli(store: dict, args: list[str], timeout: float = 120) -> tuple[str, s
     return proc.stdout or "", proc.stderr or "", proc.returncode or 0
 
 
-def _run_json(store: dict, args: list[str], timeout: float = 120) -> dict:
+def _run_json_once(store: dict, args: list[str], timeout: float = 120) -> dict:
     out, err, code = _run_cli(store, args, timeout=timeout)
     if code != 0:
         text = (err or out or "").strip().replace("\n", "；")
@@ -92,6 +100,18 @@ def _run_json(store: dict, args: list[str], timeout: float = 120) -> dict:
         return json.loads(out)
     except ValueError as exc:
         raise AlimamaError("万相台返回异常，请稍后再试") from exc
+
+
+def _run_json(store: dict, args: list[str], timeout: float = 120) -> dict:
+    store_id = int(store["id"])
+    profile = profile_path(store_id)
+    ensure_login_available("alimama", store_id, profile, AlimamaError)
+    try:
+        return retry_with_backoff(lambda: _run_json_once(store, args, timeout))
+    except AlimamaError as exc:
+        if is_login_error(exc):
+            trip_login_circuit("alimama", store_id, profile, str(exc))
+        raise
 
 
 def _num(value, default: float = 0.0) -> float:

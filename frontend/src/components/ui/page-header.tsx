@@ -1,4 +1,4 @@
-import { Typography } from "antd";
+import { Space, Tag, Typography } from "antd";
 import type { ReactNode } from "react";
 
 const { Title, Text } = Typography;
@@ -7,11 +7,19 @@ export function PageHeader({
   icon,
   eyebrow,
   title,
+  description,
+  source,
+  updatedAt,
+  stale = false,
   extra,
 }: {
   icon: ReactNode;
   eyebrow: string;
   title: string;
+  description?: ReactNode;
+  source?: string;
+  updatedAt?: string | null;
+  stale?: boolean;
   extra?: ReactNode;
 }) {
   return (
@@ -32,8 +40,15 @@ export function PageHeader({
         <Title level={3} style={{ margin: "2px 0 0" }}>
           {title}
         </Title>
+        {(description || source || updatedAt) && (
+          <Space size={8} wrap style={{ marginTop: 5 }}>
+            {description ? <Text type="secondary">{description}</Text> : null}
+            {source ? <Tag bordered={false}>来源：{source}</Tag> : null}
+            {updatedAt ? <Tag color={stale ? "orange" : "green"}>{stale ? "数据可能过期" : "已更新"} · {updatedAt}</Tag> : null}
+          </Space>
+        )}
       </div>
-      {extra}
+      {extra ? <div className="ops-page-actions">{extra}</div> : null}
     </div>
   );
 }

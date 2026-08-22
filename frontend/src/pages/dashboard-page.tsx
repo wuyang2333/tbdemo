@@ -9,8 +9,10 @@ import {
   ClockCircleOutlined,
   DashboardOutlined,
   EyeOutlined,
+  ExclamationCircleOutlined,
   FileTextOutlined,
   FundOutlined,
+  InboxOutlined,
   MoneyCollectOutlined,
   ProfileOutlined,
   RobotOutlined,
@@ -21,7 +23,6 @@ import {
   ShoppingCartOutlined,
   ShoppingOutlined,
   TeamOutlined,
-  ToolOutlined,
   UpOutlined,
   UserSwitchOutlined,
 } from "@ant-design/icons";
@@ -35,6 +36,7 @@ import http, { getApiErrorMessage } from "../lib/api";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { useAuth } from "../lib/auth";
 import { BRAND } from "../lib/brand";
+import { useStores } from "../lib/store";
 import { canAccessModule, MAIN_MODULES, MODULES } from "../lib/modules";
 import type { AnalyticsStoreAgg } from "../types";
 
@@ -55,7 +57,8 @@ type DashboardStats = {
   data_date?: string | null;
   hour_until?: string | null;
   compare_mode?: string;
-  product_date?: string | null;
+  operational_updated_at?: string | null;
+  operational_stale?: boolean;
 };
 
 type AnnouncementItem = { id: number; title: string; content: string; created_at: string };
@@ -76,6 +79,7 @@ type LoopStatus = {
 const LOOP_LABELS: Record<string, string> = {
   inspect: "系统巡检",
   realtime_sync: "实时同步",
+  product_catalog_sync: "在售商品同步",
   report_push: "日报推送",
   hourly_push: "小时推送",
   promo_daily: "每日补数",
@@ -143,11 +147,10 @@ const KPI_CARDS: KpiDef[] = [
   { key: "today_real_roi", label: "真实ROI", icon: <FundOutlined />, format: (value) => (value > 0 ? value.toFixed(2) : "—"), compareKey: "yesterday_real_roi", ratio: true },
 ];
 
-const LIVE_MODULES = new Set(["dashboard", "profile", "accounts"]);
-
-type WidgetId = "kpis" | "stores" | "shortcuts" | "system" | "notice" | "tasks" | "changelog";
-const DEFAULT_WIDGETS: WidgetId[] = ["kpis", "shortcuts", "system", "notice", "tasks", "changelog"];
+type WidgetId = "actions" | "kpis" | "stores" | "shortcuts" | "system" | "notice" | "tasks" | "changelog";
+const DEFAULT_WIDGETS: WidgetId[] = ["actions", "kpis", "shortcuts", "system", "notice", "tasks", "changelog"];
 const WIDGET_OPTIONS: { id: WidgetId; label: string }[] = [
+  { id: "actions", label: "今日待办中心" },
   { id: "kpis", label: "核心指标卡" },
   { id: "stores", label: "按店铺汇总" },
   { id: "shortcuts", label: "快捷入口" },
@@ -169,6 +172,7 @@ function greeting(): string {
 export function DashboardPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { currentStore } = useStores();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [statsFailed, setStatsFailed] = useState(false);
   const [backendOk, setBackendOk] = useState<boolean | null>(null);
@@ -180,6 +184,7 @@ export function DashboardPage() {
   const [notices, setNotices] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loops, setLoops] = useState<LoopStatus[]>([]);
+  const [productSummary, setProductSummary] = useState<{ low_stock: number; zero_stock: number; stale: boolean } | null>(null);
   const [changelog, setChangelog] = useState<ChangelogItem[]>([]);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -230,12 +235,12 @@ export function DashboardPage() {
     } catch {
       setStatsFailed(true);
     }
-  }, []);
+  }, [currentStore?.id]);
   useAutoRefresh(loadStats);
   const loadConfig = useCallback(async () => {
     try {
       const { data } = await http.get<{ widgets: WidgetId[] }>("/dashboard/config");
-      setWidgets(data.widgets);
+      setWidgets(data.widgets.includes("actions") ? data.widgets : ["actions", ...data.widgets]);
     } catch {
       setWidgets([...DEFAULT_WIDGETS]);
     }
@@ -296,6 +301,19 @@ export function DashboardPage() {
     return () => clearInterval(timer);
   }, [loadExtras]);
 
+  useEffect(() => {
+    if (!canAccessModule(user, "products")) return;
+    const loadProductSummary = () => {
+      http
+        .get<{ summary: { low_stock: number; zero_stock: number; stale: boolean } }>("/products?page=1&page_size=1")
+        .then(({ data }) => setProductSummary(data.summary))
+        .catch(() => setProductSummary(null));
+    };
+    loadProductSummary();
+    const timer = setInterval(loadProductSummary, 60000);
+    return () => clearInterval(timer);
+  }, [user]);
+
   const markNoticeRead = async (id?: number) => {
     try {
       await http.post("/notifications/read", id ? { id } : {});
@@ -343,6 +361,24 @@ export function DashboardPage() {
   const clock = now.toLocaleTimeString("zh-CN", { hour12: false });
   const statusClass = backendOk === null ? "wait" : backendOk ? "ok" : "err";
   const statusLabel = backendOk === null ? "检测中" : backendOk ? "运行中" : "离线";
+  const failedLoops = loops.filter((loop) => loop.error_count > 0);
+  const actionItems = [
+    ...(canAccessModule(user, "gifts") && (stats?.pending_shipments ?? 0) > 0
+      ? [{ key: "ship", icon: <CarOutlined />, title: `${formatNumber(stats?.pending_shipments ?? 0)} 笔订单待发货`, description: "请前往淘宝千牛待发货订单列表处理", route: "", tone: "warning" }]
+      : []),
+    ...(canAccessModule(user, "products") && (productSummary?.zero_stock ?? 0) > 0
+      ? [{ key: "zero", icon: <InboxOutlined />, title: `${formatNumber(productSummary?.zero_stock ?? 0)} 个在售商品已无库存`, description: "检查补货或及时调整商品状态", route: "/products?stock_status=zero", tone: "danger" }]
+      : []),
+    ...(canAccessModule(user, "products") && (productSummary?.low_stock ?? 0) > 0
+      ? [{ key: "low", icon: <ShoppingOutlined />, title: `${formatNumber(productSummary?.low_stock ?? 0)} 个商品库存偏低`, description: "库存不高于 10 件，建议确认补货计划", route: "/products?stock_status=low", tone: "warning" }]
+      : []),
+    ...(failedLoops.length > 0
+      ? [{ key: "sync", icon: <ExclamationCircleOutlined />, title: `${failedLoops.length} 项后台同步异常`, description: failedLoops.map((loop) => LOOP_LABELS[loop.name] ?? loop.name).join("、"), route: "/tasks", tone: "danger" }]
+      : []),
+    ...(stats?.operational_stale || productSummary?.stale
+      ? [{ key: "stale", icon: <ClockCircleOutlined />, title: "部分经营数据可能已过期", description: "请在同步中心确认最近成功时间", route: "/tasks", tone: "warning" }]
+      : []),
+  ];
 
   return (
     <div>
@@ -362,20 +398,6 @@ export function DashboardPage() {
             <Text type="secondary" style={{ fontSize: 14 }}>
               欢迎回来，今天也一起把店铺经营得更好。
             </Text>
-            <div style={{ marginTop: 22 }}>
-              <Space wrap>
-                {canAccessModule(user, "analytics") && (
-                  <Button type="primary" icon={<BarChartOutlined />} onClick={() => navigate("/analytics")}>
-                    查看数据洞察
-                  </Button>
-                )}
-                {canAccessModule(user, "promotions") && (
-                  <Button icon={<RocketOutlined />} onClick={() => navigate("/promotions")}>
-                    推广管理
-                  </Button>
-                )}
-              </Space>
-            </div>
           </Col>
           <Col xs={24} lg={8}>
             <div
@@ -414,6 +436,37 @@ export function DashboardPage() {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column" }}>
+      <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("actions"), display: widgetOn("actions") ? undefined : "none" }}>
+        <Col span={24}>
+          <div className="ops-action-center">
+            <div className="ops-action-center__head">
+              <Text strong style={{ fontSize: 16 }}>今日待办</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>按风险优先处理经营异常</Text>
+              <div style={{ flex: 1 }} />
+              <Tag color={actionItems.length > 0 ? "orange" : "green"}>{actionItems.length > 0 ? `${actionItems.length} 项待处理` : "当前无异常"}</Tag>
+            </div>
+            {actionItems.length === 0 ? (
+              <div style={{ padding: "18px", borderTop: "1px solid var(--ops-border)" }}>
+                <Space><CheckCircleOutlined style={{ color: "var(--ops-success)" }} /><Text type="secondary">当前没有需要优先处理的经营异常</Text></Space>
+              </div>
+            ) : actionItems.map((item) => (
+              <div className="ops-action-item" key={item.key} onClick={() => { if (item.route) navigate(item.route); }} style={{ cursor: item.route ? "pointer" : "default" }}>
+                <span
+                  className="ops-action-item__icon"
+                  style={item.tone === "danger" ? { color: "var(--ops-danger)", background: "color-mix(in srgb, var(--ops-danger) 12%, transparent)" } : { color: "var(--ops-warn)", background: "color-mix(in srgb, var(--ops-warn) 12%, transparent)" }}
+                >
+                  {item.icon}
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <Text strong>{item.title}</Text>
+                  <Text type="secondary" style={{ display: "block", fontSize: 12 }}>{item.description}</Text>
+                </div>
+                {item.route ? <ArrowRightOutlined style={{ color: "var(--ops-text-3)" }} /> : <Tag>淘宝后台处理</Tag>}
+              </div>
+            ))}
+          </div>
+        </Col>
+      </Row>
       <Row gutter={[16, 16]} style={{ marginTop: 18, order: widgetOrder("kpis"), display: widgetOn("kpis") ? undefined : "none" }}>
         {KPI_CARDS.map((item) => {
           const raw = stats ? stats[item.key] : undefined;
@@ -426,6 +479,7 @@ export function DashboardPage() {
               : formatChange(value, typeof prev === "number" ? prev : undefined);
           const isUp = change.startsWith("+");
           const isDown = change.startsWith("-");
+          const isOperational = item.key === "pending_shipments" || item.key === "product_count";
           const changeColor = isUp ? "var(--ops-up)" : isDown ? "var(--ops-down)" : "var(--ops-text-secondary)";
           return (
             <Col key={item.key} xs={24} sm={12} md={8} xl={4}>
@@ -468,9 +522,15 @@ export function DashboardPage() {
                   }}
                 >
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {item.compareKey ? "较昨日" : "最新"}
+                    {item.compareKey ? "较昨日" : stats?.operational_updated_at ? `更新 ${fmtTime(stats.operational_updated_at)}` : "待同步"}
                   </Text>
-                  <Text style={{ fontSize: 12, fontWeight: 600, color: changeColor }}>{change}</Text>
+                  {isOperational && stats?.operational_stale && stats.operational_updated_at ? (
+                    <Tag color="orange" style={{ borderRadius: 999, marginInlineEnd: 0, fontSize: 11 }}>
+                      数据可能已过期
+                    </Tag>
+                  ) : (
+                    <Text style={{ fontSize: 12, fontWeight: 600, color: changeColor }}>{change}</Text>
+                  )}
                 </div>
               </div>
             </Col>
@@ -612,40 +672,6 @@ export function DashboardPage() {
             ))}
           </div>
 
-          <div style={{ display: "flex", alignItems: "baseline", gap: 10, margin: "20px 0 12px" }}>
-            <Text strong style={{ fontSize: 16 }}>
-              功能规划
-            </Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {LIVE_MODULES.size} 个模块已上线，其余开发中
-            </Text>
-          </div>
-          <div
-            style={{
-              border: "1px solid var(--ops-border)",
-              borderRadius: "var(--ops-radius-lg)",
-              background: "var(--ops-card-bg)",
-              boxShadow: "var(--ops-shadow-sm)",
-              padding: "14px 18px",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-            }}
-          >
-            {MODULES.map((module) => {
-              const live = LIVE_MODULES.has(module.id);
-              return (
-                <Tag
-                  key={module.id}
-                  icon={live ? <CheckCircleOutlined /> : <ToolOutlined />}
-                  color={live ? "success" : "default"}
-                  style={{ borderRadius: 999, paddingInline: 10, marginInlineEnd: 0 }}
-                >
-                  {module.name}
-                </Tag>
-              );
-            })}
-          </div>
         </Col>
       </Row>
 

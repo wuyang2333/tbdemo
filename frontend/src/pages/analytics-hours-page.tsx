@@ -371,7 +371,7 @@ export function AnalyticsHoursPage() {
             <Button icon={<RobotOutlined />} onClick={runAI}>
               AI 时段解读
             </Button>
-            <HourlyPushButton />
+            <HourlyPushButton scope="hours" />
             <Button icon={<ReloadOutlined />} onClick={() => load(storeId)}>
               刷新
             </Button>

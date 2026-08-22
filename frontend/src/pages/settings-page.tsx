@@ -6,7 +6,7 @@ import {
   ThunderboltOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
-import { Avatar, Button, Card, Col, Form, Input, Row, Select, Space, Switch, Table, Tag, Typography, Upload, message } from "antd";
+import { Alert, Avatar, Button, Card, Col, Form, Input, Row, Select, Space, Switch, Table, Tag, Typography, Upload, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
@@ -23,11 +23,25 @@ type ReportPushConfig = {
 };
 
 type HourlyPushConfig = {
-  enabled: boolean;
   token: string;
   webhook: string;
   channel: "pushplus" | "webhook" | "both";
-  rules: unknown[];
+  enabled_page_count: number;
+  pages: Record<"report" | "hours" | "products" | "promotions", { enabled: boolean; rules: unknown[] }>;
+};
+
+const EMPTY_HOURLY_PAGES: HourlyPushConfig["pages"] = {
+  report: { enabled: false, rules: [] },
+  hours: { enabled: false, rules: [] },
+  products: { enabled: false, rules: [] },
+  promotions: { enabled: false, rules: [] },
+};
+
+const HOURLY_PAGE_LABELS: Record<keyof HourlyPushConfig["pages"], string> = {
+  report: "经营日报",
+  hours: "时段分析",
+  products: "商品分析",
+  promotions: "推广计划",
 };
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => ({
@@ -47,11 +61,11 @@ const HOURLY_CHANNEL_OPTIONS = [
 export function SettingsPage() {
   const [report, setReport] = useState<ReportPushConfig>({ enabled: false, webhook: "", hour: 9, minute: 0 });
   const [hourly, setHourly] = useState<HourlyPushConfig>({
-    enabled: false,
     token: "",
     webhook: "",
     channel: "pushplus",
-    rules: [],
+    enabled_page_count: 0,
+    pages: EMPTY_HOURLY_PAGES,
   });
   const [reportSaving, setReportSaving] = useState(false);
   const [hourlySaving, setHourlySaving] = useState(false);
@@ -199,7 +213,11 @@ export function SettingsPage() {
   const saveHourly = async () => {
     setHourlySaving(true);
     try {
-      const { data } = await http.put<HourlyPushConfig>("/alerts/hourly-push-config", hourly);
+      const { data } = await http.put<HourlyPushConfig>("/alerts/hourly-push-config", {
+        token: hourly.token,
+        webhook: hourly.webhook,
+        channel: hourly.channel,
+      });
       setHourly(data);
       message.success("小时异常推送配置已保存");
     } catch (error) {
@@ -306,13 +324,12 @@ export function SettingsPage() {
             }
           >
             <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <Text>启用小时级推送</Text>
-                <Switch
-                  checked={hourly.enabled}
-                  onChange={(enabled) => setHourly({ ...hourly, enabled })}
-                />
-              </div>
+              <Alert
+                type="info"
+                showIcon
+                message="这里统一管理接收渠道"
+                description="各页面是否启用、监控哪些指标和阈值，分别在对应页面的“小时推送”中设置。"
+              />
               <div>
                 <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
                   推送渠道（可二选一或同时推送）
@@ -348,9 +365,18 @@ export function SettingsPage() {
                   />
                 </div>
               )}
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                已配置 {hourly.rules.length} 条小时规则；规则明细请到「数据洞察 → 小时推送」维护。
-              </Text>
+              <div>
+                <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+                  已启用 {hourly.enabled_page_count} 个页面
+                </Text>
+                <Space wrap>
+                  {(Object.keys(HOURLY_PAGE_LABELS) as Array<keyof HourlyPushConfig["pages"]>).map((scope) => (
+                    <Tag key={scope} color={hourly.pages[scope]?.enabled ? "success" : "default"}>
+                      {HOURLY_PAGE_LABELS[scope]} · {hourly.pages[scope]?.enabled ? `${hourly.pages[scope].rules.length} 条规则` : "未启用"}
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
               <Space>
                 <Button type="primary" loading={hourlySaving} onClick={saveHourly}>
                   保存
@@ -358,7 +384,7 @@ export function SettingsPage() {
                 <Button
                   icon={<BellOutlined />}
                   loading={testing === "hourly"}
-                  disabled={!hourly.token}
+                  disabled={(hourly.channel === "pushplus" && !hourly.token) || (hourly.channel === "webhook" && !hourly.webhook) || (hourly.channel === "both" && (!hourly.token || !hourly.webhook))}
                   onClick={() => testPush("hourly")}
                 >
                   测试推送

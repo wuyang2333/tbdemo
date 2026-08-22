@@ -19,6 +19,14 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
+from backend.app.core.scrape_guard import exclusive_scrape
+from backend.app.core.scrape_resilience import (
+    ensure_login_available,
+    is_login_error,
+    retry_with_backoff,
+    trip_login_circuit,
+)
+
 # 项目内内置的 sycm-cli（MIT 协议，见 backend/sycm_cli/LICENSE）
 CLI_DIR = Path(__file__).resolve().parent.parent.parent / "sycm_cli"
 CLI_SCRIPT = CLI_DIR / "sycm_cli.py"
@@ -82,17 +90,18 @@ def _run_cli(
         raise SycmError("生意参谋组件缺失，请先更新程序")
     cmd = [str(PYTHON), str(CLI_SCRIPT), *args]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            input=input_data.encode("utf-8") if input_data else None,
-            timeout=timeout,
-            env=_ENV,
-            cwd=str(CLI_DIR),
-        )
+        with exclusive_scrape():
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                input=input_data.encode("utf-8") if input_data else None,
+                timeout=timeout,
+                env=_ENV,
+                cwd=str(CLI_DIR),
+            )
     except FileNotFoundError as exc:
         raise SycmError(f"无法启动 Python：{exc}") from exc
     except subprocess.TimeoutExpired as exc:
@@ -126,16 +135,40 @@ def _ensure_profile(store: dict) -> None:
         raise SycmError("该店铺还没有绑定生意参谋登录，请先点「打开浏览器登录」")
 
 
-def _run_api_json(args: list[str], timeout: float = 120) -> dict:
+def _run_api_json_once(args: list[str], timeout: float = 120) -> dict:
     """运行 CLI 的 api 命令并解析返回 JSON。"""
     out, err, code = _run_cli(args, timeout=timeout)
     if code != 0:
         text = (err or out or "").strip().replace("\n", "；")
         raise SycmError(_friendly_error(text))
     try:
-        return json.loads(out)
+        payload = json.loads(out)
     except ValueError as exc:
         raise SycmError("生意参谋返回异常，请稍后再试") from exc
+    _check_content(payload)
+    return payload
+
+
+def _store_id_from_args(args: list[str]) -> int | None:
+    try:
+        profile = args[args.index("--store") + 1]
+        return int(profile.removeprefix("store_"))
+    except (ValueError, IndexError):
+        return None
+
+
+def _run_api_json(args: list[str], timeout: float = 120) -> dict:
+    store_id = _store_id_from_args(args)
+    if store_id is None:
+        return retry_with_backoff(lambda: _run_api_json_once(args, timeout))
+    profile = profile_path(store_id)
+    ensure_login_available("sycm", store_id, profile, SycmError)
+    try:
+        return retry_with_backoff(lambda: _run_api_json_once(args, timeout))
+    except SycmError as exc:
+        if is_login_error(exc):
+            trip_login_circuit("sycm", store_id, profile, str(exc))
+        raise
 
 
 def _check_content(payload: dict) -> None:
@@ -156,6 +189,19 @@ def _to_num(value, default: float = 0.0) -> float:
 def _take(item: dict, field: str):
     """从 {字段: {value, cycleCrc}} 结构里取值。"""
     return (item.get(field) or {}).get("value")
+
+
+def _require_metrics(block, fields: tuple[str, ...], source: str) -> dict:
+    if not isinstance(block, dict):
+        raise SycmError(f"{source}接口结构已变化（指标块缺失）")
+    missing = [
+        field
+        for field in fields
+        if not isinstance(block.get(field), dict) or "value" not in block[field]
+    ]
+    if missing:
+        raise SycmError(f"{source}接口结构已变化（缺少 {', '.join(missing)}）")
+    return block
 
 
 def _norm_img(url: str) -> str:
@@ -194,7 +240,11 @@ def _run_live_overview(store: dict, timeout: float = 120) -> dict:
 def _parse_live_overview(payload: dict) -> dict:
     _check_content(payload)
     data = (payload.get("content") or {}).get("data") or {}
-    today = (data.get("data") or {}).get("today") or {}
+    today = _require_metrics(
+        (data.get("data") or {}).get("today"),
+        ("uv", "pv", "payAmt", "payByrCnt", "payRate"),
+        "生意参谋实时概览",
+    )
     return {
         "visitors": int(_to_num(_take(today, "uv"))),
         "pv": int(_to_num(_take(today, "pv"))),
@@ -233,7 +283,11 @@ def _run_day_overview(store: dict, target_date: str, timeout: float = 120) -> di
 def _parse_day_overview(payload: dict) -> dict:
     _check_content(payload)
     data = (payload.get("content") or {}).get("data") or {}
-    self_ = data.get("self") or {}
+    self_ = _require_metrics(
+        data.get("self"),
+        ("uv", "pv", "payAmt", "payByrCnt", "payRate"),
+        "生意参谋日概览",
+    )
     return {
         "visitors": int(_to_num(_take(self_, "uv"))),
         "pv": int(_to_num(_take(self_, "pv"))),
@@ -287,6 +341,8 @@ def _verify_profile(store: dict, name: str) -> dict:
             }
         except SycmError as exc:
             last_error = str(exc)
+            if is_login_error(exc):
+                raise
             time.sleep(3 + attempt * 4)  # 3,7,11,15,19 → 最多约 55 秒重试窗口
     raise SycmError(last_error or "登录成功但实时数据验证失败，请点击「测试」确认后保存")
 
@@ -337,8 +393,16 @@ def fetch_hourly(store: dict, timeout: float = 120) -> list[dict]:
         ],
         timeout=timeout,
     )
+    _check_content(payload)
     content = payload.get("content") or {}
     data = (content.get("data") or {}).get("data") or {}
+    today_block = data.get("today")
+    if not isinstance(today_block, dict):
+        raise SycmError("生意参谋分时接口结构已变化（今日数据缺失）")
+    required_series = ("uv", "pv", "payAmt", "payByrCnt")
+    missing_series = [name for name in required_series if not isinstance(today_block.get(name), list)]
+    if missing_series:
+        raise SycmError(f"生意参谋分时接口结构已变化（缺少 {', '.join(missing_series)}）")
     today = date.today()
     out: list[dict] = []
     for label, offset in (("today", 0), ("yesterday", 1)):
@@ -409,9 +473,13 @@ def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> lis
             ],
             timeout=timeout,
         )
-        data = payload.get("data") or {}
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise SycmError("生意参谋商品日榜接口结构已变化（data 缺失）")
         rows = data.get("data") or []
-        if not isinstance(rows, list) or not rows:
+        if not isinstance(rows, list):
+            raise SycmError("生意参谋商品日榜接口结构已变化（列表缺失）")
+        if not rows:
             break
         for r in rows:
             if not isinstance(r, dict):
@@ -540,10 +608,16 @@ def fetch_item_realtime(store: dict, index: str = "payAmt", timeout: float = 120
             ],
             timeout=timeout,
         )
-        data = payload.get("data") or {}
-        inner = data.get("data") or {}
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise SycmError("生意参谋商品实时榜接口结构已变化（data 缺失）")
+        inner = data.get("data")
+        if not isinstance(inner, dict):
+            raise SycmError("生意参谋商品实时榜接口结构已变化（结果缺失）")
         rows = inner.get("data") or []
-        if not isinstance(rows, list) or not rows:
+        if not isinstance(rows, list):
+            raise SycmError("生意参谋商品实时榜接口结构已变化（列表缺失）")
+        if not rows:
             break
 
         def _id(x) -> str:

@@ -52,8 +52,9 @@ from backend.app.api.stores import (
     sync_refund_all,
     sync_items_daily_all,
     sync_items_realtime_all,
+    sync_operational_status_all,
 )
-from backend.app.core import loops
+from backend.app.core import loops, maintenance
 from backend.app.core.db import DB_PATH, connect_db, init_db
 from backend.app.core.modules import get_modules
 
@@ -132,7 +133,11 @@ async def _backup_loop() -> None:
     """数据库自动备份：每天一次。"""
     await asyncio.sleep(60)
     while True:
+        if maintenance.is_task_paused("backup"):
+            await asyncio.sleep(86400)
+            continue
         _start = time.monotonic()
+        loops.mark_running("backup")
         try:
             await asyncio.to_thread(_run_db_backup_once)
             loops.record_success("backup", time.monotonic() - _start)
@@ -145,7 +150,11 @@ async def _cleanup_loop() -> None:
     """数据保留清理：每天一次。"""
     await asyncio.sleep(120)
     while True:
+        if maintenance.is_task_paused("data_cleanup"):
+            await asyncio.sleep(86400)
+            continue
         _start = time.monotonic()
+        loops.mark_running("data_cleanup")
         try:
             await asyncio.to_thread(_run_data_cleanup_once)
             loops.record_success("data_cleanup", time.monotonic() - _start)
@@ -158,7 +167,11 @@ async def _log_rotate_loop() -> None:
     """日志轮转：每天一次。"""
     await asyncio.sleep(180)
     while True:
+        if maintenance.is_task_paused("log_rotate"):
+            await asyncio.sleep(86400)
+            continue
         _start = time.monotonic()
+        loops.mark_running("log_rotate")
         try:
             await asyncio.to_thread(_run_log_rotate_once)
             loops.record_success("log_rotate", time.monotonic() - _start)
@@ -170,7 +183,11 @@ async def _log_rotate_loop() -> None:
 async def _inspect_loop() -> None:
     """店铺自动巡检：每 5 分钟检查一次授权与健康状态。"""
     while True:
+        if maintenance.is_task_paused("inspect"):
+            await asyncio.sleep(300)
+            continue
         _start = time.monotonic()
+        loops.mark_running("inspect")
         try:
             run_inspect_once()
             loops.record_success("inspect", time.monotonic() - _start)
@@ -193,7 +210,7 @@ def _run_sycm_sync() -> None:
 _midnight_backfilled_key: str = ""
 
 
-def _sync_store_daily_step(conn) -> None:
+def _sync_store_daily_step(conn) -> dict | None:
     """店铺日数据同步：凌晨 0-1 点改补昨日完整日（按天接口），其余时间写今日实时累计。
 
     避免凌晨 00:00 用「今日实时接口」写入昨天的不完整快照，导致昨日行被错误数据冻结。
@@ -203,10 +220,28 @@ def _sync_store_daily_step(conn) -> None:
     if now.hour < 1:
         key = (now - timedelta(days=1)).strftime("%Y-%m-%d")
         if _midnight_backfilled_key != key:
-            backfill_store_daily(conn, days=1)
+            result = backfill_store_daily(conn, days=1)
             _midnight_backfilled_key = key
+            return result
     else:
-        sync_all_stores(conn)
+        return sync_all_stores(conn)
+
+
+def _sync_result_error(result) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    total = result.get("total")
+    ok = result.get("ok")
+    if not isinstance(total, int) or not isinstance(ok, int) or ok >= total:
+        return None
+    failures = [item for item in result.get("results") or [] if not item.get("ok")]
+    reasons = [
+        f"{item.get('store_name') or item.get('store_id') or '店铺'}: {item.get('error') or '失败'}"
+        for item in failures[:2]
+    ]
+    detail = "；".join(reasons)
+    summary = f"成功 {ok}/{total}"
+    return f"{summary}（{detail}）" if detail else summary
 
 
 def _run_realtime_sync() -> None:
@@ -221,15 +256,19 @@ def _run_realtime_sync() -> None:
         ("推广实时分时", lambda: sync_promo_realtime_all(conn)),
         ("商品实时", lambda: sync_items_realtime_all(conn)),
         ("商品级推广", lambda: sync_promo_items_realtime_all(conn)),
-        ("推广计划统计", lambda: sync_plans("realtime", None, conn)),
+        ("千牛经营状态", lambda: sync_operational_status_all(conn)),
+        ("推广计划统计", lambda: sync_plans(mode="realtime", store_id=None, user=None, db=conn)),
         ("流量来源", lambda: sync_flow_source_all(conn)),
         ("今日退款", lambda: sync_refund_all(conn)),
     ]
     errors: list[str] = []
     for step_name, fn in steps:
         try:
-            fn()
+            result = fn()
             conn.commit()
+            partial_error = _sync_result_error(result)
+            if partial_error:
+                errors.append(f"{step_name}: {partial_error}")
         except Exception as e:
             errors.append(f"{step_name}: {e}")
             try:
@@ -245,13 +284,46 @@ async def _realtime_sync_loop() -> None:
     """数据自动同步：每 3 分钟同步一次所有数据，保持页面实时刷新。"""
     await asyncio.sleep(30)  # 启动后先等服务就绪，避免开机即抢占资源
     while True:
+        if maintenance.is_task_paused("realtime_sync"):
+            await asyncio.sleep(180)
+            continue
         _start = time.monotonic()
+        loops.mark_running("realtime_sync")
         try:
             await asyncio.to_thread(_run_realtime_sync)
             loops.record_success("realtime_sync", time.monotonic() - _start)
         except Exception as _e:
             loops.record_error("realtime_sync", _e, time.monotonic() - _start)
         await asyncio.sleep(180)
+
+
+def _run_product_catalog_sync() -> None:
+    conn = connect_db()
+    try:
+        result = products.sync_catalog_all(conn)
+        conn.commit()
+        partial_error = _sync_result_error(result)
+        if partial_error:
+            raise RuntimeError(partial_error)
+    finally:
+        conn.close()
+
+
+async def _product_catalog_loop() -> None:
+    """在售商品列表每 15 分钟同步，避免高频翻页请求淘宝。"""
+    await asyncio.sleep(75)
+    while True:
+        if maintenance.is_task_paused("product_catalog_sync"):
+            await asyncio.sleep(900)
+            continue
+        started = time.monotonic()
+        loops.mark_running("product_catalog_sync")
+        try:
+            await asyncio.to_thread(_run_product_catalog_sync)
+            loops.record_success("product_catalog_sync", time.monotonic() - started)
+        except Exception as exc:
+            loops.record_error("product_catalog_sync", exc, time.monotonic() - started)
+        await asyncio.sleep(900)
 
 
 def _run_report_push_once() -> None:
@@ -284,7 +356,11 @@ async def _report_push_loop() -> None:
     """日报推送循环：每分钟检查一次是否到点。"""
     await asyncio.sleep(25)
     while True:
+        if maintenance.is_task_paused("report_push"):
+            await asyncio.sleep(60)
+            continue
         _start = time.monotonic()
+        loops.mark_running("report_push")
         try:
             await asyncio.to_thread(_run_report_push_once)
             loops.record_success("report_push", time.monotonic() - _start)
@@ -297,10 +373,10 @@ def _run_hourly_push_once() -> None:
     """小时异常推送：检查上个小时数据，触发规则则推送到微信（pushplus）。异常向上抛给循环层记录。"""
     conn = connect_db()
     try:
-        from backend.app.api.alerts import _hourly_push_config, check_hourly_rules, send_hourly_push
+        from backend.app.api.alerts import _hourly_push_config, check_hourly_rules, hourly_channel_ready, send_hourly_push
 
         cfg = _hourly_push_config(conn)
-        if not cfg.get("enabled") or not cfg.get("token"):
+        if not cfg.get("enabled") or not hourly_channel_ready(cfg):
             return
         messages = check_hourly_rules(conn, cfg)
         if messages:
@@ -329,9 +405,15 @@ async def _hourly_push_loop() -> None:
 
             now = datetime.now()
             key = now.strftime("%Y-%m-%d %H")
+            if maintenance.is_task_paused("hourly_push"):
+                if now.minute >= 5:
+                    last_key = key
+                await asyncio.sleep(60)
+                continue
             if now.minute >= 5 and last_key != key:
                 last_key = key
                 _start = time.monotonic()
+                loops.mark_running("hourly_push")
                 try:
                     await asyncio.to_thread(_run_hourly_push_once)
                     loops.record_success("hourly_push", time.monotonic() - _start)
@@ -355,10 +437,10 @@ def _run_promo_daily_once() -> None:
         conn.commit()
         # 推广计划统计（昨日/近7天）与商品级推广（昨日/7/14/30天）：此前只靠手动同步，这里纳入每日自动补数
         for _m in ("yesterday", "7d"):
-            sync_plans(_m, None, conn)
+            sync_plans(mode=_m, store_id=None, user=None, db=conn)
             conn.commit()
         for _m in ("yesterday", "7", "14", "30"):
-            sync_items(_m, None, conn)
+            sync_items(mode=_m, user=None, db=conn)
             conn.commit()
     finally:
         conn.close()
@@ -376,6 +458,11 @@ async def _promo_daily_loop() -> None:
         now = datetime.now()
         key = now.strftime("%Y-%m-%d")
         should_run = (now.hour == 9) or not last_key
+        if maintenance.is_task_paused("promo_daily"):
+            if should_run:
+                last_key = key
+            await asyncio.sleep(60)
+            continue
         if should_run and last_key != key:
             last_key = key
             _start = time.monotonic()
@@ -389,27 +476,63 @@ async def _promo_daily_loop() -> None:
         await asyncio.sleep(60)
 
 
+_RESUME_RUNNERS = {
+    "inspect": run_inspect_once,
+    "realtime_sync": _run_realtime_sync,
+    "product_catalog_sync": _run_product_catalog_sync,
+    "promo_daily": _run_promo_daily_once,
+    "backup": _run_db_backup_once,
+    "data_cleanup": _run_data_cleanup_once,
+    "log_rotate": _run_log_rotate_once,
+}
+
+
+async def _maintenance_loop() -> None:
+    """处理定时恢复，并按恢复策略补跑适合立即执行的任务。"""
+    while True:
+        try:
+            maintenance.get_maintenance(auto_resume=True)
+            for name in maintenance.claim_pending_resume_tasks():
+                runner = _RESUME_RUNNERS.get(name)
+                if runner is None:
+                    continue
+                started = time.monotonic()
+                loops.mark_running(name)
+                try:
+                    await asyncio.to_thread(runner)
+                    loops.record_success(name, time.monotonic() - started, trigger="resume")
+                except Exception as exc:
+                    loops.record_error(name, exc, time.monotonic() - started, trigger="resume")
+        except Exception as exc:
+            loops.log_event("maintenance", f"维护状态检查失败：{exc}")
+        await asyncio.sleep(10)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for _name in ("inspect", "realtime_sync", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
+    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
         loops.register(_name)
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
+    product_catalog_task = asyncio.create_task(_product_catalog_loop())
     push_task = asyncio.create_task(_report_push_loop())
     hourly_push_task = asyncio.create_task(_hourly_push_loop())
     promo_task = asyncio.create_task(_promo_daily_loop())
     backup_task = asyncio.create_task(_backup_loop())
     cleanup_task = asyncio.create_task(_cleanup_loop())
     rotate_task = asyncio.create_task(_log_rotate_loop())
+    maintenance_task = asyncio.create_task(_maintenance_loop())
     yield
     task.cancel()
     realtime_task.cancel()
+    product_catalog_task.cancel()
     push_task.cancel()
     hourly_push_task.cancel()
     promo_task.cancel()
     backup_task.cancel()
     cleanup_task.cancel()
     rotate_task.cancel()
+    maintenance_task.cancel()
 
 
 def create_app() -> FastAPI:

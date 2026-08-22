@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
-import http from "./api";
+import http, { CURRENT_STORE_KEY } from "./api";
 import { useAuth } from "./auth";
 import type { Store } from "../types";
 
@@ -25,6 +25,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!user) {
       setStores([]);
       setCurrentStore(null);
+      localStorage.removeItem(CURRENT_STORE_KEY);
       return;
     }
     setLoading(true);
@@ -35,9 +36,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ]);
       setStores(listRes.data.items);
       setCurrentStore(currentRes.data.store);
+      if (currentRes.data.store) localStorage.setItem(CURRENT_STORE_KEY, String(currentRes.data.store.id));
+      else localStorage.removeItem(CURRENT_STORE_KEY);
     } catch {
       setStores([]);
       setCurrentStore(null);
+      localStorage.removeItem(CURRENT_STORE_KEY);
     } finally {
       setLoading(false);
     }
@@ -51,6 +55,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (storeId: number | null) => {
       await http.post("/stores/current", { store_id: storeId });
       await refresh();
+      window.dispatchEvent(new CustomEvent("tb-store-scope-change", { detail: { storeId } }));
     },
     [refresh]
   );

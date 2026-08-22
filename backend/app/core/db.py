@@ -660,6 +660,65 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS sync_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                trigger TEXT NOT NULL DEFAULT 'auto',
+                store_id INTEGER,
+                started_at TEXT,
+                finished_at TEXT NOT NULL,
+                duration REAL NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sync_runs_name_finished ON sync_runs(name, finished_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sync_runs_store_finished ON sync_runs(store_id, finished_at DESC)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS store_operational_status (
+                store_id INTEGER PRIMARY KEY,
+                pending_shipments INTEGER NOT NULL DEFAULT 0,
+                product_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS store_products (
+                store_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                category_id TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                image TEXT NOT NULL DEFAULT '',
+                price REAL NOT NULL DEFAULT 0,
+                stock INTEGER NOT NULL DEFAULT 0,
+                sold_quantity INTEGER NOT NULL DEFAULT 0,
+                monthly_sold INTEGER NOT NULL DEFAULT 0,
+                quality_score REAL NOT NULL DEFAULT 0,
+                shelf_at TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '出售中',
+                detail_url TEXT NOT NULL DEFAULT '',
+                edit_url TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (store_id, item_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_store_products_title ON store_products(title)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_store_products_synced_at ON store_products(synced_at)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS gifts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,

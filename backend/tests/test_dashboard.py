@@ -28,10 +28,9 @@ def test_dashboard_aggregates_real_data(client, admin_token):
     )
     conn.execute(
         """
-        INSERT INTO store_item_daily
-        (store_id, item_id, item_title, data_date, sales, orders, visitors, created_at)
-        VALUES (1, 'i1', '商品一', '2026-08-16', 100, 10, 50, '2026-08-17T00:00:00'),
-               (1, 'i2', '商品二', '2026-08-16', 50, 5, 20, '2026-08-17T00:00:00')
+        INSERT INTO store_operational_status
+        (store_id, pending_shipments, product_count, updated_at)
+        VALUES (1, 7, 180, '2026-08-17T00:00:00')
         """
     )
     conn.commit()
@@ -41,7 +40,17 @@ def test_dashboard_aggregates_real_data(client, admin_token):
     data = client.get("/api/dashboard", headers={"Authorization": f"Bearer {token}"}).json()
     assert data["store_count"] >= 1  # 测试库含演示店铺
     assert data["data_date"] == "2026-08-16"
-    assert data["product_count"] == 2
+    assert data["product_count"] == 180
+    assert data["pending_shipments"] == 7
+    assert data["operational_updated_at"] == "2026-08-17T00:00:00"
+    assert data["operational_stale"] is True
     assert data["today_sales"] == 150
     assert data["today_orders"] == 15
     assert data["today_visitors"] == 70
+
+    scoped = client.get(
+        "/api/dashboard?store_id=1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert scoped.status_code == 200
+    assert scoped.json()["store_count"] == 1

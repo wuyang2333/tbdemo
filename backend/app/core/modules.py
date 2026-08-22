@@ -18,7 +18,7 @@ MODULES: list[dict[str, str]] = [
     {"id": "promotions", "name": "推广管理", "description": "直通车/引力魔方/万相台推广计划", "icon": "promotion"},
     {"id": "content", "name": "内容运营", "description": "素材库、内容创作、AI 图文/短视频", "icon": "content"},
     {"id": "monitoring", "name": "竞品监控", "description": "关键词/店铺/商品监控与快照", "icon": "monitor"},
-    {"id": "tasks", "name": "任务中心", "description": "全量任务审计、调度器状态、重试", "icon": "task"},
+    {"id": "tasks", "name": "系统任务", "description": "后台任务状态、执行历史与重试", "icon": "task"},
     {"id": "model-configs", "name": "模型配置", "description": "AI 模型接入（OpenAI 兼容 / 阿里云百炼等）", "icon": "api"},
     {"id": "settings", "name": "设置", "description": "系统设置与偏好", "icon": "settings"},
     {"id": "profile", "name": "个人中心", "description": "个人资料、头像与密码管理", "icon": "profile"},

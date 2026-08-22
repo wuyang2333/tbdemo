@@ -67,7 +67,7 @@ def mark_running(name: str) -> None:
         st["last_started"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def record_success(name: str, duration: float) -> dict:
+def record_success(name: str, duration: float, trigger: str = "auto", store_id: int | None = None) -> dict:
     st = _init(name)
     with _lock:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -79,12 +79,24 @@ def record_success(name: str, duration: float) -> dict:
         st["success_count"] += 1
         st["last_duration"] = round(duration, 1)
         st["running"] = False
+        started_at = st["last_started"]
     _logger.debug("%s 成功（%.1fs）", name, duration)
+    _persist_run(name, "success", trigger, store_id, started_at, duration, "")
     return st
 
 
-def record_error(name: str, exc: BaseException, duration: float) -> dict:
+def record_error(name: str, exc: BaseException, duration: float, trigger: str = "auto", store_id: int | None = None) -> dict:
     st = _init(name)
+    try:
+        from backend.app.core.maintenance import is_task_paused
+
+        if is_task_paused(name):
+            with _lock:
+                st["running"] = False
+            _logger.info("[%s] 维护期间执行结束，失败状态未累计：%s", name, str(exc)[:200])
+            return st
+    except Exception:
+        pass
     with _lock:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         st["last_run"] = now
@@ -95,7 +107,9 @@ def record_error(name: str, exc: BaseException, duration: float) -> dict:
         st["running"] = False
         count = st["error_count"]
         err = st["last_error"]
+        started_at = st["last_started"]
     _logger.error("%s 失败（连续 %d 次，%.1fs）：%s", name, count, duration, err)
+    _persist_run(name, "error", trigger, store_id, started_at, duration, err)
     if count % 3 == 0:
         _try_alert(name, err, count)
     return st
@@ -113,6 +127,43 @@ def get_status(name: str) -> dict:
 def get_all_status() -> list[dict]:
     with _lock:
         return [dict(st) for st in _loops.values()]
+
+
+def _persist_run(
+    name: str,
+    status: str,
+    trigger: str,
+    store_id: int | None,
+    started_at: str | None,
+    duration: float,
+    error: str,
+) -> None:
+    conn = None
+    try:
+        conn = connect_db()
+        conn.execute(
+            """
+            INSERT INTO sync_runs
+                (name, status, trigger, store_id, started_at, finished_at, duration, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                status,
+                trigger,
+                store_id,
+                started_at,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                round(duration, 1),
+                (error or "")[:500],
+            ),
+        )
+        conn.commit()
+    except Exception:
+        _logger.exception("[%s] 同步历史写入失败", name)
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _try_alert(name: str, error: str, count: int) -> None:

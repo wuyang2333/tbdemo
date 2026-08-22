@@ -14,6 +14,7 @@ import { buildRuleMessage, evalRule, ruleText } from "../lib/alert-rules";
 import { PageHeader } from "../components/ui/page-header";
 import { MODE_OPTIONS, LineChart, PlanNoteCell, PlanTagCell, SCENE_OPTIONS, fmtInt, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoPlan } from "../types";
+import { useStores } from "../lib/store";
 
 const { Text } = Typography;
 
@@ -63,6 +64,7 @@ function ChangeBadge({ change, unit = "%" }: { change: number | null | undefined
 
 
 export function PromotionsPlansPage() {
+  const { currentStore } = useStores();
   const [plans, setPlans] = useState<PromoPlan[]>([]);
   const [lastUpdated, setLastUpdated] = useState("");
   const [scene, setScene] = useState("");
@@ -114,7 +116,8 @@ export function PromotionsPlansPage() {
   const load = useCallback(async (sc: string, m: string) => {
     setLoading(true);
     try {
-      const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}&mode=${encodeURIComponent(m)}`);
+      const scope = currentStore ? `&store_id=${currentStore.id}` : "";
+      const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}&mode=${encodeURIComponent(m)}${scope}`);
       setPlans(data.items);
       setLastUpdated(dayjs().format("HH:mm:ss"));
       try {
@@ -129,7 +132,7 @@ export function PromotionsPlansPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentStore?.id]);
 
   useEffect(() => {
     load(scene, mode);
@@ -162,7 +165,7 @@ export function PromotionsPlansPage() {
   const exportPlans = async () => {
     try {
       const token = localStorage.getItem(TOKEN_KEY);
-      const response = await fetch(`/api/promotions/plans/export?mode=${encodeURIComponent(mode)}`, {
+      const response = await fetch(`/api/promotions/plans/export?mode=${encodeURIComponent(mode)}${currentStore ? `&store_id=${currentStore.id}` : ""}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("导出失败");
@@ -227,7 +230,7 @@ export function PromotionsPlansPage() {
     setSyncing(true);
     try {
       const { data } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
-        `/promotions/sync-plans?mode=${encodeURIComponent(mode)}`
+        `/promotions/sync-plans?mode=${encodeURIComponent(mode)}${currentStore ? `&store_id=${currentStore.id}` : ""}`
       );
       showSyncFeedback("计划同步", [{ ok: data.ok, total: data.total, results: data.results }]);
       await load(scene, mode);
@@ -535,7 +538,7 @@ export function PromotionsPlansPage() {
             <Button icon={<DownloadOutlined />} onClick={exportPlans}>
               导出
             </Button>
-            <HourlyPushButton />
+            <HourlyPushButton scope="promotions" />
             <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新
             </Button>

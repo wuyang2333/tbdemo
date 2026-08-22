@@ -5,11 +5,13 @@ import type { ModuleData, ModuleMeta } from "../types";
 
 export const TOKEN_KEY = "tb-workbench-token";
 export const USER_KEY = "tb-workbench-user";
+export const CURRENT_STORE_KEY = "tb-workbench-current-store";
 
 export function clearStoredAuth(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(CURRENT_STORE_KEY);
 }
 
 export function getApiErrorMessage(error: unknown): string {
@@ -28,6 +30,12 @@ const http = axios.create({
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  const storeId = localStorage.getItem(CURRENT_STORE_KEY);
+  const url = config.url ?? "";
+  const scoped = url.startsWith("/dashboard") || url.startsWith("/products") || url.startsWith("/analytics/") || url.startsWith("/promotions/");
+  if (config.method?.toLowerCase() === "get" && storeId && scoped && !url.includes("store_id=")) {
+    config.params = { ...(config.params ?? {}), store_id: Number(storeId) };
+  }
   return config;
 });
 

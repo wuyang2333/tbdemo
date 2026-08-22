@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user, visible_store_ids
@@ -12,8 +12,8 @@ from backend.app.core.db import get_db
 router = APIRouter()
 
 
-ALLOWED_WIDGETS = {"kpis", "stores", "shortcuts", "system", "notice", "tasks", "changelog"}
-DEFAULT_WIDGETS = ["kpis", "shortcuts", "system", "notice", "tasks", "changelog"]
+ALLOWED_WIDGETS = {"actions", "kpis", "stores", "shortcuts", "system", "notice", "tasks", "changelog"}
+DEFAULT_WIDGETS = ["actions", "kpis", "shortcuts", "system", "notice", "tasks", "changelog"]
 
 
 class DashboardConfigIn(BaseModel):
@@ -75,6 +75,7 @@ def save_dashboard_config(
 
 @router.get("")
 def overview(
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -87,13 +88,23 @@ def overview(
         "today_sales": 0,
         "today_visitors": 0,
         "pending_shipments": 0,
+        "operational_updated_at": None,
+        "operational_stale": True,
         "data_date": None,
         "message": "暂无店铺权限，请联系管理员分配店铺",
     }
     if visible is not None and not visible:
         return empty
 
-    if visible is not None:
+    if store_id is not None:
+        if visible is not None and store_id not in visible:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+        exists = db.execute("SELECT 1 FROM stores WHERE id = ?", (store_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="店铺不存在")
+        sf = f" AND store_id = {int(store_id)}"
+        store_count = 1
+    elif visible is not None:
         sf = " AND store_id IN (" + ",".join(str(i) for i in visible) + ")"
         store_count = len(visible)
     else:
@@ -257,23 +268,29 @@ def overview(
             }
         )
 
-    product_latest = db.execute(
-        "SELECT MAX(data_date) AS d FROM store_item_daily WHERE 1=1" + sf
-    ).fetchone()["d"]
-    product_count = 0
-    if product_latest:
-        product_count = db.execute(
-            "SELECT COUNT(DISTINCT item_id) AS c FROM store_item_daily WHERE data_date = ?"
-            + sf,
-            (product_latest,),
-        ).fetchone()["c"]
-
-    pending = db.execute(
-        "SELECT COUNT(*) AS c FROM gifts WHERE status = 'pending'" + sf
-    ).fetchone()["c"]
+    operational = db.execute(
+        """
+        SELECT COALESCE(SUM(pending_shipments), 0) AS pending_shipments,
+               COALESCE(SUM(product_count), 0) AS product_count,
+               MIN(updated_at) AS updated_at,
+               COUNT(*) AS status_count
+        FROM store_operational_status
+        WHERE 1=1
+        """
+        + sf
+    ).fetchone()
+    operational_updated_at = operational["updated_at"]
+    try:
+        operational_age = datetime.now() - datetime.fromisoformat(operational_updated_at)
+    except (TypeError, ValueError):
+        operational_age = timedelta.max
+    operational_stale = (
+        operational["status_count"] < store_count
+        or operational_age > timedelta(minutes=10)
+    )
     return {
         "store_count": store_count,
-        "product_count": product_count,
+        "product_count": operational["product_count"],
         "today_orders": today_row["orders"],
         "today_sales": today_row["sales"],
         "today_visitors": today_row["visitors"],
@@ -282,11 +299,12 @@ def overview(
         "yesterday_visitors": yrow["visitors"],
         "today_real_roi": today_real_roi,
         "yesterday_real_roi": yesterday_real_roi,
-        "pending_shipments": pending,
+        "pending_shipments": operational["pending_shipments"],
         "data_date": latest,
         "hour_until": hour_until,
         "compare_mode": compare_mode,
-        "product_date": product_latest,
+        "operational_updated_at": operational_updated_at,
+        "operational_stale": operational_stale,
         "trend": trend,
         "message": f"真实数据（较昨日为{compare_mode}对比，截至 {latest} {hour_until or '全天'}）",
     }

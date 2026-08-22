@@ -3,21 +3,169 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from backend.app.api.auth import get_current_user, require_admin
+from backend.app.api.auth import get_current_user, require_admin, visible_store_ids
 from backend.app.core import loops
+from backend.app.core import maintenance
 from backend.app.core.db import get_db
+from backend.app.core.logs import log_op
 
 router = APIRouter()
+
+
+class MaintenanceIn(BaseModel):
+    enabled: bool
+    reason: str = ""
+    duration_minutes: int = 0
+    pause_tasks: list[str] = Field(default_factory=list)
+    resume_strategy: str = "next_cycle"
+
+
+@router.get("/maintenance")
+def maintenance_status(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    return maintenance.get_maintenance(db)
+
+
+@router.put("/maintenance")
+def update_maintenance(body: MaintenanceIn, actor: dict = Depends(require_admin), db=Depends(get_db)) -> dict:
+    if body.duration_minutes < 0 or body.duration_minutes > 7 * 24 * 60:
+        raise HTTPException(status_code=400, detail="维护时长需在 0 到 7 天之间")
+    if body.resume_strategy not in {"next_cycle", "run_once"}:
+        raise HTTPException(status_code=400, detail="恢复策略无效")
+    unknown = [name for name in body.pause_tasks if name not in maintenance.ALL_TASKS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"未知任务：{unknown[0]}")
+    if body.enabled and not body.pause_tasks:
+        raise HTTPException(status_code=400, detail="请至少选择一项暂停任务")
+    was_enabled = maintenance.get_maintenance(db, auto_resume=False)["enabled"]
+    state = maintenance.set_maintenance(
+        db,
+        enabled=body.enabled,
+        actor=actor,
+        reason=body.reason,
+        duration_minutes=body.duration_minutes,
+        pause_tasks=body.pause_tasks,
+        resume_strategy=body.resume_strategy,
+    )
+    if body.enabled:
+        action = "maintenance_update" if was_enabled else "maintenance_enable"
+        log_op(
+            db,
+            actor,
+            "system",
+            action,
+            target_name="后台任务维护模式",
+            detail=f"原因：{state['reason']}；暂停任务：{', '.join(state['pause_tasks'])}；恢复策略：{state['resume_strategy']}",
+        )
+    return state
 
 
 @router.get("/loops")
 def loops_status(user: dict = Depends(get_current_user)) -> dict:
     """返回全部后台循环的运行状态（最后运行/成功时间、失败次数、错误信息）。"""
-    return {"items": loops.get_all_status()}
+    state = maintenance.get_maintenance()
+    items = [{**item, "paused": bool(state["enabled"] and item["name"] in state["pause_tasks"])} for item in loops.get_all_status()]
+    return {"items": items, "maintenance": state}
+
+
+@router.get("/loops/history")
+def loops_history(
+    name: str = "",
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    where = " WHERE 1=1"
+    params: list = []
+    if name:
+        where += " AND r.name = ?"
+        params.append(name)
+    visible = visible_store_ids(user)
+    if visible is not None:
+        if visible:
+            where += " AND (r.store_id IS NULL OR r.store_id IN (" + ",".join("?" for _ in visible) + "))"
+            params.extend(visible)
+        else:
+            where += " AND r.store_id IS NULL"
+    rows = db.execute(
+        """
+        SELECT r.*, s.name AS store_name
+        FROM sync_runs r
+        LEFT JOIN stores s ON s.id = r.store_id
+        """
+        + where
+        + " ORDER BY r.id DESC LIMIT ?",
+        [*params, limit],
+    ).fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
+@router.post("/loops/{name}/retry")
+def retry_loop(
+    name: str,
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    supported = {"realtime_sync", "product_catalog_sync", "promo_daily", "inspect"}
+    if name not in supported:
+        raise HTTPException(status_code=400, detail="该任务暂不支持手动重试")
+    visible = visible_store_ids(user)
+    if store_id is not None and visible is not None and store_id not in visible:
+        raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    if maintenance.is_task_paused(name, db):
+        state = maintenance.get_maintenance(db)
+        raise HTTPException(status_code=423, detail=f"任务处于维护模式，暂不可执行：{state.get('reason') or '系统维护'}")
+
+    started = time.monotonic()
+    loops.mark_running(name)
+    try:
+        if name == "product_catalog_sync":
+            from backend.app.api.products import sync_catalog_all
+
+            result = sync_catalog_all(db, store_id=store_id, user=user)
+        elif name == "realtime_sync":
+            from backend.app.api.stores import sync_all_stores, sync_store_row
+
+            if store_id is not None:
+                store = db.execute("SELECT * FROM stores WHERE id = ?", (store_id,)).fetchone()
+                if not store:
+                    raise HTTPException(status_code=404, detail="店铺不存在")
+                item = sync_store_row(db, store)
+                result = {"results": [{"store_id": store_id, "store_name": store["name"], "ok": True, "item": item}], "total": 1, "ok": 1}
+            else:
+                result = sync_all_stores(db, user)
+        elif name == "promo_daily":
+            from backend.app.main import _run_promo_daily_once
+
+            _run_promo_daily_once()
+            result = {"total": 1, "ok": 1}
+        else:
+            from backend.app.api.stores import run_inspect_once
+
+            count = run_inspect_once()
+            result = {"updated": count, "total": count, "ok": count}
+
+        if "total" in result and result.get("ok", 0) < result.get("total", 0):
+            failed = [item.get("error", "同步失败") for item in result.get("results", []) if not item.get("ok")]
+            raise RuntimeError("；".join(failed[:3]) or "部分店铺同步失败")
+        duration = time.monotonic() - started
+        loops.record_success(name, duration, trigger="manual", store_id=store_id)
+        log_op(db, user, "system", "retry_sync", target_name=name, detail=f"手动重试成功，耗时 {duration:.1f}s")
+        return {"ok": True, "result": result, "status": loops.get_status(name)}
+    except HTTPException:
+        loops.record_error(name, RuntimeError("手动重试失败"), time.monotonic() - started, trigger="manual", store_id=store_id)
+        raise
+    except Exception as exc:
+        duration = time.monotonic() - started
+        loops.record_error(name, exc, duration, trigger="manual", store_id=store_id)
+        log_op(db, user, "system", "retry_sync", target_name=name, detail=f"手动重试失败：{exc}")
+        raise HTTPException(status_code=502, detail=str(exc) or "同步重试失败") from exc
 
 
 @router.get("/version")

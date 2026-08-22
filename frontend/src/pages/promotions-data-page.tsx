@@ -9,10 +9,12 @@ import { useAutoRefresh } from "../lib/use-auto-refresh";
 import { PageHeader } from "../components/ui/page-header";
 import { LineChart, MODE_OPTIONS, SceneTable, fmtMoney } from "../components/promotions/promotions-ui";
 import type { PromoData } from "../types";
+import { useStores } from "../lib/store";
 
 const { Text } = Typography;
 
 export function PromotionsDataPage() {
+  const { currentStore } = useStores();
   const [data, setData] = useState<PromoData | null>(null);
   const [lastUpdated, setLastUpdated] = useState("");
   const [mode, setMode] = useState("realtime");
@@ -26,9 +28,10 @@ export function PromotionsDataPage() {
   const load = useCallback(async (m: string, rg?: [string, string] | null) => {
     setLoading(true);
     try {
-      let url = `/promotions/data?mode=${encodeURIComponent(m)}`;
+      const scope = currentStore ? `&store_id=${currentStore.id}` : "";
+      let url = `/promotions/data?mode=${encodeURIComponent(m)}${scope}`;
       if (m === "range" && rg) {
-        url = `/promotions/data?start=${rg[0]}&end=${rg[1]}`;
+        url = `/promotions/data?start=${rg[0]}&end=${rg[1]}${scope}`;
       }
       const { data: res } = await http.get<PromoData>(url);
       setData(res);
@@ -39,7 +42,7 @@ export function PromotionsDataPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentStore?.id]);
 
   useEffect(() => {
     load(mode, mode === "range" ? range : null);
@@ -51,7 +54,8 @@ export function PromotionsDataPage() {
     setKwLoading(true);
     setKwItems([]);
     try {
-      const { data } = await http.get<{ items: { word: string; promotion: string; spend: number; sales: number; roi: number; clicks: number; orders: number }[] }>(`/promotions/keywords?mode=${encodeURIComponent(mode)}`);
+      const scope = currentStore ? `&store_id=${currentStore.id}` : "";
+      const { data } = await http.get<{ items: { word: string; promotion: string; spend: number; sales: number; roi: number; clicks: number; orders: number }[] }>(`/promotions/keywords?mode=${encodeURIComponent(mode)}${scope}`);
       setKwItems(data.items);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -63,7 +67,8 @@ export function PromotionsDataPage() {
   const exportData = async () => {
     try {
       const token = localStorage.getItem(TOKEN_KEY);
-      const response = await fetch(`/api/promotions/export?mode=${encodeURIComponent(mode)}`, {
+      const scope = currentStore ? `&store_id=${currentStore.id}` : "";
+      const response = await fetch(`/api/promotions/export?mode=${encodeURIComponent(mode)}${scope}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("导出失败");
@@ -84,7 +89,7 @@ export function PromotionsDataPage() {
     setSyncing(true);
     try {
       const { data: res } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
-        `/promotions/sync?mode=${encodeURIComponent(mode)}`
+        `/promotions/sync?mode=${encodeURIComponent(mode)}${currentStore ? `&store_id=${currentStore.id}` : ""}`
       );
       showSyncFeedback("同步", [{ ok: res.ok, total: res.total, results: res.results }]);
       await load(mode);

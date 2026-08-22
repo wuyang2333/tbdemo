@@ -97,14 +97,19 @@ def promo_data(
     scene: str = "",
     start: str = "",
     end: str = "",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     mode = _mode(mode)
     today = date_cls.today()
-    scope_frag, scope_params = _scope_filter(None, user)
+    scope_frag, scope_params = _scope_filter(store_id, user)
     visible = visible_store_ids(user)
-    if visible is None:
+    if store_id is not None:
+        if visible is not None and store_id not in visible:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+        bound_store_count = sum(1 for s in _bound_stores(db) if s["id"] == store_id)
+    elif visible is None:
         bound_store_count = len(_bound_stores(db))
     else:
         bound_store_count = sum(1 for s in _bound_stores(db) if s["id"] in visible)
@@ -297,13 +302,22 @@ def promo_data(
 @router.post("/sync")
 def sync_promo(
     mode: str = "realtime",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     mode = _mode(mode)
     today = date_cls.today()
     results = []
-    for store in _all_stores(db):
+    visible = visible_store_ids(user)
+    stores = _all_stores(db)
+    if visible is not None:
+        stores = [store for store in stores if store["id"] in visible]
+    if store_id is not None:
+        stores = [store for store in stores if store["id"] == store_id]
+        if not stores:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    for store in stores:
         if not has_profile(store["id"]):
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
             continue
@@ -336,6 +350,7 @@ def sync_promo(
 def list_plans(
     scene: str = "",
     mode: str = "realtime",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -360,6 +375,11 @@ def list_plans(
         where_parts.append("1=0")
     else:
         where_parts.append("p.store_id IN (%s)" % ",".join(str(i) for i in sorted(visible)))
+    if store_id is not None:
+        if visible is not None and store_id not in visible:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+        where_parts.append("p.store_id = ?")
+        params.append(store_id)
     if scene:
         where_parts.append("p.scene = ?")
         params.append(scene)
@@ -405,13 +425,22 @@ def list_plans(
 @router.post("/sync-plans")
 def sync_plans(
     mode: str = "realtime",
-    user: dict = Depends(get_current_user),
+    store_id: int | None = None,
+    user: dict | None = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     mode = _mode(mode)
     today = date_cls.today()
     results = []
-    for store in _all_stores(db):
+    visible = visible_store_ids(user) if user is not None else None
+    stores = _all_stores(db)
+    if visible is not None:
+        stores = [store for store in stores if store["id"] in visible]
+    if store_id is not None:
+        stores = [store for store in stores if store["id"] == store_id]
+        if not stores:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    for store in stores:
         if not has_profile(store["id"]):
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
             continue
@@ -613,6 +642,7 @@ def sync_promo_hourly(
 
 @router.get("/alerts")
 def promo_alerts(
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -626,7 +656,11 @@ def promo_alerts(
     roi_low = float(pcfg.get("roi_low") or 1.0)
     alerts = []
     visible = visible_store_ids(user)
-    if visible is None:
+    if store_id is not None:
+        if visible is not None and store_id not in visible:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+        store_scope = f"p.store_id = {int(store_id)}"
+    elif visible is None:
         store_scope = "1=1"
     elif not visible:
         store_scope = "1=0"
@@ -663,6 +697,7 @@ def promo_alerts(
 @router.get("/export")
 def export_promo(
     mode: str = "7d",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -675,7 +710,7 @@ def export_promo(
 
     mode = _mode(mode)
     today = date_cls.today()
-    scope_frag, scope_params = _scope_filter(None, user)
+    scope_frag, scope_params = _scope_filter(store_id, user)
     wb = Workbook()
     ws = wb.active
     if mode in ("realtime", "yesterday"):
@@ -727,6 +762,7 @@ def export_promo(
 @router.get("/plans/export")
 def export_plans(
     mode: str = "realtime",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
@@ -739,7 +775,11 @@ def export_plans(
 
     mode = _mode(mode)
     visible = visible_store_ids(user)
-    if visible is None:
+    if store_id is not None:
+        if visible is not None and store_id not in visible:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+        plan_scope = f" WHERE p.store_id = {int(store_id)}"
+    elif visible is None:
         plan_scope = ""
     elif not visible:
         plan_scope = " WHERE 1=0"
@@ -775,6 +815,7 @@ def export_plans(
 @router.get("/plan-items")
 def plan_items(
     refresh: int = 0,
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -787,6 +828,8 @@ def plan_items(
         stores = all_stores
     else:
         stores = [s for s in all_stores if s["id"] in visible]
+    if store_id is not None:
+        stores = [store for store in stores if store["id"] == store_id]
     stale_cutoff = (datetime.now() - timedelta(hours=6)).isoformat()
     need: list[dict] = []
     for st in stores:
@@ -799,7 +842,7 @@ def plan_items(
         except Exception:  # noqa: BLE001
             continue
     result: dict[str, dict] = {}
-    scope_frag, scope_params = _scope_filter(None, user)
+    scope_frag, scope_params = _scope_filter(store_id, user)
     for r in db.execute("SELECT * FROM promo_plan_items WHERE 1=1" + scope_frag + " ORDER BY store_id", scope_params).fetchall():
         result[r["campaign_id"]] = {
             "item_id": r["item_id"],
@@ -811,6 +854,7 @@ def plan_items(
 @router.get("/keywords")
 def promo_keywords(
     mode: str = "yesterday",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -828,6 +872,11 @@ def promo_keywords(
         start = (today - timedelta(days=6)).isoformat()
         end = today.isoformat()
     stores = [dict(r) for r in db.execute("SELECT * FROM stores ORDER BY id").fetchall() if has_profile(r["id"])]
+    visible = visible_store_ids(user)
+    if visible is not None:
+        stores = [store for store in stores if store["id"] in visible]
+    if store_id is not None:
+        stores = [store for store in stores if store["id"] == store_id]
     rows: list[dict] = []
     for store in stores:
         try:

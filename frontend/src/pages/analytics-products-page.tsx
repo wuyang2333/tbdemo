@@ -641,7 +641,7 @@ export function AnalyticsProductsPage() {
               <Button icon={<SettingOutlined />}>字段设置</Button>
             <Button icon={<WarningOutlined />} onClick={openRefund}>退款分析</Button>
             </Popover>
-            <HourlyPushButton />
+            <HourlyPushButton scope="products" />
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
               同步店铺数据
             </Button>

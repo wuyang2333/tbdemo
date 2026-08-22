@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.core.db import get_db
 from backend.app.core.logs import log_op
+from backend.app.core.qianniu import fetch_dashboard_counts
 from backend.app.core.sycm import (
     PROFILE_MISSING_MSG,
     SycmError,
@@ -234,6 +235,35 @@ def sync_all_stores(db, user=None) -> dict:
     return {"results": results, "total": len(rows), "ok": sum(1 for r in results if r["ok"])}
 
 
+def sync_operational_status_all(db) -> dict:
+    """同步千牛首页的待发货和出售中商品数量，逐店容错。"""
+    rows = db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall()
+    results = []
+    for row in rows:
+        if not has_profile(row["id"]):
+            results.append({"store_id": row["id"], "store_name": row["name"], "ok": False, "error": PROFILE_MISSING_MSG})
+            continue
+        try:
+            counts = fetch_dashboard_counts(dict(row))
+            now = _fmt(_now())
+            db.execute(
+                """
+                INSERT INTO store_operational_status
+                    (store_id, pending_shipments, product_count, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(store_id) DO UPDATE SET
+                    pending_shipments = excluded.pending_shipments,
+                    product_count = excluded.product_count,
+                    updated_at = excluded.updated_at
+                """,
+                (row["id"], counts["pending_shipments"], counts["product_count"], now),
+            )
+            results.append({"store_id": row["id"], "store_name": row["name"], "ok": True, **counts})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"store_id": row["id"], "store_name": row["name"], "ok": False, "error": str(exc)})
+    return {"results": results, "total": len(rows), "ok": sum(1 for item in results if item["ok"])}
+
+
 @router.get("")
 def list_stores(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
     rows = _visible_rows(db.execute("SELECT * FROM stores ORDER BY id ASC").fetchall(), user)
@@ -301,6 +331,8 @@ def delete_store(
         raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
     db.execute("UPDATE users SET current_store_id = NULL WHERE current_store_id = ?", (store_id,))
     db.execute("DELETE FROM stores WHERE id = ?", (store_id,))
+    db.execute("DELETE FROM store_operational_status WHERE store_id = ?", (store_id,))
+    db.execute("DELETE FROM store_products WHERE store_id = ?", (store_id,))
     # 清理该店铺的 meta 残留（同步时间/登录状态），避免占位店删除后留垃圾
     for key in (
         f"store_{store_id}_last_sync",
@@ -455,7 +487,11 @@ def sync_all(
 ) -> dict:
     result = sync_all_stores(db, user)
     extras: list[str] = []
-    for name, fn in (("流量来源", sync_flow_source_all), ("今日退款", sync_refund_all)):
+    for name, fn in (
+        ("千牛经营状态", sync_operational_status_all),
+        ("流量来源", sync_flow_source_all),
+        ("今日退款", sync_refund_all),
+    ):
         try:
             r = fn(db)
             db.commit()
