@@ -579,7 +579,7 @@ export function CustomersPage() {
     <div>
       <PageHeader
         icon={<CommentOutlined />}
-        eyebrow="客户管理"
+        eyebrow="评价管理"
         title="评论分析"
         description="识别评价情绪、归纳商品问题、跟进差评处理"
         stackActions

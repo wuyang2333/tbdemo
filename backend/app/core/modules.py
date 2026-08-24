@@ -13,7 +13,7 @@ MODULES: list[dict[str, str]] = [
     {"id": "products", "name": "商品管理", "description": "商品库、上下架、价格库存、批量操作", "icon": "product"},
     {"id": "gifts", "name": "礼品单", "description": "礼品订单列表、发货、售后、批量处理", "icon": "order"},
     {"id": "ai", "name": "AI 助手", "description": "AI 对话：问数据、写文案、给建议", "icon": "robot"},
-    {"id": "customers", "name": "客户管理", "description": "客户画像、复购分析、私域运营", "icon": "customer"},
+    {"id": "customers", "name": "评价管理", "description": "评价同步、情感分析、差评处理与 AI 回复", "icon": "customer"},
     {"id": "analytics", "name": "数据洞察", "description": "流量、转化、销售趋势分析", "icon": "analytics"},
     {"id": "promotions", "name": "推广管理", "description": "直通车/引力魔方/万相台推广计划", "icon": "promotion"},
     {"id": "content", "name": "内容运营", "description": "素材库、内容创作、AI 图文/短视频", "icon": "content"},

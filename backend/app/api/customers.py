@@ -689,7 +689,7 @@ def _review_query(user: dict, store_id: int | None, item_id: str, sentiment: str
 
 @router.get("")
 def list_customers() -> dict:
-    return {"items": [], "message": "客户管理请使用评论接口"}
+    return {"items": [], "message": "评价管理请使用评论接口"}
 
 
 @router.get("/reviews")
