@@ -21,6 +21,7 @@ from pathlib import Path
 
 from backend.app.core.scrape_guard import exclusive_scrape
 from backend.app.core.scrape_resilience import (
+    clear_login_circuit,
     ensure_login_available,
     is_login_error,
     retry_with_backoff,
@@ -303,8 +304,10 @@ def _parse_day_overview(payload: dict) -> dict:
 
 # ---------- 对外接口 ----------
 
-def check_sycm_login(store: dict) -> dict:
+def check_sycm_login(store: dict, *, force: bool = False) -> dict:
     """验证该店铺的生意参谋登录是否有效（调一次今天的实时接口）。"""
+    if force:
+        clear_login_circuit("sycm", store["id"])
     payload = _run_live_overview(store)
     _parse_live_overview(payload)
     return {"ok": True, "store_id": store["id"], "store_name": store["name"]}
@@ -342,7 +345,9 @@ def _verify_profile(store: dict, name: str) -> dict:
         except SycmError as exc:
             last_error = str(exc)
             if is_login_error(exc):
-                raise
+                if attempt == 4:
+                    raise
+                clear_login_circuit("sycm", store["id"])
             time.sleep(3 + attempt * 4)  # 3,7,11,15,19 → 最多约 55 秒重试窗口
     raise SycmError(last_error or "登录成功但实时数据验证失败，请点击「测试」确认后保存")
 
@@ -439,6 +444,203 @@ def fetch_hourly(store: dict, timeout: float = 120) -> list[dict]:
             )
             prev = cur
     return out
+
+
+def fetch_review_rows(
+    store: dict,
+    start_date: str,
+    end_date: str,
+    *,
+    page_size: int = 100,
+    max_pages: int = 50,
+    timeout: float = 120,
+) -> list[dict]:
+    """读取生意参谋评价明细并返回原始行。
+
+    该接口属于店铺评价明细（只读），使用现有专用 Chrome 登录档案。
+    平台可能因店铺类目/权限只返回评分指标而不返回正文，调用方需检查
+    标准化后的 content 是否为空，不能把汇总指标误当作买家评论。
+    """
+    _ensure_profile(store)
+    rows: list[dict] = []
+    for page in range(1, max_pages + 1):
+        payload = _run_cli(
+            [
+                "--store", profile_name(store["id"]), "evaluation-list",
+                "--date", start_date, "--end-date", end_date,
+                "--limit", str(min(max(page_size, 1), 100)), "--page", str(page), "--raw",
+            ],
+            timeout=timeout,
+        )
+        out, err, code = payload
+        if code != 0:
+            text = (err or out or "").strip().replace("\n", "；")
+            raise SycmError(_friendly_error(text))
+        try:
+            data = json.loads(out)
+        except ValueError as exc:
+            raise SycmError("评价明细返回异常，请稍后重试") from exc
+        block = data.get("data") if isinstance(data, dict) else None
+        batch = block.get("dataSource") if isinstance(block, dict) else None
+        if not isinstance(batch, list):
+            # 某些版本返回 data.data 或 content.data.dataSource。
+            block = block.get("data") if isinstance(block, dict) else None
+            batch = block.get("dataSource") if isinstance(block, dict) else None
+        batch = batch if isinstance(batch, list) else []
+        rows.extend(item for item in batch if isinstance(item, dict))
+        total = int((block or {}).get("count") or 0) if isinstance(block, dict) else 0
+        if not batch or (total and len(rows) >= total) or len(batch) < page_size:
+            break
+    return rows
+
+
+def fetch_seller_review_rows(
+    store: dict,
+    start_date: str,
+    end_date: str,
+    *,
+    page_size: int = 20,
+    max_pages: int = 20,
+    timeout: float = 60,
+) -> list[dict]:
+    """读取千牛「评价管理」中的买家评价正文。
+
+    这是卖家端官方评价管理接口，返回 ``rateContent.mainRate.content``，
+    不同于生意参谋的服务评价汇总明细。
+    """
+    from backend.app.core.qianniu import _new_session, _request_mtop
+
+    _ensure_profile(store)
+    session = _new_session(store["id"])
+    rows: list[dict] = []
+    try:
+        with exclusive_scrape():
+            for page in range(1, max_pages + 1):
+                body = {
+                    "pageType": "rateWait4PC",
+                    "pagination": {"current": page, "pageSize": min(max(page_size, 1), 50)},
+                    "dateRange": [start_date.replace("-", ""), end_date.replace("-", "")],
+                }
+                payload = _request_mtop(
+                    session,
+                    "mtop.rm.sellercenter.list.data.pc",
+                    {"jsonBody": json.dumps(body, separators=(",", ":"), ensure_ascii=False)},
+                    timeout,
+                    "https://rate.taobao.com/sellercenterv2/index.htm",
+                )
+                block = ((payload.get("data") or {}).get("data") or {})
+                batch = block.get("dataSource") if isinstance(block, dict) else []
+                batch = batch if isinstance(batch, list) else []
+                rows.extend(item for item in batch if isinstance(item, dict))
+                pagination = block.get("pagination") if isinstance(block, dict) else {}
+                total = int((pagination or {}).get("total") or 0) if isinstance(pagination, dict) else 0
+                if not batch or (total and len(rows) >= total) or len(batch) < page_size:
+                    break
+    finally:
+        session.close()
+    return rows
+
+
+def publish_seller_review_reply(
+    store: dict,
+    feed_id: str,
+    content: str,
+    *,
+    timeout: float = 60,
+) -> dict:
+    """通过千牛卖家评价管理的官方接口回复一条买家评价。"""
+    from backend.app.core.qianniu import QianniuError, _new_session, _request_mtop
+
+    _ensure_profile(store)
+    feed_id = str(feed_id or "").strip()
+    content = str(content or "").strip()
+    if not feed_id:
+        raise SycmError("该评论缺少淘宝评价 ID，无法发布回复")
+    if not content:
+        raise SycmError("回复内容不能为空")
+    if len(content) > 500:
+        raise SycmError("淘宝评价回复不能超过 500 个字符")
+    session = _new_session(store["id"])
+    try:
+        with exclusive_scrape():
+            payload = _request_mtop(
+                session,
+                "mtop.rm.sellercenter.operate.reply",
+                {
+                    "jsonBody": json.dumps(
+                        {"feedId": feed_id, "explainContent": content},
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    )
+                },
+                timeout,
+                "https://rate.taobao.com/sellercenterv2/index.htm",
+            )
+    except QianniuError as exc:
+        raise SycmError(str(exc)) from exc
+    finally:
+        session.close()
+    return payload
+
+
+def fetch_item_review_rows(
+    store: dict,
+    item_id: str,
+    *,
+    page_size: int = 20,
+    max_pages: int = 5,
+    timeout: float = 30,
+) -> list[dict]:
+    """从商品详情评价源读取买家评论正文（只读）。"""
+    import re
+
+    try:
+        from curl_cffi import requests
+    except ImportError as exc:
+        raise SycmError("缺少评论采集依赖 curl-cffi，请重新安装项目依赖") from exc
+
+    profile = profile_path(store["id"])
+    if not profile.exists():
+        raise SycmError("该店铺还没有绑定淘宝登录，请先完成登录")
+    try:
+        profile_data = json.loads(profile.read_text(encoding="utf-8"))
+        cookie_values = profile_data.get("cookies") or {}
+    except (OSError, ValueError) as exc:
+        raise SycmError("淘宝登录档案读取失败，请重新登录") from exc
+    session = requests.Session(impersonate="chrome120")
+    for name, value in cookie_values.items():
+        session.cookies.set(str(name), str(value), domain=".taobao.com", path="/")
+    rows: list[dict] = []
+    referer = f"https://detail.tmall.com/item.htm?id={item_id}"
+    try:
+        with exclusive_scrape():
+            for page in range(1, max_pages + 1):
+                response = session.get(
+                    "https://rate.taobao.com/feedRateList.htm",
+                    params={"auctionNumId": str(item_id), "currentPageNum": page, "pageSize": min(max(page_size, 1), 20)},
+                    headers={"Referer": referer, "User-Agent": "Mozilla/5.0"},
+                    timeout=timeout,
+                )
+                if response.status_code != 200:
+                    raise SycmError(f"商品评价接口异常（HTTP {response.status_code}）")
+                text = response.content.decode("utf-8", errors="replace").strip()
+                text = re.sub(r"^\s*\(|\)\s*;?\s*$", "", text)
+                try:
+                    payload = json.loads(text)
+                except ValueError as exc:
+                    if "login" in text.lower() or "登录" in text:
+                        raise SycmError("淘宝登录已失效，请重新登录") from exc
+                    raise SycmError("商品评价接口返回异常") from exc
+                batch = payload.get("comments") if isinstance(payload, dict) else None
+                if not isinstance(batch, list):
+                    batch = []
+                rows.extend(item for item in batch if isinstance(item, dict))
+                total = int(payload.get("total") or 0) if isinstance(payload, dict) else 0
+                if not batch or (total and len(rows) >= total) or len(batch) < page_size:
+                    break
+    finally:
+        session.close()
+    return rows
 def fetch_item_sales(store: dict, target_date: str, timeout: float = 120) -> list[dict]:
     """拉取指定日期商品排行（生意参谋 商品-商品排行，全量商品 + 40+ 指标，自动翻页）。"""
     out: list[dict] = []

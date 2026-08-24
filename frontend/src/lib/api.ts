@@ -18,6 +18,9 @@ export function getApiErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { detail?: unknown } | undefined;
     if (typeof data?.detail === "string") return data.detail;
+    if (error.code === "ECONNABORTED") return "同步耗时较长，请稍后刷新查看结果";
+    if (!error.response) return `无法连接后端服务：${error.message}`;
+    return `请求失败（HTTP ${error.response.status}）`;
   }
   return "操作失败，请稍后重试";
 }

@@ -12,6 +12,7 @@ export function PageHeader({
   updatedAt,
   stale = false,
   extra,
+  stackActions = false,
 }: {
   icon: ReactNode;
   eyebrow: string;
@@ -21,9 +22,10 @@ export function PageHeader({
   updatedAt?: string | null;
   stale?: boolean;
   extra?: ReactNode;
+  stackActions?: boolean;
 }) {
   return (
-    <div className="ops-page-head">
+    <div className={`ops-page-head${stackActions ? " ops-page-head--stacked" : ""}`}>
       <span className="ops-module-icon">{icon}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <Text

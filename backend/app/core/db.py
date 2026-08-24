@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -179,6 +180,248 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE gifts SET wangwang = recipient WHERE wangwang = '' AND recipient != ''")
     conn.execute("UPDATE gifts SET image = qr_code WHERE image = '' AND qr_code != ''")
     conn.execute("UPDATE gifts SET keyword = gift_name WHERE keyword = '' AND gift_name != ''")
+    conn.commit()
+
+
+def _migrate_reviews(conn: sqlite3.Connection) -> None:
+    """商品评论：原始评论、分析标签和每日聚合统计。"""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS product_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            review_id TEXT NOT NULL,
+            item_id TEXT NOT NULL DEFAULT '',
+            item_title TEXT NOT NULL DEFAULT '',
+            sku_id TEXT NOT NULL DEFAULT '',
+            order_id_hash TEXT NOT NULL DEFAULT '',
+            rating INTEGER NOT NULL DEFAULT 0,
+            content TEXT NOT NULL DEFAULT '',
+            append_content TEXT NOT NULL DEFAULT '',
+            image_urls TEXT NOT NULL DEFAULT '[]',
+            review_time TEXT NOT NULL,
+            reply_status TEXT NOT NULL DEFAULT 'none',
+            reply_content TEXT NOT NULL DEFAULT '',
+            reply_error TEXT NOT NULL DEFAULT '',
+            reply_approved_at TEXT,
+            reply_published_at TEXT,
+            reply_platform_response TEXT NOT NULL DEFAULT '',
+            process_status TEXT NOT NULL DEFAULT 'pending',
+            source TEXT NOT NULL DEFAULT 'import',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, review_id)
+        )
+        """
+    )
+    review_cols = {row[1] for row in conn.execute("PRAGMA table_info(product_reviews)")}
+    if "reply_error" not in review_cols:
+        conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_error TEXT NOT NULL DEFAULT ''")
+    if "reply_approved_at" not in review_cols:
+        conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_approved_at TEXT")
+    if "reply_published_at" not in review_cols:
+        conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_published_at TEXT")
+    if "reply_platform_response" not in review_cols:
+        conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_platform_response TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_analysis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id INTEGER NOT NULL UNIQUE,
+            sentiment TEXT NOT NULL DEFAULT 'neutral',
+            confidence REAL NOT NULL DEFAULT 0,
+            aspects_json TEXT NOT NULL DEFAULT '[]',
+            keywords_json TEXT NOT NULL DEFAULT '[]',
+            severity TEXT NOT NULL DEFAULT 'normal',
+            review_status TEXT NOT NULL DEFAULT 'auto',
+            analysis_reason TEXT NOT NULL DEFAULT '',
+            analysis_source TEXT NOT NULL DEFAULT 'rules',
+            routing_reason TEXT NOT NULL DEFAULT '',
+            model_version TEXT NOT NULL DEFAULT 'rules-v1',
+            analyzed_at TEXT NOT NULL
+        )
+        """
+    )
+    analysis_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_analysis)")}
+    if "review_status" not in analysis_cols:
+        conn.execute("ALTER TABLE review_analysis ADD COLUMN review_status TEXT NOT NULL DEFAULT 'auto'")
+    if "analysis_reason" not in analysis_cols:
+        conn.execute("ALTER TABLE review_analysis ADD COLUMN analysis_reason TEXT NOT NULL DEFAULT ''")
+    if "analysis_source" not in analysis_cols:
+        conn.execute("ALTER TABLE review_analysis ADD COLUMN analysis_source TEXT NOT NULL DEFAULT 'rules'")
+    if "routing_reason" not in analysis_cols:
+        conn.execute("ALTER TABLE review_analysis ADD COLUMN routing_reason TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_daily_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL DEFAULT '',
+            data_date TEXT NOT NULL,
+            total_count INTEGER NOT NULL DEFAULT 0,
+            positive_count INTEGER NOT NULL DEFAULT 0,
+            neutral_count INTEGER NOT NULL DEFAULT 0,
+            negative_count INTEGER NOT NULL DEFAULT 0,
+            avg_rating REAL NOT NULL DEFAULT 0,
+            UNIQUE(store_id, item_id, data_date)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            review_id INTEGER NOT NULL,
+            alert_type TEXT NOT NULL DEFAULT 'negative_review',
+            title TEXT NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            notified_at TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE(review_id, alert_type)
+        )
+        """
+    )
+    alert_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_alerts)")}
+    if "notified_at" not in alert_cols:
+        conn.execute("ALTER TABLE review_alerts ADD COLUMN notified_at TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_reply_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            category TEXT NOT NULL DEFAULT '通用',
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_sentiment_corrections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id INTEGER NOT NULL UNIQUE,
+            store_id INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            original_sentiment TEXT NOT NULL,
+            corrected_sentiment TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_custom_terms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL DEFAULT 0,
+            term TEXT NOT NULL,
+            sentiment TEXT NOT NULL,
+            weight REAL NOT NULL DEFAULT 1.5,
+            source TEXT NOT NULL DEFAULT 'manual',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, term)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_trend_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            alert_date TEXT NOT NULL,
+            current_count INTEGER NOT NULL DEFAULT 0,
+            current_negative INTEGER NOT NULL DEFAULT 0,
+            current_rate REAL NOT NULL DEFAULT 0,
+            baseline_count INTEGER NOT NULL DEFAULT 0,
+            baseline_rate REAL NOT NULL DEFAULT 0,
+            level TEXT NOT NULL DEFAULT 'warning',
+            status TEXT NOT NULL DEFAULT 'open',
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(store_id, alert_date)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_weekly_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            week_start TEXT NOT NULL,
+            week_end TEXT NOT NULL,
+            report_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, week_start)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_knowledge_articles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT '通用',
+            problem_terms TEXT NOT NULL DEFAULT '[]',
+            solution TEXT NOT NULL,
+            reply_template TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, title)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_knowledge_matches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id INTEGER NOT NULL,
+            article_id INTEGER NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0,
+            matched_terms_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL,
+            UNIQUE(review_id, article_id)
+        )
+        """
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    for name, category, content in (
+        ("通用感谢", "好评", "感谢您的认可与支持！我们会继续做好产品和服务，期待再次为您服务。"),
+        ("质量问题", "质量", "非常抱歉给您带来不好的体验。我们已记录您反馈的质量问题，请联系我们的售后客服，我们会尽快核实并妥善处理。"),
+        ("物流包装", "物流", "很抱歉商品在配送或包装环节给您带来困扰。请将具体情况告知客服，我们会尽快核实并协助处理。"),
+        ("使用体验", "体验", "感谢您的真实反馈。我们非常重视您的使用感受，已记录相关建议并会持续改进产品体验。"),
+    ):
+        conn.execute("INSERT OR IGNORE INTO review_reply_templates (name, category, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", (name, category, content, now, now))
+    for title, category, terms, solution, reply_template in (
+        ("包装破损处理", "包装", ["包装破损", "盒子破了", "压坏", "包装坏"], "核对评价图片和订单包装批次，联系买家确认商品是否受损；如商品受损，按售后政策补发或退款，并登记包装改进。", "很抱歉包装问题影响了您的体验。我们已记录并会核查包装环节，请联系在线客服并提供订单信息，我们会尽快为您妥善处理。"),
+        ("物流延迟处理", "物流", ["物流慢", "快递慢", "一直没到", "发货慢"], "先查询物流轨迹和异常节点，主动告知预计送达时间；长时间无更新时联系承运商并向买家同步进展。", "很抱歉物流时效没有达到预期。我们会立即核查物流进度并持续跟进，请联系在线客服提供订单信息。"),
+        ("商品质量问题", "质量", ["质量问题", "坏了", "开胶", "漏液", "瑕疵"], "确认具体故障、使用场景和图片证据，排查同批次商品；符合售后条件时优先提供退换货方案。", "非常抱歉给您带来不好的使用体验。我们很重视您反馈的质量问题，请联系在线客服，我们会尽快核实并提供售后方案。"),
+        ("尺码不合适", "尺码", ["太小", "太大", "偏小", "偏大", "尺码不合适"], "核对买家选择的规格与商品尺码表，提供换码指引，并将高频偏差反馈给商品团队校准尺码说明。", "很抱歉尺码没有达到您的预期。请联系在线客服告知订单和实际穿着情况，我们会协助您选择更合适的尺码。"),
+        ("客服响应问题", "客服", ["不回复", "态度差", "客服慢", "没人处理"], "查询会话记录和响应时长，由专人主动回访并说明处理进度；同步复盘服务话术和排班。", "很抱歉我们的服务响应给您带来困扰。我们已记录您的反馈，请联系在线客服并提供订单信息，我们会安排专人跟进。"),
+    ):
+        conn.execute(
+            """INSERT OR IGNORE INTO review_knowledge_articles
+            (store_id, title, category, problem_terms, solution, reply_template, enabled, created_at, updated_at)
+            VALUES (0, ?, ?, ?, ?, ?, 1, ?, ?)""",
+            (title, category, json.dumps(terms, ensure_ascii=False), solution, reply_template, now, now),
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_alerts_store_status ON review_alerts(store_id, status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_corrections_store ON review_sentiment_corrections(store_id, updated_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_corrections_hash ON review_sentiment_corrections(store_id, content_hash)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_terms_store ON review_custom_terms(store_id, enabled)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_trend_alerts_store ON review_trend_alerts(store_id, status, alert_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_knowledge_store ON review_knowledge_articles(store_id, enabled)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_knowledge_matches_review ON review_knowledge_matches(review_id, confidence)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_store_date ON product_reviews(store_id, review_time)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_item ON product_reviews(store_id, item_id)")
     conn.commit()
 
 
@@ -923,5 +1166,6 @@ def init_db() -> None:
         _migrate_logs(conn)
         _seed_gifts(conn)
         _migrate_gifts(conn)
+        _migrate_reviews(conn)
     finally:
         conn.close()

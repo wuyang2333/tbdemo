@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 from backend.app.core import loops
 
 
@@ -19,6 +22,30 @@ def test_loop_status_lifecycle():
     status = loops.get_status(name)
     assert status["error_count"] == 1
     assert "boom" in status["last_error"]
+
+
+def test_inspect_loop_does_not_block_api_event_loop(monkeypatch):
+    from backend.app import main
+
+    monkeypatch.setattr(main.maintenance, "is_task_paused", lambda name: False)
+    monkeypatch.setattr(main, "run_inspect_once", lambda: time.sleep(0.2))
+    monkeypatch.setattr(main.loops, "mark_running", lambda name: None)
+    monkeypatch.setattr(main.loops, "record_success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main.loops, "record_error", lambda *args, **kwargs: None)
+
+    async def scenario():
+        started = time.perf_counter()
+        task = asyncio.create_task(main._inspect_loop())
+        await asyncio.sleep(0.03)
+        elapsed = time.perf_counter() - started
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return elapsed
+
+    assert asyncio.run(scenario()) < 0.1
 
 
 def test_manual_retry_and_sync_history(client, admin_token, monkeypatch):

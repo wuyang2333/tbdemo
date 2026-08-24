@@ -372,7 +372,7 @@ def test_store_sycm(
 ) -> dict:
     row = _get_store_or_404(db, store_id)
     try:
-        check_sycm_login(dict(row))
+        check_sycm_login(dict(row), force=True)
     except SycmError as exc:
         _meta_set(db, f"store_{store_id}_sycm_status", "error")
         _meta_set(db, f"store_{store_id}_sycm_error", str(exc)[:300])

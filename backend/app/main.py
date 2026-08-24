@@ -189,7 +189,7 @@ async def _inspect_loop() -> None:
         _start = time.monotonic()
         loops.mark_running("inspect")
         try:
-            run_inspect_once()
+            await asyncio.to_thread(run_inspect_once)
             loops.record_success("inspect", time.monotonic() - _start)
         except Exception as _e:
             loops.record_error("inspect", _e, time.monotonic() - _start)
@@ -324,6 +324,26 @@ async def _product_catalog_loop() -> None:
         except Exception as exc:
             loops.record_error("product_catalog_sync", exc, time.monotonic() - started)
         await asyncio.sleep(900)
+
+
+async def _review_sync_loop() -> None:
+    """每 6 小时用已绑定登录态补拉最近评论。"""
+    await asyncio.sleep(120)
+    while True:
+        started = time.monotonic()
+        loops.mark_running("review_sync")
+        conn = connect_db()
+        try:
+            result = await asyncio.to_thread(customers.sync_reviews_auto_all, conn, 2)
+            conn.commit()
+            loops.record_success("review_sync", time.monotonic() - started)
+            loops.log_event("review_sync", f"自动评论同步 {result.get('ok', 0)}/{result.get('total', 0)} 家店铺")
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            loops.record_error("review_sync", exc, time.monotonic() - started)
+        finally:
+            conn.close()
+        await asyncio.sleep(21600)
 
 
 def _run_report_push_once() -> None:
@@ -510,11 +530,12 @@ async def _maintenance_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
+    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "review_sync", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
         loops.register(_name)
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
     product_catalog_task = asyncio.create_task(_product_catalog_loop())
+    review_sync_task = asyncio.create_task(_review_sync_loop())
     push_task = asyncio.create_task(_report_push_loop())
     hourly_push_task = asyncio.create_task(_hourly_push_loop())
     promo_task = asyncio.create_task(_promo_daily_loop())
@@ -526,6 +547,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     realtime_task.cancel()
     product_catalog_task.cancel()
+    review_sync_task.cancel()
     push_task.cancel()
     hourly_push_task.cancel()
     promo_task.cancel()
