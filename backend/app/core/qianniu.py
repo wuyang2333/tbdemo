@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
+from decimal import Decimal, InvalidOperation
+from urllib.parse import urljoin
 
 from curl_cffi import requests
 
@@ -27,10 +30,21 @@ _PRODUCT_REFERER = "https://myseller.taobao.com/home.htm/SellManage/on_sale"
 _PRODUCT_LIST_URL = "/tmall/manager/table.htm"
 _TTID = "11320@taobao_WEB_9.9.99"
 _PRODUCT_PAGE_SIZE = 20
+_SOLD_LIST_URL = "https://trade.taobao.com/trade/itemlist/list_sold_items.htm"
+_SOLD_QUERY_ACTION = "itemlist/SoldQueryAction"
+_SELL_MEMO_ACTION = "memo/UpdateSellMemoAction"
 
 
 class QianniuError(Exception):
     """带用户可读信息的千牛抓取错误。"""
+
+
+class QianniuOrderNotFound(QianniuError):
+    """千牛已卖出商品中没有精确匹配的订单。"""
+
+
+class QianniuAmbiguousOrder(QianniuError):
+    """旺旺号匹配到多条无法安全区分的订单。"""
 
 
 def _load_cookies(store_id: int) -> dict[str, str]:
@@ -122,6 +136,308 @@ def _request_todo_list(store_id: int, timeout: float) -> dict:
                 timeout,
                 _REFERER,
             )
+    finally:
+        session.close()
+
+
+def _trade_headers(referer: str = _SOLD_LIST_URL) -> dict[str, str]:
+    return {
+        "Accept": "text/html,application/xhtml+xml,application/json,*/*",
+        "Referer": referer,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    }
+
+
+def _parse_sold_page(content: bytes) -> dict:
+    text = content.decode("gb18030", errors="replace")
+    match = re.search(r"var data = JSON\.parse\('(.*?)'\);", text, re.DOTALL)
+    if not match:
+        if "login.taobao.com" in text or "登录" in text:
+            raise QianniuError("千牛登录已过期，请重新登录")
+        raise QianniuError("千牛已卖出商品页面返回异常")
+    try:
+        serialized = json.loads(f'"{match.group(1)}"')
+        payload = json.loads(serialized)
+    except (TypeError, ValueError) as exc:
+        raise QianniuError("千牛订单查询结果解析失败") from exc
+    if not isinstance(payload, dict):
+        raise QianniuError("千牛订单查询结果格式异常")
+    error = str(payload.get("error") or "").strip()
+    if error:
+        raise QianniuError(f"千牛订单查询失败：{error}")
+    return payload
+
+
+def _query_sold_order(session: requests.Session, order_no: str, timeout: float) -> dict | None:
+    try:
+        response = session.get(
+            _SOLD_LIST_URL,
+            params={
+                "action": _SOLD_QUERY_ACTION,
+                "event_submit_do_query": "1",
+                "orderId": order_no,
+                "_input_charset": "utf8",
+            },
+            headers=_trade_headers(),
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as exc:
+        raise QianniuError("千牛订单查询请求失败，请稍后重试") from exc
+    if response.status_code != 200:
+        raise QianniuError(f"千牛订单查询接口异常（HTTP {response.status_code}）")
+    payload = _parse_sold_page(response.content)
+    matches = [item for item in payload.get("mainOrders") or [] if str(item.get("id") or "") == order_no]
+    if len(matches) > 1:
+        raise QianniuError(f"千牛返回了多条相同订单号：{order_no}")
+    return matches[0] if matches else None
+
+
+def _query_sold_orders_by_buyer(session: requests.Session, buyer_nick: str, timeout: float) -> list[dict]:
+    try:
+        response = session.get(
+            _SOLD_LIST_URL,
+            params={
+                "action": _SOLD_QUERY_ACTION,
+                "event_submit_do_query": "1",
+                "orderId": "",
+                "buyerNick": buyer_nick,
+                "_input_charset": "utf8",
+            },
+            headers=_trade_headers(),
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException as exc:
+        raise QianniuError("千牛旺旺号查询请求失败，请稍后重试") from exc
+    if response.status_code != 200:
+        raise QianniuError(f"千牛旺旺号查询接口异常（HTTP {response.status_code}）")
+    payload = _parse_sold_page(response.content)
+    query = payload.get("query") or {}
+    if not isinstance(query, dict) or str(query.get("buyerNick") or "").strip() != buyer_nick:
+        raise QianniuError("千牛旺旺号查询条件未生效，已停止自动备注")
+    return [item for item in payload.get("mainOrders") or [] if isinstance(item, dict)]
+
+
+def _order_date(order: dict) -> str:
+    created_at = str((order.get("orderInfo") or {}).get("createTime") or "")
+    match = re.search(r"\d{4}-\d{2}-\d{2}", created_at)
+    return match.group(0) if match else ""
+
+
+def _amount_matches(actual_paid, expected_amount) -> bool:
+    try:
+        actual = Decimal(str(actual_paid)).quantize(Decimal("0.01"))
+        expected = Decimal(str(expected_amount)).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+    return abs(actual - expected) < Decimal("0.01")
+
+
+def _memo_operation(order: dict) -> dict:
+    operation = next(
+        (
+            item
+            for item in order.get("operations") or []
+            if item.get("id") == "flag" and item.get("url") and item.get("dataUrl")
+        ),
+        None,
+    )
+    if not operation:
+        raise QianniuError("该千牛订单不支持卖家备注")
+    return operation
+
+
+def _order_status_outcome(order: dict) -> tuple[str, str]:
+    status_text = str((order.get("statusInfo") or {}).get("text") or "").strip()
+    compact = re.sub(r"\s+", "", status_text)
+    if "交易关闭" in compact or "订单关闭" in compact:
+        return "order_closed", status_text
+    if "等待买家付款" in compact or "待买家付款" in compact or "等待付款" in compact:
+        return "awaiting_payment", status_text
+    return "", status_text
+
+
+def _actual_paid_amount(order: dict) -> float | None:
+    value = (order.get("payInfo") or {}).get("actualFee")
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        amount = float(str(value).replace("¥", "").replace("￥", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    if amount < 0 or amount > 999999:
+        return None
+    return round(amount, 2)
+
+
+def _read_seller_memo(session: requests.Session, operation: dict, timeout: float) -> str:
+    url = urljoin(_SOLD_LIST_URL, str(operation["dataUrl"]))
+    try:
+        response = session.post(url, headers=_trade_headers(), timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        raise QianniuError("千牛卖家备注读取失败，请稍后重试") from exc
+    if response.status_code != 200:
+        raise QianniuError(f"千牛卖家备注读取异常（HTTP {response.status_code}）")
+    try:
+        payload = json.loads(response.content.decode("gb18030", errors="replace"))
+    except ValueError as exc:
+        raise QianniuError("千牛卖家备注返回格式异常") from exc
+    return str(payload.get("tip") or "")
+
+
+def _submit_seller_memo(
+    session: requests.Session,
+    operation: dict,
+    order_no: str,
+    memo: str,
+    flag: int,
+    timeout: float,
+) -> None:
+    url = urljoin(_SOLD_LIST_URL, str(operation["url"]))
+    form = {
+        "_tb_token_": session.cookies.get("_tb_token_") or "",
+        "event_submit_do_query": "1",
+        "action": _SELL_MEMO_ACTION,
+        "user_type": "1",
+        "pageNum": "1",
+        "auctionTitle": "",
+        "dateBegin": "0",
+        "dateEnd": "0",
+        "commentStatus": "",
+        "buyerNick": "",
+        "auctionStatus": "",
+        "returnUrl": "",
+        "logisticsService": "",
+        "from_flag": "",
+        "biz_order_id": order_no,
+        "flag": str(flag),
+        "memo": memo,
+    }
+    try:
+        response = session.post(url, data=form, headers=_trade_headers(), timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        raise QianniuError("千牛插旗备注提交失败，请稍后重试") from exc
+    if response.status_code != 200:
+        raise QianniuError(f"千牛插旗备注接口异常（HTTP {response.status_code}）")
+
+
+def _remark_matched_order(
+    session: requests.Session,
+    order: dict,
+    memo: str,
+    flag: int,
+    timeout: float,
+) -> dict:
+    order_no = str(order.get("id") or "")
+    outcome, order_status = _order_status_outcome(order)
+    actual_paid = _actual_paid_amount(order)
+    if outcome:
+        return {
+            "ok": True,
+            "changed": False,
+            "outcome": outcome,
+            "order_no": order_no,
+            "order_status": order_status,
+            "actual_paid": actual_paid,
+            "flag": flag,
+            "memo": memo,
+        }
+    operation = _memo_operation(order)
+    current_memo = _read_seller_memo(session, operation, timeout)
+    current_flag = int((order.get("extra") or {}).get("sellerFlag") or 0)
+    if current_flag == flag and current_memo == memo:
+        return {
+            "ok": True,
+            "changed": False,
+            "outcome": "remarked",
+            "order_no": order_no,
+            "order_status": order_status,
+            "actual_paid": actual_paid,
+            "flag": flag,
+            "memo": memo,
+        }
+    _submit_seller_memo(session, operation, order_no, memo, flag, timeout)
+    verified = _query_sold_order(session, order_no, timeout)
+    if not verified:
+        raise QianniuError("千牛插旗备注后无法再次确认订单")
+    verified_operation = _memo_operation(verified)
+    verified_memo = _read_seller_memo(session, verified_operation, timeout)
+    verified_flag = int((verified.get("extra") or {}).get("sellerFlag") or 0)
+    if verified_flag != flag or verified_memo != memo:
+        raise QianniuError("千牛插旗备注结果校验失败")
+    return {
+        "ok": True,
+        "changed": True,
+        "outcome": "remarked",
+        "order_no": order_no,
+        "order_status": order_status,
+        "actual_paid": _actual_paid_amount(verified),
+        "flag": flag,
+        "memo": memo,
+    }
+
+
+def _remark_sold_order_once(
+    store_id: int,
+    order_no: str,
+    memo: str,
+    flag: int,
+    timeout: float,
+) -> dict:
+    session = _new_session(store_id)
+    try:
+        with exclusive_scrape():
+            order = _query_sold_order(session, order_no, timeout)
+            if not order:
+                raise QianniuOrderNotFound(f"千牛已卖出商品中未找到订单 {order_no}")
+            return _remark_matched_order(session, order, memo, flag, timeout)
+    finally:
+        session.close()
+
+
+def _remark_sold_order_by_buyer_once(
+    store_id: int,
+    buyer_nick: str,
+    order_date: str,
+    expected_amount,
+    memo: str,
+    flag: int,
+    timeout: float,
+) -> dict:
+    session = _new_session(store_id)
+    try:
+        with exclusive_scrape():
+            candidates = [
+                order
+                for order in _query_sold_orders_by_buyer(session, buyer_nick, timeout)
+                if _order_date(order) == order_date
+            ]
+            if not candidates:
+                raise QianniuOrderNotFound(f"千牛已卖出商品中未找到旺旺号 {buyer_nick} 在 {order_date} 的订单")
+            amount_matches = [
+                order for order in candidates if _amount_matches(_actual_paid_amount(order), expected_amount)
+            ]
+            if len(amount_matches) == 1:
+                selected = amount_matches[0]
+            elif len(candidates) == 1:
+                selected = candidates[0]
+            else:
+                raise QianniuAmbiguousOrder(f"旺旺号 {buyer_nick} 在 {order_date} 匹配到多条订单，已停止自动备注")
+            actual_paid = _actual_paid_amount(selected)
+            outcome, order_status = _order_status_outcome(selected)
+            if outcome:
+                return _remark_matched_order(session, selected, memo, flag, timeout)
+            if not _amount_matches(actual_paid, expected_amount):
+                return {
+                    "ok": True,
+                    "changed": False,
+                    "outcome": "price_mismatch",
+                    "order_no": str(selected.get("id") or ""),
+                    "order_status": order_status,
+                    "actual_paid": actual_paid,
+                    "flag": flag,
+                    "memo": memo,
+                }
+            return _remark_matched_order(session, selected, memo, flag, timeout)
     finally:
         session.close()
 
@@ -289,6 +605,73 @@ def fetch_on_sale_products(store: dict, timeout: float = 30) -> list[dict]:
     ensure_login_available("qianniu", store_id, profile, QianniuError)
     try:
         return retry_with_backoff(lambda: _fetch_on_sale_products_once(store_id, timeout))
+    except QianniuError as exc:
+        if is_login_error(exc):
+            trip_login_circuit("qianniu", store_id, profile, str(exc))
+        raise
+
+
+def remark_sold_order(
+    store: dict,
+    order_no: str,
+    memo: str = "SD",
+    flag: int = 1,
+    timeout: float = 30,
+) -> dict:
+    """在千牛已卖出商品中精确匹配订单，并设置卖家备注与旗子。"""
+    store_id = int(store["id"])
+    order_no = str(order_no or "").strip()
+    if not order_no.isdigit():
+        raise QianniuError("千牛订单号格式不正确")
+    if not memo or len(memo) > 500:
+        raise QianniuError("千牛卖家备注内容不正确")
+    if flag not in (1, 2, 3, 4, 5):
+        raise QianniuError("千牛插旗颜色不正确")
+    profile = profile_path(store_id)
+    ensure_login_available("qianniu", store_id, profile, QianniuError)
+    try:
+        return retry_with_backoff(lambda: _remark_sold_order_once(store_id, order_no, memo, flag, timeout))
+    except QianniuError as exc:
+        if is_login_error(exc):
+            trip_login_circuit("qianniu", store_id, profile, str(exc))
+        raise
+
+
+def remark_sold_order_by_buyer(
+    store: dict,
+    buyer_nick: str,
+    order_date: str,
+    expected_amount,
+    memo: str = "SD",
+    flag: int = 1,
+    timeout: float = 30,
+) -> dict:
+    """无订单号时按旺旺号、日期和金额唯一匹配订单，再设置备注与旗子。"""
+    store_id = int(store["id"])
+    buyer_nick = str(buyer_nick or "").strip()
+    order_date = str(order_date or "").strip()
+    if not buyer_nick or len(buyer_nick) > 100:
+        raise QianniuError("千牛旺旺号格式不正确")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", order_date):
+        raise QianniuError("礼品单下单日期格式不正确，无法按旺旺号查询")
+    if not memo or len(memo) > 500:
+        raise QianniuError("千牛卖家备注内容不正确")
+    if flag not in (1, 2, 3, 4, 5):
+        raise QianniuError("千牛插旗颜色不正确")
+    profile = profile_path(store_id)
+    ensure_login_available("qianniu", store_id, profile, QianniuError)
+    try:
+        return retry_with_backoff(
+            lambda: _remark_sold_order_by_buyer_once(
+                store_id,
+                buyer_nick,
+                order_date,
+                expected_amount,
+                memo,
+                flag,
+                timeout,
+            )
+        )
     except QianniuError as exc:
         if is_login_error(exc):
             trip_login_circuit("qianniu", store_id, profile, str(exc))

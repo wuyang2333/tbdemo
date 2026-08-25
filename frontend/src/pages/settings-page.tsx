@@ -12,6 +12,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageHeader } from "../components/ui/page-header";
+import { TencentDocsSettings } from "../components/tencent-docs-settings";
+import { GiftQianniuRemarkSettings } from "../components/gift-qianniu-remark-settings";
 
 const { Text } = Typography;
 
@@ -403,6 +405,8 @@ export function SettingsPage() {
           </Text>
         </Space>
       </Card>
+      <TencentDocsSettings />
+      <GiftQianniuRemarkSettings />
       <Card variant="borderless" title="系统体检" style={{ marginTop: 16 }}>
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Space wrap>

@@ -54,7 +54,7 @@ from backend.app.api.stores import (
     sync_items_realtime_all,
     sync_operational_status_all,
 )
-from backend.app.core import loops, maintenance
+from backend.app.core import gift_remark, loops, maintenance, tencent_docs
 from backend.app.core.db import DB_PATH, connect_db, init_db
 from backend.app.core.modules import get_modules
 
@@ -63,6 +63,7 @@ BACKUP_DIR = Path("D:/demo/backups")
 DATA_RETENTION_DAYS = 90
 BACKUP_KEEP = 7
 LOG_RETENTION_DAYS = 7
+REVIEW_SYNC_INTERVAL_SECONDS = 3600
 
 
 def _run_db_backup_once() -> dict:
@@ -327,7 +328,7 @@ async def _product_catalog_loop() -> None:
 
 
 async def _review_sync_loop() -> None:
-    """每 6 小时用已绑定登录态补拉最近评论。"""
+    """每小时用已绑定登录态补拉最近评论。"""
     await asyncio.sleep(120)
     while True:
         started = time.monotonic()
@@ -343,7 +344,51 @@ async def _review_sync_loop() -> None:
             loops.record_error("review_sync", exc, time.monotonic() - started)
         finally:
             conn.close()
-        await asyncio.sleep(21600)
+        await asyncio.sleep(REVIEW_SYNC_INTERVAL_SECONDS)
+
+
+async def _tencent_docs_sync_loop() -> None:
+    """每分钟把礼品单与腾讯在线表格双向同步。"""
+    await asyncio.sleep(150)
+    while True:
+        started = time.monotonic()
+        loops.mark_running("tencent_docs_sync")
+        conn = connect_db()
+        try:
+            result = await asyncio.to_thread(tencent_docs.sync_gifts, conn)
+            conn.commit()
+            loops.record_success("tencent_docs_sync", time.monotonic() - started)
+            if not result.get("skipped"):
+                loops.log_event("tencent_docs_sync", f"腾讯文档同步：新增 {result.get('pushed', 0)}，回填 {result.get('pulled', 0)}")
+        except Exception as exc:
+            conn.rollback()
+            loops.record_error("tencent_docs_sync", exc, time.monotonic() - started)
+        finally:
+            conn.close()
+        await asyncio.sleep(60)
+
+
+async def _gift_remark_loop() -> None:
+    """每分钟处理腾讯文档新回传订单的千牛插旗备注。"""
+    await asyncio.sleep(180)
+    while True:
+        started = time.monotonic()
+        loops.mark_running("gift_remark")
+        conn = connect_db()
+        try:
+            result = await asyncio.to_thread(gift_remark.sync_pending, conn)
+            loops.record_success("gift_remark", time.monotonic() - started)
+            if result.get("processed"):
+                loops.log_event(
+                    "gift_remark",
+                    f"千牛自动备注：成功 {result.get('remarked', 0)}，失败 {result.get('failed', 0)}",
+                )
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            loops.record_error("gift_remark", exc, time.monotonic() - started)
+        finally:
+            conn.close()
+        await asyncio.sleep(60)
 
 
 def _run_report_push_once() -> None:
@@ -530,12 +575,14 @@ async def _maintenance_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "review_sync", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
+    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "review_sync", "tencent_docs_sync", "gift_remark", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
         loops.register(_name)
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
     product_catalog_task = asyncio.create_task(_product_catalog_loop())
     review_sync_task = asyncio.create_task(_review_sync_loop())
+    tencent_docs_sync_task = asyncio.create_task(_tencent_docs_sync_loop())
+    gift_remark_task = asyncio.create_task(_gift_remark_loop())
     push_task = asyncio.create_task(_report_push_loop())
     hourly_push_task = asyncio.create_task(_hourly_push_loop())
     promo_task = asyncio.create_task(_promo_daily_loop())
@@ -548,6 +595,8 @@ async def lifespan(app: FastAPI):
     realtime_task.cancel()
     product_catalog_task.cancel()
     review_sync_task.cancel()
+    tencent_docs_sync_task.cancel()
+    gift_remark_task.cancel()
     push_task.cancel()
     hourly_push_task.cancel()
     promo_task.cancel()
@@ -659,6 +708,11 @@ def create_app() -> FastAPI:
         prefix="/api/settings",
         tags=["settings"],
         dependencies=[Depends(require_admin)],
+    )
+    app.include_router(
+        settings.oauth_router,
+        prefix="/api/settings",
+        tags=["settings"],
     )
     avatar_dir = DB_PATH.parent / "avatars"
     avatar_dir.mkdir(parents=True, exist_ok=True)

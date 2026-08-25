@@ -1,5 +1,6 @@
-import { CloseOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { CloseOutlined, CloudSyncOutlined, GiftOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import {
+  Alert,
   AutoComplete,
   Button,
   Card,
@@ -17,6 +18,7 @@ import {
   Table,
   Tag,
   TimePicker,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -24,12 +26,13 @@ import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HTMLAttributes, Key, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { PageFooter } from "../components/ui/page-footer";
 import { ColumnSettings, type ColDef } from "../components/ui/column-settings";
 import { PageHeader } from "../components/ui/page-header";
-import type { Gift, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
+import type { Gift, GiftRemarkStatus, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
 
 const { Text } = Typography;
 
@@ -64,11 +67,24 @@ const SETTLE_META: Record<GiftSettleStatus, { label: string; color: string }> = 
   settled: { label: "已结款", color: "green" },
 };
 
+const REMARK_META: Record<GiftRemarkStatus, { label: string; color: string }> = {
+  unremarked: { label: "待备注", color: "default" },
+  order_not_found: { label: "订单未查到", color: "orange" },
+  order_closed: { label: "订单已关闭", color: "red" },
+  awaiting_payment: { label: "订单待付款", color: "gold" },
+  remark_failed: { label: "备注失败", color: "volcano" },
+  remarked: { label: "备注成功", color: "green" },
+};
+
 const REVIEW_OPTIONS = (Object.entries(REVIEW_META) as [GiftReviewStatus, { label: string }][]).map(([value, meta]) => ({
   value,
   label: meta.label,
 }));
 const SETTLE_OPTIONS = (Object.entries(SETTLE_META) as [GiftSettleStatus, { label: string }][]).map(([value, meta]) => ({
+  value,
+  label: meta.label,
+}));
+const REMARK_OPTIONS = (Object.entries(REMARK_META) as [GiftRemarkStatus, { label: string }][]).map(([value, meta]) => ({
   value,
   label: meta.label,
 }));
@@ -85,6 +101,7 @@ const GIFT_COL_DEFS: ColDef[] = [
   { key: "order_no", title: "订单编号" },
   { key: "review_status", title: "评论状态" },
   { key: "settle_status", title: "结款状态" },
+  { key: "remark_status", title: "备注状态" },
 ];
 
 const MIN_COL_WIDTH = 60;
@@ -139,6 +156,10 @@ function ResizableHeaderCell(props: any) {
 }
 
 export function GiftsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const todoRemarkStatus = searchParams.get("remark_status") as GiftRemarkStatus | null;
+  const todoStoreId = Number(searchParams.get("store_id")) || undefined;
+  const todoSyncStatus = searchParams.get("sync_status") || "";
   const [items, setItems] = useState<Gift[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(false);
@@ -146,10 +167,15 @@ export function GiftsPage() {
   const [storeFilter, setStoreFilter] = useState<string | undefined>();
   const [reviewFilter, setReviewFilter] = useState<GiftReviewStatus | undefined>();
   const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(() => [
-    dayjs().startOf("day"),
-    dayjs().endOf("day"),
-  ]);
+  const [remarkFilter, setRemarkFilter] = useState<GiftRemarkStatus | undefined>(
+    todoRemarkStatus && todoRemarkStatus in REMARK_META ? todoRemarkStatus : undefined
+  );
+  const [syncErrorOnly, setSyncErrorOnly] = useState(todoSyncStatus === "error");
+  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(() =>
+    todoRemarkStatus || todoSyncStatus || todoStoreId
+      ? null
+      : [dayjs().subtract(4, "day").startOf("day"), dayjs().add(2, "day").endOf("day")]
+  );
   const [form] = Form.useForm<GiftFormValues>();
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -161,6 +187,8 @@ export function GiftsPage() {
   const [imageTarget, setImageTarget] = useState<Gift | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [formImage, setFormImage] = useState("");
+  const [tencentStatus, setTencentStatus] = useState<{ enabled: boolean; authorized: boolean; last_sync_at: string; last_error: string } | null>(null);
+  const [tencentSyncing, setTencentSyncing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formFileInputRef = useRef<HTMLInputElement>(null);
   const enterRef = useRef(false);
@@ -212,6 +240,34 @@ export function GiftsPage() {
     load();
   }, [load]);
 
+  const loadTencentStatus = useCallback(async () => {
+    try {
+      const { data } = await http.get<{ enabled: boolean; authorized: boolean; last_sync_at: string; last_error: string }>("/gifts/tencent-docs/status");
+      setTencentStatus(data);
+    } catch {
+      setTencentStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadTencentStatus();
+  }, [loadTencentStatus]);
+
+  const syncTencentDocs = async () => {
+    setTencentSyncing(true);
+    try {
+      const { data } = await http.post<{ skipped?: boolean; reason?: string; pushed: number; pulled: number; errors: string[] }>("/gifts/tencent-docs/sync");
+      if (data.skipped) message.warning(data.reason || "腾讯文档同步尚未启用");
+      else if (data.errors?.length) message.warning(`同步完成，但有 ${data.errors.length} 条数据未回填`);
+      else message.success(`腾讯文档同步完成：新增 ${data.pushed || 0} 条，回填 ${data.pulled || 0} 条`);
+      await Promise.all([load(), loadTencentStatus()]);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setTencentSyncing(false);
+    }
+  };
+
   useEffect(() => {
     http
       .get<{ items: Store[] }>("/stores")
@@ -243,9 +299,12 @@ export function GiftsPage() {
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((item) => {
+      if (todoStoreId && item.store_id !== todoStoreId) return false;
       if (storeFilter && item.store_name !== storeFilter) return false;
       if (reviewFilter && item.review_status !== reviewFilter) return false;
       if (settleFilter && item.settle_status !== settleFilter) return false;
+      if (remarkFilter && item.remark_status !== remarkFilter) return false;
+      if (syncErrorOnly && !item.tencent_sync_error) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
         const start = dateRange[0].startOf("day");
         const end = dateRange[1].endOf("day");
@@ -260,7 +319,7 @@ export function GiftsPage() {
         item.spec.toLowerCase().includes(kw)
       );
     });
-  }, [items, keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
+  }, [items, keyword, storeFilter, reviewFilter, settleFilter, remarkFilter, syncErrorOnly, todoStoreId, dateRange]);
 
   const filteredAmount = filtered.reduce((sum, row) => sum + Number(row.price), 0);
   const filteredCommission = filtered.reduce((sum, row) => sum + Number(row.commission), 0);
@@ -275,14 +334,17 @@ export function GiftsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [keyword, storeFilter, reviewFilter, settleFilter, dateRange]);
+  }, [keyword, storeFilter, reviewFilter, settleFilter, remarkFilter, syncErrorOnly, dateRange]);
 
   const resetFilters = () => {
     setKeyword("");
     setStoreFilter(undefined);
     setReviewFilter(undefined);
     setSettleFilter(undefined);
-    setDateRange([dayjs().startOf("day"), dayjs().endOf("day")]);
+    setRemarkFilter(undefined);
+    setSyncErrorOnly(false);
+    setSearchParams({});
+    setDateRange([dayjs().subtract(4, "day").startOf("day"), dayjs().add(2, "day").endOf("day")]);
   };
 
   const getCellValue = (row: Gift, field: EditableField): string | number => {
@@ -309,6 +371,7 @@ export function GiftsPage() {
       order_time: field === "order_time" ? String(value) : row.order_time || "",
       review_status: row.review_status,
       settle_status: row.settle_status,
+      remark_status: row.remark_status,
     };
     try {
       await http.put(`/gifts/${row.id}`, payload);
@@ -465,9 +528,20 @@ export function GiftsPage() {
     }
   };
 
+  const toggleRemark = async (row: Gift) => {
+    const next: GiftRemarkStatus = row.remark_status === "remarked" ? "unremarked" : "remarked";
+    try {
+      await http.post(`/gifts/${row.id}/remark`, { status: next });
+      message.success(`「${row.order_no || row.wangwang || "该单"}」已标记为「${REMARK_META[next].label}」`);
+      load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
   const batchSet = async (
-    field: "review_status" | "settle_status",
-    value: GiftReviewStatus | GiftSettleStatus
+    field: "review_status" | "settle_status" | "remark_status",
+    value: GiftReviewStatus | GiftSettleStatus | GiftRemarkStatus
   ) => {
     if (selectedKeys.length === 0) {
       message.warning("请先在表格里勾选要操作的订单");
@@ -575,7 +649,7 @@ export function GiftsPage() {
       message.warning("请先在表格里勾选要复制的订单");
       return;
     }
-    const headers = ["日期", "下单时间", "店铺", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态"];
+    const headers = ["日期", "下单时间", "店铺", "负责人", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态", "备注状态"];
     const lines = [headers.join("\t")];
     for (const row of rows) {
       const ot = row.order_time ? dayjs(row.order_time) : null;
@@ -584,6 +658,7 @@ export function GiftsPage() {
           ot ? ot.format("YYYY-MM-DD") : "",
           ot ? ot.format("HH:mm") : "",
           row.store_name,
+          row.owner_nickname,
           row.keyword,
           row.spec,
           Number(row.price).toFixed(2),
@@ -592,6 +667,7 @@ export function GiftsPage() {
           row.order_no,
           REVIEW_META[row.review_status].label,
           SETTLE_META[row.settle_status].label,
+          REMARK_META[row.remark_status].label,
         ].join("\t")
       );
     }
@@ -694,6 +770,14 @@ export function GiftsPage() {
       },
     },
     {
+      title: "负责人",
+      key: "owner_nickname",
+      dataIndex: "owner_nickname",
+      width: 90,
+      ellipsis: true,
+      render: (value: string) => value || <Text type="secondary">未记录</Text>,
+    },
+    {
       title: "关键词",
       key: "keyword",
       dataIndex: "keyword",
@@ -748,7 +832,24 @@ export function GiftsPage() {
       dataIndex: "price",
       sorter: (a: Gift, b: Gift) => Number(a.price) - Number(b.price),
       width: 90,
-      render: (_, row) => renderEditableCell(row, "price", `¥${Number(row.price).toFixed(2)}`),
+      render: (_, row) =>
+        renderEditableCell(
+          row,
+          "price",
+          <Tooltip
+            title={
+              row.price_sync_error
+                ? `千牛金额未修改：${row.price_sync_error}`
+                : row.price_before_qianniu !== null && row.qianniu_price !== null
+                  ? `千牛已校准：¥${Number(row.price_before_qianniu).toFixed(2)} → ¥${Number(row.qianniu_price).toFixed(2)}`
+                  : row.price_synced_at
+                    ? "系统金额与千牛实付金额一致"
+                    : undefined
+            }
+          >
+            <span>¥{Number(row.price).toFixed(2)}</span>
+          </Tooltip>
+        ),
     },
     {
       title: "佣金",
@@ -796,6 +897,31 @@ export function GiftsPage() {
         </Tag>
       ),
     },
+    {
+      title: "备注状态",
+      key: "remark_status",
+      dataIndex: "remark_status",
+      width: 90,
+      render: (_, row) => (
+        <Tooltip
+          title={
+            row.remark_error
+              ? row.remark_status === "awaiting_payment"
+                ? "订单仍在等待买家付款，系统会自动重试"
+                : `千牛自动备注：${row.remark_error}`
+              : row.remark_auto_pending
+                ? "等待千牛自动插红旗并备注 SD"
+                : row.remarked_at
+                  ? `千牛已确认：${dayjs(row.remarked_at).format("YYYY-MM-DD HH:mm:ss")}`
+                  : undefined
+          }
+        >
+          <Tag color={REMARK_META[row.remark_status].color} style={{ cursor: "pointer" }} onClick={() => toggleRemark(row)}>
+            {REMARK_META[row.remark_status].label}
+          </Tag>
+        </Tooltip>
+      ),
+    },
   ];
 
   const columnsWithWidths = useMemo(() => {
@@ -830,19 +956,24 @@ export function GiftsPage() {
         eyebrow="礼品单台账"
         title="礼品单"
         extra={
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => {
-              form.resetFields();
-              setFormImage("");
-              setCreateOpen(true);
-            }}
-          >
-            新增礼品单
-          </Button>
+          <Space wrap>
+            <Button icon={<CloudSyncOutlined />} loading={tencentSyncing} disabled={!tencentStatus?.enabled || !tencentStatus?.authorized} onClick={() => void syncTencentDocs()}>同步腾讯文档</Button>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                form.resetFields();
+                setFormImage("");
+                setCreateOpen(true);
+              }}
+            >
+              新增礼品单
+            </Button>
+          </Space>
         }
       />
+
+      {tencentStatus?.enabled ? <Alert type={tencentStatus.last_error ? "warning" : "success"} showIcon message={tencentStatus.last_error || "腾讯文档自动同步已启用"} description={tencentStatus.last_sync_at ? `最近同步：${dayjs(tencentStatus.last_sync_at).format("YYYY-MM-DD HH:mm:ss")}` : "等待首次同步"} style={{ marginBottom: 16 }} /> : null}
 
       <Card variant="borderless" style={{ marginBottom: 16 }} styles={{ body: { padding: "12px 20px" } }}>
         <Space size={12} wrap>
@@ -878,6 +1009,15 @@ export function GiftsPage() {
             options={SETTLE_OPTIONS}
             style={{ width: 120 }}
           />
+          <Select
+            value={remarkFilter}
+            onChange={setRemarkFilter}
+            placeholder="备注状态"
+            allowClear
+            options={REMARK_OPTIONS}
+            style={{ width: 130 }}
+          />
+          {syncErrorOnly ? <Tag color="red" closable onClose={() => setSyncErrorOnly(false)}>仅同步失败</Tag> : null}
           <Button size="small" onClick={() => setDateRange([dayjs().startOf("day"), dayjs().endOf("day")])}>
             今日
           </Button>
@@ -895,7 +1035,7 @@ export function GiftsPage() {
           <Button
             size="small"
             onClick={() =>
-              setDateRange([dayjs().subtract(6, "day").startOf("day"), dayjs().endOf("day")])
+              setDateRange([dayjs().subtract(4, "day").startOf("day"), dayjs().add(2, "day").endOf("day")])
             }
           >
             近七日
@@ -992,6 +1132,12 @@ export function GiftsPage() {
               <Button size="small" onClick={() => batchSet("settle_status", "unsettled")}>
                 标记未结款
               </Button>
+              <Button size="small" onClick={() => batchSet("remark_status", "remarked")}>
+                标记已备注
+              </Button>
+              <Button size="small" onClick={() => batchSet("remark_status", "unremarked")}>
+                标记未备注
+              </Button>
               <Button size="small" onClick={copyTable}>
                 复制
               </Button>
@@ -1070,7 +1216,7 @@ export function GiftsPage() {
             ];
             return <Table.Summary.Row>{renderCells("筛选后合计", filteredAmount, filteredCommission, filteredNet)}</Table.Summary.Row>;
           }}
-          scroll={{ x: 1360, y: 520 }}
+          scroll={{ x: 1450, y: 520 }}
         />
       </Card>
 

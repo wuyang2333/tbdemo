@@ -7,12 +7,11 @@ import {
   DownOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  CommentOutlined,
   DashboardOutlined,
   EyeOutlined,
-  ExclamationCircleOutlined,
   FileTextOutlined,
   FundOutlined,
-  InboxOutlined,
   MoneyCollectOutlined,
   ProfileOutlined,
   RobotOutlined,
@@ -64,6 +63,28 @@ type DashboardStats = {
 type AnnouncementItem = { id: number; title: string; content: string; created_at: string };
 type NotificationItem = { id: number; title: string; content: string; link: string; type: string; is_read: boolean; created_at: string };
 type ChangelogItem = { id: number; version: string; title: string; content: string; created_at: string };
+type DashboardTodo = {
+  key: string;
+  module: string;
+  category: "订单" | "礼品单" | "评价" | "推广" | "店铺" | "系统";
+  severity: "critical" | "warning" | "info";
+  title: string;
+  description: string;
+  count: number;
+  route: string;
+  external_url: string;
+  retryable: boolean;
+  retry_task: string;
+  store_id: number | null;
+  store_name: string;
+  updated_at: string | null;
+  snoozed: boolean;
+  snoozed_until: string | null;
+};
+type DashboardTodoResponse = {
+  items: DashboardTodo[];
+  summary: { urgent: number; pending: number; snoozed: number };
+};
 type LoopStatus = {
   name: string;
   last_run: string | null;
@@ -184,7 +205,11 @@ export function DashboardPage() {
   const [notices, setNotices] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loops, setLoops] = useState<LoopStatus[]>([]);
-  const [productSummary, setProductSummary] = useState<{ low_stock: number; zero_stock: number; stale: boolean } | null>(null);
+  const [todos, setTodos] = useState<DashboardTodo[]>([]);
+  const [todoSummary, setTodoSummary] = useState({ urgent: 0, pending: 0, snoozed: 0 });
+  const [todoCategory, setTodoCategory] = useState("全部");
+  const [showAllTodos, setShowAllTodos] = useState(false);
+  const [todoBusy, setTodoBusy] = useState<string | null>(null);
   const [changelog, setChangelog] = useState<ChangelogItem[]>([]);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -301,18 +326,49 @@ export function DashboardPage() {
     return () => clearInterval(timer);
   }, [loadExtras]);
 
+  const loadTodos = useCallback(async () => {
+    try {
+      const { data } = await http.get<DashboardTodoResponse>("/dashboard/todos");
+      setTodos(data.items);
+      setTodoSummary(data.summary);
+    } catch {
+      setTodos([]);
+      setTodoSummary({ urgent: 0, pending: 0, snoozed: 0 });
+    }
+  }, [currentStore?.id]);
   useEffect(() => {
-    if (!canAccessModule(user, "products")) return;
-    const loadProductSummary = () => {
-      http
-        .get<{ summary: { low_stock: number; zero_stock: number; stale: boolean } }>("/products?page=1&page_size=1")
-        .then(({ data }) => setProductSummary(data.summary))
-        .catch(() => setProductSummary(null));
-    };
-    loadProductSummary();
-    const timer = setInterval(loadProductSummary, 60000);
-    return () => clearInterval(timer);
-  }, [user]);
+    void loadTodos();
+    const timer = window.setInterval(() => void loadTodos(), 60000);
+    return () => window.clearInterval(timer);
+  }, [loadTodos]);
+
+  const snoozeTodo = async (todo: DashboardTodo) => {
+    setTodoBusy(todo.key);
+    try {
+      await http.post(`/dashboard/todos/${encodeURIComponent(todo.key)}/snooze`, { minutes: 60 });
+      message.success("已稍后 1 小时提醒");
+      await loadTodos();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setTodoBusy(null);
+    }
+  };
+
+  const retryTodo = async (todo: DashboardTodo) => {
+    if (!todo.retry_task) return;
+    setTodoBusy(todo.key);
+    try {
+      const scope = currentStore?.id && todo.retry_task !== "inspect" ? `?store_id=${currentStore.id}` : "";
+      await http.post(`/system/loops/${todo.retry_task}/retry${scope}`, {}, { timeout: 240000 });
+      message.success("后台任务重试成功");
+      await Promise.all([loadTodos(), loadExtras()]);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setTodoBusy(null);
+    }
+  };
 
   const markNoticeRead = async (id?: number) => {
     try {
@@ -361,24 +417,17 @@ export function DashboardPage() {
   const clock = now.toLocaleTimeString("zh-CN", { hour12: false });
   const statusClass = backendOk === null ? "wait" : backendOk ? "ok" : "err";
   const statusLabel = backendOk === null ? "检测中" : backendOk ? "运行中" : "离线";
-  const failedLoops = loops.filter((loop) => loop.error_count > 0);
-  const actionItems = [
-    ...(canAccessModule(user, "gifts") && (stats?.pending_shipments ?? 0) > 0
-      ? [{ key: "ship", icon: <CarOutlined />, title: `${formatNumber(stats?.pending_shipments ?? 0)} 笔订单待发货`, description: "请前往淘宝千牛待发货订单列表处理", route: "", tone: "warning" }]
-      : []),
-    ...(canAccessModule(user, "products") && (productSummary?.zero_stock ?? 0) > 0
-      ? [{ key: "zero", icon: <InboxOutlined />, title: `${formatNumber(productSummary?.zero_stock ?? 0)} 个在售商品已无库存`, description: "检查补货或及时调整商品状态", route: "/products?stock_status=zero", tone: "danger" }]
-      : []),
-    ...(canAccessModule(user, "products") && (productSummary?.low_stock ?? 0) > 0
-      ? [{ key: "low", icon: <ShoppingOutlined />, title: `${formatNumber(productSummary?.low_stock ?? 0)} 个商品库存偏低`, description: "库存不高于 10 件，建议确认补货计划", route: "/products?stock_status=low", tone: "warning" }]
-      : []),
-    ...(failedLoops.length > 0
-      ? [{ key: "sync", icon: <ExclamationCircleOutlined />, title: `${failedLoops.length} 项后台同步异常`, description: failedLoops.map((loop) => LOOP_LABELS[loop.name] ?? loop.name).join("、"), route: "/tasks", tone: "danger" }]
-      : []),
-    ...(stats?.operational_stale || productSummary?.stale
-      ? [{ key: "stale", icon: <ClockCircleOutlined />, title: "部分经营数据可能已过期", description: "请在同步中心确认最近成功时间", route: "/tasks", tone: "warning" }]
-      : []),
-  ];
+  const todoCategories = ["全部", "订单", "礼品单", "评价", "推广", "店铺", "系统", "已稍后"];
+  const filteredTodos = todos.filter((todo) => {
+    if (todoCategory === "已稍后") return todo.snoozed;
+    if (todo.snoozed) return false;
+    return todoCategory === "全部" || todo.category === todoCategory;
+  });
+  const visibleTodos = showAllTodos ? filteredTodos : filteredTodos.slice(0, 5);
+  const todoIcon = (category: DashboardTodo["category"]) => ({
+    订单: <CarOutlined />, 礼品单: <ProfileOutlined />, 评价: <CommentOutlined />,
+    推广: <RocketOutlined />, 店铺: <ShopOutlined />, 系统: <ApiOutlined />,
+  }[category]);
 
   return (
     <div>
@@ -441,29 +490,62 @@ export function DashboardPage() {
           <div className="ops-action-center">
             <div className="ops-action-center__head">
               <Text strong style={{ fontSize: 16 }}>今日待办</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>按风险优先处理经营异常</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>未解决事项持续保留，按风险优先处理</Text>
               <div style={{ flex: 1 }} />
-              <Tag color={actionItems.length > 0 ? "orange" : "green"}>{actionItems.length > 0 ? `${actionItems.length} 项待处理` : "当前无异常"}</Tag>
+              <Tag color={todoSummary.urgent > 0 ? "red" : "default"}>紧急 {todoSummary.urgent}</Tag>
+              <Tag color={todoSummary.pending > 0 ? "orange" : "green"}>待处理 {todoSummary.pending}</Tag>
+              <Tag color="blue">已稍后 {todoSummary.snoozed}</Tag>
             </div>
-            {actionItems.length === 0 ? (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "2px 18px 12px" }}>
+              {todoCategories.map((category) => (
+                <Button key={category} size="small" type={todoCategory === category ? "primary" : "default"} onClick={() => { setTodoCategory(category); setShowAllTodos(false); }}>
+                  {category}
+                </Button>
+              ))}
+            </div>
+            {visibleTodos.length === 0 ? (
               <div style={{ padding: "18px", borderTop: "1px solid var(--ops-border)" }}>
-                <Space><CheckCircleOutlined style={{ color: "var(--ops-success)" }} /><Text type="secondary">当前没有需要优先处理的经营异常</Text></Space>
+                <Space><CheckCircleOutlined style={{ color: "var(--ops-success)" }} /><Text type="secondary">{todoCategory === "已稍后" ? "当前没有稍后提醒" : "当前没有需要处理的事项"}</Text></Space>
               </div>
-            ) : actionItems.map((item) => (
-              <div className="ops-action-item" key={item.key} onClick={() => { if (item.route) navigate(item.route); }} style={{ cursor: item.route ? "pointer" : "default" }}>
+            ) : visibleTodos.map((todo) => (
+              <div className="ops-action-item" key={todo.key}>
                 <span
                   className="ops-action-item__icon"
-                  style={item.tone === "danger" ? { color: "var(--ops-danger)", background: "color-mix(in srgb, var(--ops-danger) 12%, transparent)" } : { color: "var(--ops-warn)", background: "color-mix(in srgb, var(--ops-warn) 12%, transparent)" }}
+                  style={todo.severity === "critical" ? { color: "var(--ops-danger)", background: "color-mix(in srgb, var(--ops-danger) 12%, transparent)" } : { color: "var(--ops-warn)", background: "color-mix(in srgb, var(--ops-warn) 12%, transparent)" }}
                 >
-                  {item.icon}
+                  {todoIcon(todo.category)}
                 </span>
                 <div style={{ minWidth: 0 }}>
-                  <Text strong>{item.title}</Text>
-                  <Text type="secondary" style={{ display: "block", fontSize: 12 }}>{item.description}</Text>
+                  <Space size={6} wrap>
+                    <Text strong>{todo.title}</Text>
+                    <Tag>{todo.category}</Tag>
+                    {todo.store_name ? <Tag color="blue">{todo.store_name}</Tag> : null}
+                    {todo.snoozed_until ? <Tag color="cyan">提醒于 {fmtTime(todo.snoozed_until)}</Tag> : null}
+                  </Space>
+                  <Text type="secondary" style={{ display: "block", fontSize: 12 }}>{todo.description}</Text>
+                  <Text type="secondary" style={{ display: "block", fontSize: 11 }}>最近检查 {fmtTime(todo.updated_at)}</Text>
                 </div>
-                {item.route ? <ArrowRightOutlined style={{ color: "var(--ops-text-3)" }} /> : <Tag>淘宝后台处理</Tag>}
+                <Space size={6} wrap style={{ justifyContent: "flex-end" }}>
+                  {todo.retryable ? <Button size="small" loading={todoBusy === todo.key} onClick={() => void retryTodo(todo)}>立即重试</Button> : null}
+                  {!todo.snoozed ? <Button size="small" loading={todoBusy === todo.key} onClick={() => void snoozeTodo(todo)}>稍后提醒</Button> : null}
+                  {(todo.route || todo.external_url) ? (
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<ArrowRightOutlined />}
+                      onClick={() => todo.external_url ? window.open(todo.external_url, "_blank", "noopener,noreferrer") : navigate(todo.route)}
+                    >
+                      去处理
+                    </Button>
+                  ) : null}
+                </Space>
               </div>
             ))}
+            {filteredTodos.length > 5 ? (
+              <div style={{ padding: "10px 18px", borderTop: "1px solid var(--ops-border)", textAlign: "center" }}>
+                <Button type="link" size="small" onClick={() => setShowAllTodos((value) => !value)}>{showAllTodos ? "收起" : `查看全部 ${filteredTodos.length} 项`}</Button>
+              </div>
+            ) : null}
           </div>
         </Col>
       </Row>

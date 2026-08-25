@@ -9,21 +9,38 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
 
 from backend.app.api.auth import get_current_user, visible_store_ids
-from backend.app.core.db import DB_PATH, get_db
+from backend.app.core.db import DB_PATH, connect_db, get_db
 from backend.app.core.logs import log_op
+from backend.app.core import tencent_docs
 
 router = APIRouter()
 
 REVIEW_STATUSES = ("none", "reviewed")
 SETTLE_STATUSES = ("unsettled", "settled")
+REMARK_STATUSES = (
+    "unremarked",
+    "order_not_found",
+    "order_closed",
+    "awaiting_payment",
+    "remark_failed",
+    "remarked",
+)
 REVIEW_LABELS = {"none": "未评论", "reviewed": "已评论"}
 SETTLE_LABELS = {"unsettled": "未结款", "settled": "已结款"}
+REMARK_LABELS = {
+    "unremarked": "待备注",
+    "order_not_found": "订单未查到",
+    "order_closed": "订单已关闭",
+    "awaiting_payment": "订单待付款",
+    "remark_failed": "备注失败",
+    "remarked": "备注成功",
+}
 
 
 class GiftIn(BaseModel):
@@ -38,6 +55,7 @@ class GiftIn(BaseModel):
     order_time: str = ""
     review_status: str = "none"
     settle_status: str = "unsettled"
+    remark_status: str = "unremarked"
     image: str = ""
 
 
@@ -49,6 +67,7 @@ class GiftBatchIn(BaseModel):
     ids: list[int]
     review_status: str | None = None
     settle_status: str | None = None
+    remark_status: str | None = None
 
 
 class GiftBatchDeleteIn(BaseModel):
@@ -116,6 +135,7 @@ def _payload(row) -> dict:
             (row["linked_store_name"] or "") if row["store_id"] != 0 else (row["store_name"] or "")
         )
         or "未关联店铺",
+        "owner_nickname": row["owner_nickname"],
         "order_no": row["order_no"],
         "keyword": row["keyword"],
         "spec": row["spec"],
@@ -125,13 +145,37 @@ def _payload(row) -> dict:
         "order_time": row["order_time"],
         "review_status": row["review_status"],
         "settle_status": row["settle_status"],
+        "remark_status": row["remark_status"],
         "status": row["status"],
         "recipient": row["recipient"],
         "gift_name": row["gift_name"],
         "quantity": row["quantity"],
         "image": row["image"] or "",
         "created_at": row["created_at"],
+        "tencent_row": row["tencent_row"],
+        "tencent_synced_at": row["tencent_synced_at"],
+        "tencent_sync_error": row["tencent_sync_error"],
+        "remark_auto_pending": bool(row["remark_auto_pending"]),
+        "remark_attempts": row["remark_attempts"],
+        "remark_attempted_at": row["remark_attempted_at"],
+        "remarked_at": row["remarked_at"],
+        "remark_error": row["remark_error"],
+        "qianniu_price": row["qianniu_price"],
+        "price_before_qianniu": row["price_before_qianniu"],
+        "price_synced_at": row["price_synced_at"],
+        "price_sync_error": row["price_sync_error"],
     }
+
+
+def _sync_tencent_docs_background() -> None:
+    conn = connect_db()
+    try:
+        tencent_docs.sync_gifts(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 def _validate(body: GiftIn, has_image: bool = False, existing_store_name: str = "") -> dict:
@@ -152,6 +196,8 @@ def _validate(body: GiftIn, has_image: bool = False, existing_store_name: str = 
         raise HTTPException(status_code=400, detail="评论状态不正确")
     if body.settle_status not in SETTLE_STATUSES:
         raise HTTPException(status_code=400, detail="结款状态不正确")
+    if body.remark_status not in REMARK_STATUSES:
+        raise HTTPException(status_code=400, detail="备注状态不正确")
     return {"keyword": keyword, "spec": spec, "wangwang": wangwang}
 
 
@@ -264,7 +310,7 @@ def export_gifts(
     wb = Workbook()
     ws = wb.active
     ws.title = "礼品单"
-    ws.append(["日期", "下单时间", "店铺", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态"])
+    ws.append(["日期", "下单时间", "店铺", "负责人", "关键词", "规格", "金额", "佣金", "旺旺号", "订单编号", "评论状态", "结款状态", "备注状态"])
     for row in rows:
         ot = row["order_time"] or row["created_at"] or ""
         ws.append(
@@ -272,6 +318,7 @@ def export_gifts(
                 ot[:10] if ot else "",
                 (ot.split("T")[-1].split(" ")[-1][:5]) if ot else "",
                 (row["linked_store_name"] or "") if row["store_id"] != 0 else (row["store_name"] or ""),
+                row["owner_nickname"],
                 row["keyword"],
                 row["spec"],
                 row["price"],
@@ -280,9 +327,10 @@ def export_gifts(
                 row["order_no"],
                 REVIEW_LABELS.get(row["review_status"], row["review_status"]),
                 SETTLE_LABELS.get(row["settle_status"], row["settle_status"]),
+                REMARK_LABELS.get(row["remark_status"], row["remark_status"]),
             ]
         )
-    widths = [12, 18, 20, 18, 14, 10, 10, 16, 24, 10, 10]
+    widths = [12, 18, 20, 14, 18, 14, 10, 10, 16, 24, 10, 10, 10]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[chr(64 + idx)].width = width
     buf = BytesIO()
@@ -319,6 +367,7 @@ async def upload_gift_image_standalone(
 @router.post("/batch-create")
 def batch_create_gifts(
     body: GiftBatchCreateIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -369,6 +418,7 @@ def batch_create_gifts(
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="开始时间格式不正确（应为 HH:mm）")
     created_at = _now()
+    owner_nickname = str(user.get("nickname") or user.get("username") or "")
     items = []
     for i in range(quantity):
         ts = base + timedelta(minutes=15 * i)
@@ -376,8 +426,8 @@ def batch_create_gifts(
         cur = db.execute(
             """
             INSERT INTO gifts (store_id, store_name, order_no, keyword, spec, price, commission, wangwang, order_time,
-                               review_status, settle_status, status, created_at, image)
-            VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'none', 'unsettled', 'pending', ?, ?)
+                               review_status, settle_status, status, created_at, image, owner_nickname)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'none', 'unsettled', 'pending', ?, ?, ?)
             """,
             (
                 store_id,
@@ -390,10 +440,13 @@ def batch_create_gifts(
                 order_time,
                 created_at,
                 image,
+                owner_nickname,
             ),
         )
         items.append(_payload(_get_gift_or_404(db, cur.lastrowid)))
     log_op(db, user, "gifts", "create", keyword or image, f"批量生成 {quantity} 条礼品单")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"items": items}
 
 
@@ -405,12 +458,14 @@ def batch_update_gifts(
 ) -> dict:
     if not body.ids:
         raise HTTPException(status_code=400, detail="请先选择要修改的礼品单")
-    if body.review_status is None and body.settle_status is None:
-        raise HTTPException(status_code=400, detail="请选择要修改的评论状态或结款状态")
+    if body.review_status is None and body.settle_status is None and body.remark_status is None:
+        raise HTTPException(status_code=400, detail="请选择要修改的评论、结款或备注状态")
     if body.review_status is not None and body.review_status not in REVIEW_STATUSES:
         raise HTTPException(status_code=400, detail="评论状态不正确")
     if body.settle_status is not None and body.settle_status not in SETTLE_STATUSES:
         raise HTTPException(status_code=400, detail="结款状态不正确")
+    if body.remark_status is not None and body.remark_status not in REMARK_STATUSES:
+        raise HTTPException(status_code=400, detail="备注状态不正确")
     placeholders = ",".join("?" for _ in body.ids)
     scf, _ = _store_clause(user, alias="")
     if body.review_status is not None:
@@ -422,6 +477,11 @@ def batch_update_gifts(
         db.execute(
             f"UPDATE gifts SET settle_status = ? WHERE id IN ({placeholders})" + scf,
             (body.settle_status, *body.ids),
+        )
+    if body.remark_status is not None:
+        db.execute(
+            f"UPDATE gifts SET remark_status = ?, remark_auto_pending = 0, remark_error = '', remark_next_retry_at = NULL WHERE id IN ({placeholders})" + scf,
+            (body.remark_status, *body.ids),
         )
     log_op(db, user, "gifts", "batch", "", f"批量更新 {len(body.ids)} 单")
     return {"ok": True, "count": len(body.ids)}
@@ -445,6 +505,7 @@ def batch_delete_gifts(
 @router.post("")
 def create_gift(
     body: GiftIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -465,11 +526,14 @@ def create_gift(
         raise HTTPException(status_code=403, detail="只能创建自己绑定店铺的礼品单")
     order_no = _resolve_order_no(db, body)
     order_time = body.order_time.strip() or _now()
+    owner_nickname = str(user.get("nickname") or user.get("username") or "")
+    remark_auto_pending = 1 if order_no or fields["wangwang"] else 0
     cur = db.execute(
         """
         INSERT INTO gifts (store_id, store_name, order_no, keyword, spec, price, commission, wangwang, order_time,
-                           review_status, settle_status, status, created_at, image)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                           review_status, settle_status, remark_status, status, created_at, image, owner_nickname,
+                           remark_auto_pending)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
         """,
         (
             store_id,
@@ -483,13 +547,31 @@ def create_gift(
             order_time,
             body.review_status,
             body.settle_status,
+            body.remark_status,
             _now(),
             body.image.strip(),
+            owner_nickname,
+            remark_auto_pending,
         ),
     )
     item = _payload(_get_gift_or_404(db, cur.lastrowid))
     log_op(db, user, "gifts", "create", order_no, f"新增礼品单 {order_no}")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
+
+
+@router.get("/tencent-docs/status")
+def tencent_docs_status(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    return tencent_docs.public_config(db)
+
+
+@router.post("/tencent-docs/sync")
+def sync_tencent_docs(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    try:
+        return tencent_docs.sync_gifts(db)
+    except tencent_docs.TencentDocsError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.put("/{gift_id}")
@@ -535,7 +617,7 @@ def update_gift(
         """
         UPDATE gifts
         SET store_id = ?, store_name = ?, order_no = ?, keyword = ?, spec = ?, price = ?, commission = ?,
-            wangwang = ?, order_time = ?, review_status = ?, settle_status = ?
+            wangwang = ?, order_time = ?, review_status = ?, settle_status = ?, remark_status = ?
         WHERE id = ?
         """,
         (
@@ -550,9 +632,27 @@ def update_gift(
             order_time,
             body.review_status,
             body.settle_status,
+            body.remark_status,
             gift_id,
         ),
     )
+    identifiers_changed = order_no != row["order_no"] or fields["wangwang"] != row["wangwang"]
+    if identifiers_changed or store_id != row["store_id"]:
+        db.execute(
+            """
+            UPDATE gifts
+            SET remark_status = 'unremarked', remark_auto_pending = ?, remark_attempts = 0,
+                remark_attempted_at = NULL, remarked_at = NULL, remark_error = '',
+                remark_next_retry_at = NULL
+            WHERE id = ?
+            """,
+            (1 if order_no or fields["wangwang"] else 0, gift_id),
+        )
+    if store_id != row["store_id"] or (fields["wangwang"] != row["wangwang"] and not order_no):
+        db.execute(
+            "UPDATE gifts SET remark_lookup_order_no = '', remark_match_source = '' WHERE id = ?",
+            (gift_id,),
+        )
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "update", order_no, f"编辑礼品单 {row['order_no']}")
     return {"item": item}
@@ -592,9 +692,34 @@ def update_gift_settle(
     return {"item": item}
 
 
+@router.post("/{gift_id}/remark")
+def update_gift_remark(
+    gift_id: int,
+    body: GiftStatusIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if body.status not in REMARK_STATUSES:
+        raise HTTPException(status_code=400, detail="备注状态不正确")
+    row = _get_gift_or_404(db, gift_id)
+    _ensure_gift_access(user, row)
+    db.execute(
+        """
+        UPDATE gifts
+        SET remark_status = ?, remark_auto_pending = 0, remark_error = '', remark_next_retry_at = NULL
+        WHERE id = ?
+        """,
+        (body.status, gift_id),
+    )
+    item = _payload(_get_gift_or_404(db, gift_id))
+    log_op(db, user, "gifts", "remark", row["order_no"], f"备注状态改为「{REMARK_LABELS[body.status]}」")
+    return {"item": item}
+
+
 @router.post("/{gift_id}/image")
 async def upload_gift_image(
     gift_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
@@ -624,12 +749,15 @@ async def upload_gift_image(
     db.execute("UPDATE gifts SET image = ? WHERE id = ?", (f"/api/images/{name}", gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "image", row["order_no"], "上传图片")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
 
 @router.post("/{gift_id}/image/clear")
 def clear_gift_image(
     gift_id: int,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -646,6 +774,8 @@ def clear_gift_image(
     db.execute("UPDATE gifts SET image = '' WHERE id = ?", (gift_id,))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "image", row["order_no"], "移除图片")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
 

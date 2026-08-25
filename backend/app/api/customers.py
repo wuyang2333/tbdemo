@@ -698,7 +698,7 @@ def list_reviews(
     item_id: str = "",
     sentiment: str = Query("", pattern="^(|positive|neutral|negative)$"),
     process_status: str = Query("", pattern="^(|pending|contacted|resolved|ignored)$"),
-    reply_status: str = Query("", pattern="^(|draft|approved|published)$"),
+    reply_status: str = Query("", pattern="^(|draft|approved|published|failed)$"),
     q: str = "",
     days: int | None = Query(None, ge=1, le=3650),
     page: int = Query(1, ge=1),
@@ -1537,45 +1537,6 @@ def delete_review_reply_template(template_id: int, user: dict = Depends(get_curr
     if not cur.rowcount:
         raise HTTPException(status_code=404, detail="回复模板不存在")
     return {"ok": True}
-
-
-@router.get("/reviews/data-quality")
-def review_data_quality(
-    store_id: int | None = None,
-    days: int = Query(30, ge=1, le=3650),
-    user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-) -> dict:
-    if store_id is not None:
-        _ensure_store_access(user, store_id, db)
-    where, params = _review_query(user, store_id, "", "", "", "", days)
-    rows = [dict(row) for row in db.execute("SELECT r.id, r.review_id, r.item_id, r.item_title, r.content, r.append_content, r.review_time FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id" + where, params).fetchall()]
-    duplicate_counts = Counter((row["item_id"], (row["content"] or "").strip()) for row in rows if (row["content"] or "").strip())
-    duplicate_keys = {key for key, count in duplicate_counts.items() if count > 1}
-    now = datetime.now(timezone.utc)
-    issue_rows: dict[str, list[dict]] = {key: [] for key in ("duplicate", "garbled", "missing_item", "invalid_time", "empty_content")}
-    for row in rows:
-        content = f"{row['content'] or ''}{row['append_content'] or ''}"
-        if (row["item_id"], (row["content"] or "").strip()) in duplicate_keys:
-            issue_rows["duplicate"].append(row)
-        if "�" in content or "����" in content:
-            issue_rows["garbled"].append(row)
-        if not row["item_id"] or not row["item_title"]:
-            issue_rows["missing_item"].append(row)
-        if not content.strip():
-            issue_rows["empty_content"].append(row)
-        try:
-            parsed = datetime.fromisoformat(str(row["review_time"]).replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            if parsed > now + timedelta(days=1) or parsed.year < 2010:
-                issue_rows["invalid_time"].append(row)
-        except (TypeError, ValueError):
-            issue_rows["invalid_time"].append(row)
-    labels = {"duplicate": "疑似重复评论", "garbled": "正文存在乱码", "missing_item": "商品信息缺失", "invalid_time": "评价时间异常", "empty_content": "评论正文为空"}
-    issues = [{"code": code, "label": labels[code], "count": len(items), "severity": "error", "examples": [{"id": item["id"], "review_id": item["review_id"], "item_title": item["item_title"], "content": item["content"][:100]} for item in items[:5]]} for code, items in issue_rows.items()]
-    affected = len({item["id"] for items in issue_rows.values() for item in items})
-    return {"total": len(rows), "affected": affected, "healthy": max(len(rows) - affected, 0), "health_rate": round((len(rows) - affected) / len(rows) * 100, 1) if rows else 100, "issues": issues}
 
 
 @router.post("/reviews/import")

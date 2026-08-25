@@ -52,6 +52,9 @@ export type StoreLog = {
   target_name: string;
   detail: string;
   created_at: string;
+  tencent_row: number | null;
+  tencent_synced_at: string | null;
+  tencent_sync_error: string;
 };
 
 export type GiftStatus = "pending" | "shipped" | "delivered" | "refunded";
@@ -60,10 +63,19 @@ export type GiftReviewStatus = "none" | "reviewed";
 
 export type GiftSettleStatus = "unsettled" | "settled";
 
+export type GiftRemarkStatus =
+  | "unremarked"
+  | "order_not_found"
+  | "order_closed"
+  | "awaiting_payment"
+  | "remark_failed"
+  | "remarked";
+
 export type Gift = {
   id: number;
   store_id: number;
   store_name: string;
+  owner_nickname: string;
   order_no: string;
   keyword: string;
   spec: string;
@@ -73,12 +85,25 @@ export type Gift = {
   order_time: string;
   review_status: GiftReviewStatus;
   settle_status: GiftSettleStatus;
+  remark_status: GiftRemarkStatus;
   image: string;
   status: GiftStatus;
   recipient: string;
   gift_name: string;
   quantity: number;
   created_at: string;
+  tencent_row: number | null;
+  tencent_synced_at: string | null;
+  tencent_sync_error: string;
+  remark_auto_pending: boolean;
+  remark_attempts: number;
+  remark_attempted_at: string | null;
+  remarked_at: string | null;
+  remark_error: string;
+  qianniu_price: number | null;
+  price_before_qianniu: number | null;
+  price_synced_at: string | null;
+  price_sync_error: string;
 };
 
 export type OpLog = {

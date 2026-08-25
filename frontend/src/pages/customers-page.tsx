@@ -13,6 +13,7 @@ import { Alert, Button, Card, Col, Descriptions, Drawer, Empty, Input, InputNumb
 import type { TableColumnsType, UploadProps } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useStores } from "../lib/store";
@@ -69,7 +70,6 @@ type Summary = {
 type ProductSummary = { item_id: string; item_title: string; total: number; positive: number; negative: number; negative_rate: number };
 type ReviewAlert = { id: number; title: string; message: string; status: string; content: string; item_title: string; review_time: string };
 type ReplyTemplate = { id: number; name: string; category: string; content: string };
-type QualityReport = { total: number; affected: number; healthy: number; health_rate: number; issues: { code: string; label: string; count: number; severity: "warning" | "error"; examples: { id: number; item_title: string; content: string }[] }[] };
 type TrendAlert = { id: number; store_name: string; message: string; level: "warning" | "critical"; status: string; current_rate: number; baseline_rate: number; alert_date: string };
 type TopicReport = { total: number; items: { topic: string; count: number; negative: number; negative_rate: number; products: { name: string; count: number }[]; examples: { id: number; content: string; item_title: string }[] }[]; emerging_terms: { term: string; count: number }[] };
 type AccuracyReport = { total: number; confirmed_sample: number; corrected_count: number; manual_agreement_rate: number | null; correction_rate: number | null; needs_review_count: number; average_confidence: number; sources: { source: string; count: number }[]; corrections: { transition: string; count: number }[] };
@@ -79,19 +79,21 @@ type KnowledgeArticle = { id: number; store_id: number; title: string; category:
 
 const sentimentLabels: Record<string, string> = { positive: "好评", neutral: "中评", negative: "差评" };
 const processLabels: Record<string, string> = { pending: "待处理", contacted: "已联系", resolved: "已解决", ignored: "已忽略" };
-const replyStatusLabels: Record<string, string> = { draft: "回复待审核", approved: "回复已审核", published: "回复已发布" };
+const replyStatusLabels: Record<string, string> = { draft: "回复待审核", approved: "回复已审核", published: "回复已发布", failed: "回复发布失败" };
 
 function sentimentTag(value: string) {
   return <Tag color={value === "positive" ? "green" : value === "negative" ? "red" : "gold"}>{sentimentLabels[value] ?? "待分析"}</Tag>;
 }
 
 export function CustomersPage() {
+  const [searchParams] = useSearchParams();
   const { stores, currentStore } = useStores();
-  const [storeId, setStoreId] = useState<number | undefined>(currentStore?.id);
+  const todoStoreId = Number(searchParams.get("store_id")) || undefined;
+  const [storeId, setStoreId] = useState<number | undefined>(todoStoreId ?? currentStore?.id);
   const [days, setDays] = useState(30);
-  const [sentiment, setSentiment] = useState("");
-  const [processStatus, setProcessStatus] = useState("");
-  const [replyStatus, setReplyStatus] = useState("");
+  const [sentiment, setSentiment] = useState(searchParams.get("sentiment") || "");
+  const [processStatus, setProcessStatus] = useState(searchParams.get("process_status") || "");
+  const [replyStatus, setReplyStatus] = useState(searchParams.get("reply_status") || "");
   const [keyword, setKeyword] = useState("");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
@@ -117,8 +119,6 @@ export function CustomersPage() {
   const [templateName, setTemplateName] = useState("");
   const [templateCategory, setTemplateCategory] = useState("通用");
   const [templateContent, setTemplateContent] = useState("");
-  const [quality, setQuality] = useState<QualityReport | null>(null);
-  const [qualityOpen, setQualityOpen] = useState(false);
   const [trendAlerts, setTrendAlerts] = useState<TrendAlert[]>([]);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [insightsLoading, setInsightsLoading] = useState(false);
@@ -145,8 +145,8 @@ export function CustomersPage() {
   const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeArticle[]>([]);
 
   useEffect(() => {
-    if (currentStore?.id) setStoreId(currentStore.id);
-  }, [currentStore?.id]);
+    if (!todoStoreId && currentStore?.id) setStoreId(currentStore.id);
+  }, [currentStore?.id, todoStoreId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -159,13 +159,12 @@ export function CustomersPage() {
       if (query) params.set("q", query);
       const summaryParams = new URLSearchParams({ days: String(days) });
       if (storeId) summaryParams.set("store_id", String(storeId));
-      const [listResponse, summaryResponse, productResponse, alertResponse, templateResponse, qualityResponse, trendResponse] = await Promise.all([
+      const [listResponse, summaryResponse, productResponse, alertResponse, templateResponse, trendResponse] = await Promise.all([
         http.get<{ items: Review[]; total: number }>(`/customers/reviews?${params.toString()}`),
         http.get<Summary>(`/customers/reviews/summary?${summaryParams.toString()}`),
         http.get<{ items: ProductSummary[] }>(`/customers/reviews/product-summary?${summaryParams.toString()}`),
         http.get<{ items: ReviewAlert[] }>(`/customers/reviews/alerts?${storeId ? `store_id=${storeId}` : ""}`),
         http.get<{ items: ReplyTemplate[] }>("/customers/reviews/reply-templates"),
-        http.get<QualityReport>(`/customers/reviews/data-quality?${summaryParams.toString()}`),
         http.get<{ items: TrendAlert[] }>(`/customers/reviews/trend-alerts?${storeId ? `store_id=${storeId}` : ""}`),
       ]);
       setReviews(listResponse.data.items);
@@ -174,7 +173,6 @@ export function CustomersPage() {
       setProductSummary(productResponse.data.items);
       setAlerts(alertResponse.data.items);
       setReplyTemplates(templateResponse.data.items);
-      setQuality(qualityResponse.data);
       setTrendAlerts(trendResponse.data.items);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -561,7 +559,7 @@ export function CustomersPage() {
       width: 390,
       render: (_, row) => (
         <div style={{ maxWidth: 380 }}>
-          <Space size={6} wrap>{sentimentTag(row.sentiment)}{row.review_status === "needs_review" ? <Tag color="purple">待确认</Tag> : row.review_status === "confirmed" ? <Tag color="blue">人工确认</Tag> : null}{row.analysis_source === "ai" ? <Tag color="geekblue">AI 判断</Tag> : row.analysis_source === "rules" ? <Tag>规则判断</Tag> : row.analysis_source === "learned" ? <Tag color="cyan">历史学习</Tag> : null}{row.severity !== "normal" ? <Tag color="orange">{row.severity === "high" ? "重点" : "需关注"}</Tag> : null}{row.reply_status === "draft" ? <Tag color="gold">回复待审核</Tag> : row.reply_status === "approved" ? <Tag color="blue">回复已审核</Tag> : row.reply_status === "published" ? <Tag color="green">回复已发布</Tag> : null}</Space>
+          <Space size={6} wrap>{sentimentTag(row.sentiment)}{row.review_status === "needs_review" ? <Tag color="purple">待确认</Tag> : row.review_status === "confirmed" ? <Tag color="blue">人工确认</Tag> : null}{row.analysis_source === "ai" ? <Tag color="geekblue">AI 判断</Tag> : row.analysis_source === "rules" ? <Tag>规则判断</Tag> : row.analysis_source === "learned" ? <Tag color="cyan">历史学习</Tag> : null}{row.severity !== "normal" ? <Tag color="orange">{row.severity === "high" ? "重点" : "需关注"}</Tag> : null}{row.reply_status === "draft" ? <Tag color="gold">回复待审核</Tag> : row.reply_status === "approved" ? <Tag color="blue">回复已审核</Tag> : row.reply_status === "published" ? <Tag color="green">回复已发布</Tag> : row.reply_status === "failed" ? <Tag color="red">回复发布失败</Tag> : null}</Space>
           <Paragraph ellipsis={{ rows: 2 }} style={{ margin: "5px 0 0", fontSize: 13 }}>{row.content || row.append_content || "（无文字评价）"}</Paragraph>
           {row.keywords?.length > 0 ? <Text type="secondary" style={{ fontSize: 12 }}>关键词：{row.keywords.slice(0, 4).join("、")}</Text> : null}
         </div>
@@ -583,16 +581,15 @@ export function CustomersPage() {
         title="评论分析"
         description="识别评价情绪、归纳商品问题、跟进差评处理"
         stackActions
-        extra={<Space wrap><Select value={storeId} onChange={(value) => { setStoreId(value); setPage(1); }} allowClear placeholder="全部店铺" style={{ width: 150 }} options={stores.map((store) => ({ value: store.id, label: store.name }))} /><Select value={days} onChange={(value) => { setDays(value); setPage(1); }} options={[{ value: 7, label: "近 7 天" }, { value: 30, label: "近 30 天" }, { value: 90, label: "近 90 天" }]} style={{ width: 110 }} /><Button icon={<ReloadOutlined />} onClick={load}>刷新</Button><Button onClick={syncReviews} loading={syncing}>自动同步评论</Button><Button icon={<RobotOutlined />} onClick={reviewAmbiguousWithAi} loading={aiReviewLoading}>AI 复核{summary?.needs_review_count ? ` (${summary.needs_review_count})` : ""}</Button><Button icon={<RobotOutlined />} onClick={createAiSummary} loading={aiLoading}>AI 总结</Button><Button onClick={openInsights}>分析中心</Button><Button onClick={() => void openTerms()}>自定义词库</Button><Button onClick={() => void openKnowledge()}>问题知识库</Button><Button onClick={() => setAskOpen(true)}>评论问答</Button><Button onClick={() => editTemplate()}>回复模板</Button><Button onClick={() => setQualityOpen(true)}>数据质量</Button><Upload {...uploadProps}><Button type="primary" icon={<CloudUploadOutlined />} loading={importing}>导入 CSV</Button></Upload></Space>}
+        extra={<Space wrap><Select value={storeId} onChange={(value) => { setStoreId(value); setPage(1); }} allowClear placeholder="全部店铺" style={{ width: 150 }} options={stores.map((store) => ({ value: store.id, label: store.name }))} /><Select value={days} onChange={(value) => { setDays(value); setPage(1); }} options={[{ value: 7, label: "近 7 天" }, { value: 30, label: "近 30 天" }, { value: 90, label: "近 90 天" }]} style={{ width: 110 }} /><Button icon={<ReloadOutlined />} onClick={load}>刷新</Button><Button onClick={syncReviews} loading={syncing}>自动同步评论</Button><Button icon={<RobotOutlined />} onClick={reviewAmbiguousWithAi} loading={aiReviewLoading}>AI 复核{summary?.needs_review_count ? ` (${summary.needs_review_count})` : ""}</Button><Button icon={<RobotOutlined />} onClick={createAiSummary} loading={aiLoading}>AI 总结</Button><Button onClick={openInsights}>分析中心</Button><Button onClick={() => void openTerms()}>自定义词库</Button><Button onClick={() => void openKnowledge()}>问题知识库</Button><Button onClick={() => setAskOpen(true)}>评论问答</Button><Button onClick={() => editTemplate()}>回复模板</Button><Upload {...uploadProps}><Button type="primary" icon={<CloudUploadOutlined />} loading={importing}>导入 CSV</Button></Upload></Space>}
       />
 
-      <Alert type={syncNotice ? "warning" : "info"} showIcon message={syncNotice || "每 6 小时自动增量同步"} description="系统从千牛评价管理读取评论正文；新差评会自动生成回复草稿并等待人工审核，不会自动发布。差评预警可通过 PushPlus/Webhook 推送。" style={{ marginBottom: 16 }} />
+      <Alert type={syncNotice ? "warning" : "info"} showIcon message={syncNotice || "每小时自动增量同步"} description="系统从千牛评价管理读取评论正文；新差评会自动生成回复草稿并等待人工审核，不会自动发布。差评预警可通过 PushPlus/Webhook 推送。" style={{ marginBottom: 16 }} />
 
       {trendAlerts.length ? <Alert type="error" showIcon message={`${trendAlerts.length} 个评论趋势异常`} description={<List size="small" dataSource={trendAlerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={`${alert.store_name || "店铺"} · ${alert.level === "critical" ? "严重" : "预警"}`} description={alert.message} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
 
       {loading && !summary ? <LoadingBlock /> : summary ? <>
         {summary.needs_review_count > 0 ? <Alert type="warning" showIcon message={`${summary.needs_review_count} 条评论情绪不明确`} description="这些评论存在正负冲突、隐含表达或没有明显情绪词，可点击“AI 复核”批量判断，也可在详情中人工确认。" style={{ marginBottom: 16 }} /> : null}
-        {quality && quality.affected > 0 ? <Alert type="info" showIcon message={`数据质量 ${quality.health_rate}%`} description={`共发现 ${quality.affected} 条需要检查的数据，点击“数据质量”查看具体问题。`} style={{ marginBottom: 16 }} /> : null}
         {alerts.length ? <Alert type="warning" showIcon message={`有 ${alerts.length} 条评论预警`} description={<List size="small" dataSource={alerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateAlert(alert, "acknowledged")}>已知悉</Button>]}><List.Item.Meta title={alert.title} description={`${alert.message} · ${alert.item_title || "未关联商品"}`} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
         {productSummary.length ? <Card variant="borderless" title="商品维度分析" style={{ marginBottom: 16 }}><Table<ProductSummary> size="small" rowKey="item_id" pagination={{ pageSize: 5 }} dataSource={productSummary.slice(0, 20)} columns={[{ title: "商品", dataIndex: "item_title", ellipsis: true }, { title: "评论数", dataIndex: "total", width: 80 }, { title: "差评数", dataIndex: "negative", width: 80 }, { title: "差评率", dataIndex: "negative_rate", width: 90, render: (value: number) => `${value}%` }]} /></Card> : null}
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
@@ -619,10 +616,6 @@ export function CustomersPage() {
           <Input value={templateCategory} onChange={(event) => setTemplateCategory(event.target.value)} placeholder="分类，例如：质量、物流、好评" maxLength={20} />
           <Input.TextArea value={templateContent} onChange={(event) => setTemplateContent(event.target.value)} placeholder="回复模板内容" rows={5} maxLength={1000} showCount />
         </Space>
-      </Modal>
-
-      <Modal title="评论数据质量检测" open={qualityOpen} onCancel={() => setQualityOpen(false)} footer={null} width={760}>
-        {quality ? <><Row gutter={12} style={{ marginBottom: 16 }}><Col span={8}><Statistic title="健康率" value={quality.health_rate} suffix="%" /></Col><Col span={8}><Statistic title="检测评论" value={quality.total} /></Col><Col span={8}><Statistic title="需检查" value={quality.affected} valueStyle={{ color: quality.affected ? "var(--ops-warn)" : "var(--ops-success)" }} /></Col></Row><List dataSource={quality.issues} renderItem={(issue) => <List.Item><List.Item.Meta title={<Space>{issue.label}<Tag color={issue.count ? "orange" : "green"}>{issue.count}</Tag></Space>} description={issue.examples.length ? issue.examples.map((item) => `${item.item_title || "未关联商品"}：${item.content || "（空）"}`).join("；") : "未发现问题"} /></List.Item>} /></> : <Empty description="暂无检测结果" />}
       </Modal>
 
       <Modal title="评论分析中心" open={insightsOpen} onCancel={() => setInsightsOpen(false)} footer={<Button onClick={() => void loadInsights()} loading={insightsLoading}>刷新分析</Button>} width={920}>

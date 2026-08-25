@@ -333,7 +333,7 @@ def test_ai_review_parser_recovers_truncated_and_json_like_results():
     assert _parse_ai_review_result(json_like)[0]["id"] == 3
 
 
-def test_review_templates_and_data_quality(client, admin_token):
+def test_review_templates(client, admin_token):
     created = client.post(
         "/api/customers/reviews/reply-templates",
         headers=_headers(admin_token),
@@ -345,11 +345,6 @@ def test_review_templates_and_data_quality(client, admin_token):
     listed = client.get("/api/customers/reviews/reply-templates", headers=_headers(admin_token))
     assert listed.status_code == 200
     assert any(item["id"] == template_id for item in listed.json()["items"])
-
-    quality = client.get("/api/customers/reviews/data-quality?store_id=1&days=3650", headers=_headers(admin_token))
-    assert quality.status_code == 200, quality.text
-    assert "health_rate" in quality.json()
-    assert all(issue["code"] != "missing_rating" for issue in quality.json()["issues"])
 
     deleted = client.delete(f"/api/customers/reviews/reply-templates/{template_id}", headers=_headers(admin_token))
     assert deleted.status_code == 200

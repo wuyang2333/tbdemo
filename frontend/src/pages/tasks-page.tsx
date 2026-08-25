@@ -37,6 +37,7 @@ import {
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../components/ui/page-header";
 import http, { getApiErrorMessage } from "../lib/api";
@@ -109,6 +110,7 @@ type TaskMeta = {
 const TASK_META: Record<string, TaskMeta> = {
   realtime_sync: { label: "经营数据同步", category: "数据同步", schedule: "每 3 分钟", description: "同步店铺经营、分时、推广、退款和流量来源数据", retryable: true },
   product_catalog_sync: { label: "在售商品同步", category: "数据同步", schedule: "每 15 分钟", description: "从淘宝后台更新在售商品、价格、库存和状态", retryable: true },
+  tencent_docs_sync: { label: "腾讯文档同步", category: "数据同步", schedule: "每 1 分钟", description: "同步礼品单，并回填腾讯文档中的旺旺号和订单号", retryable: false },
   promo_daily: { label: "推广数据补录", category: "数据同步", schedule: "每日 09:00", description: "补录近 7 天推广和商品按天数据", retryable: true },
   inspect: { label: "系统巡检", category: "系统维护", schedule: "每 5 分钟", description: "检查店铺授权、登录状态与基础服务健康度", retryable: true },
   report_push: { label: "经营日报推送", category: "消息推送", schedule: "每分钟检查", description: "按配置时间生成并推送经营日报" },
@@ -152,13 +154,14 @@ function TaskStateTag({ task }: { task: TaskStatus }) {
 }
 
 export function TasksPage() {
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const { stores, currentStore } = useStores();
   const [data, setData] = useState<TaskCenterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
-  const [taskFilter, setTaskFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [taskFilter, setTaskFilter] = useState(searchParams.get("task") || "all");
+  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "all");
   const [triggerFilter, setTriggerFilter] = useState("all");
   const [storeFilter, setStoreFilter] = useState<number | "all">("all");
   const [selectedTask, setSelectedTask] = useState<TaskStatus | null>(null);
@@ -271,6 +274,12 @@ export function TasksPage() {
     const priority = { error: 0, running: 1, paused: 2, waiting: 3, success: 4 };
     return priority[taskState(left)] - priority[taskState(right)];
   }), [data?.tasks]);
+  const visibleTasks = useMemo(() => sortedTasks.filter((task) => {
+    if (taskFilter !== "all" && task.name !== taskFilter) return false;
+    if (statusFilter === "error" && task.error_count <= 0) return false;
+    if (statusFilter === "success" && (task.error_count > 0 || !task.last_success)) return false;
+    return true;
+  }), [sortedTasks, statusFilter, taskFilter]);
 
   const filteredHistory = useMemo(() => (data?.history ?? []).filter((run) => {
     if (taskFilter !== "all" && run.name !== taskFilter) return false;
@@ -450,7 +459,7 @@ export function TasksPage() {
           size="middle"
           loading={loading && !data}
           columns={currentColumns}
-          dataSource={sortedTasks}
+          dataSource={visibleTasks}
           pagination={false}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="后台任务尚未初始化" /> }}
           scroll={{ x: 1200 }}

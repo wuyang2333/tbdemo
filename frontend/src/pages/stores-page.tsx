@@ -30,6 +30,7 @@ import {
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -84,6 +85,7 @@ function timeAgo(value: string | null): string {
 }
 
 export function StoresPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { stores, currentStore, setCurrent, refresh } = useStores();
   const { user } = useAuth();
   const isMember = user?.role === "member";
@@ -122,7 +124,10 @@ export function StoresPage() {
 
   const total = stores.length;
   const normal = stores.filter((store) => store.display_status === "active").length;
-  const attention = total - normal;
+  const loginErrorOnly = searchParams.get("login_status") === "error";
+  const needsLoginAttention = (store: Store) => store.display_status === "active" && (!store.sycm_configured || store.sycm_status === "error");
+  const attention = stores.filter(needsLoginAttention).length;
+  const visibleStores = loginErrorOnly ? stores.filter(needsLoginAttention) : stores;
 
   const openCreate = () => {
     setBindName("");
@@ -698,11 +703,18 @@ export function StoresPage() {
       )}
 
       <Card variant="borderless">
+        {loginErrorOnly ? (
+          <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+            <Tag color="red">待办筛选：登录异常或未绑定</Tag>
+            <Text type="secondary">共 {visibleStores.length} 家需要处理</Text>
+            <Button size="small" onClick={() => setSearchParams({})}>清除筛选</Button>
+          </div>
+        ) : null}
         <Table<Store>
           rowKey="id"
           loading={false}
           columns={columns}
-          dataSource={stores}
+          dataSource={visibleStores}
           pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (count) => `共 ${count} 家店铺` }}
           scroll={{ x: 1200 }}
         />

@@ -2,7 +2,8 @@ import { BarChartOutlined, CopyOutlined, DownloadOutlined, HolderOutlined, LineC
 import { Button, Card, Checkbox, Col, Drawer, Empty, Input, Modal, Popover, Row, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import http, { TOKEN_KEY, getApiErrorMessage } from "../lib/api";
 import { showSyncFeedback } from "../lib/sync-feedback";
@@ -64,7 +65,10 @@ function ChangeBadge({ change, unit = "%" }: { change: number | null | undefined
 
 
 export function PromotionsPlansPage() {
+  const [searchParams] = useSearchParams();
   const { currentStore } = useStores();
+  const todoStoreId = Number(searchParams.get("store_id")) || undefined;
+  const alertCardRef = useRef<HTMLDivElement>(null);
   const [plans, setPlans] = useState<PromoPlan[]>([]);
   const [lastUpdated, setLastUpdated] = useState("");
   const [scene, setScene] = useState("");
@@ -116,7 +120,8 @@ export function PromotionsPlansPage() {
   const load = useCallback(async (sc: string, m: string) => {
     setLoading(true);
     try {
-      const scope = currentStore ? `&store_id=${currentStore.id}` : "";
+      const scopedStoreId = todoStoreId ?? currentStore?.id;
+      const scope = scopedStoreId ? `&store_id=${scopedStoreId}` : "";
       const { data } = await http.get<{ items: PromoPlan[] }>(`/promotions/plans?scene=${encodeURIComponent(sc)}&mode=${encodeURIComponent(m)}${scope}`);
       setPlans(data.items);
       setLastUpdated(dayjs().format("HH:mm:ss"));
@@ -132,7 +137,7 @@ export function PromotionsPlansPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentStore?.id]);
+  }, [currentStore?.id, todoStoreId]);
 
   useEffect(() => {
     load(scene, mode);
@@ -213,6 +218,11 @@ export function PromotionsPlansPage() {
     if (ruleAlerts.length >= 20) break;
   }
   const allPlanAlerts = [...alerts, ...ruleAlerts];
+  useEffect(() => {
+    if (searchParams.get("todo") === "alerts" && allPlanAlerts.length > 0) {
+      window.setTimeout(() => alertCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 100);
+    }
+  }, [alerts.length, ruleAlerts.length, searchParams]);
   const runAI = async () => {
     setAiOpen(true);
     setAiLoading(true);
@@ -619,6 +629,7 @@ export function PromotionsPlansPage() {
       </Text>
 
       {allPlanAlerts.length > 0 && (
+        <div ref={alertCardRef} id="promotion-alerts">
         <Card
           variant="borderless"
           title="推广预警"
@@ -638,6 +649,7 @@ export function PromotionsPlansPage() {
             </Space>
           </div>
         </Card>
+        </div>
       )}
 
       {loading && plans.length === 0 ? (

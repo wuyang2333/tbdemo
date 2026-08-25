@@ -4,10 +4,12 @@ import json
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.app.api.auth import get_current_user, visible_store_ids
+from backend.app.core import loops
 from backend.app.core.db import get_db
+from backend.app.core.sycm import has_profile
 
 router = APIRouter()
 
@@ -18,6 +20,302 @@ DEFAULT_WIDGETS = ["actions", "kpis", "shortcuts", "system", "notice", "tasks", 
 
 class DashboardConfigIn(BaseModel):
     widgets: list[str]
+
+
+class DashboardTodoSnoozeIn(BaseModel):
+    minutes: int = Field(default=60, ge=5, le=1440)
+
+
+def _ensure_todo_snoozes(db) -> None:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dashboard_todo_snoozes (
+            user_id INTEGER NOT NULL,
+            todo_key TEXT NOT NULL,
+            snoozed_until TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, todo_key)
+        )
+        """
+    )
+
+
+def _module_allowed(user: dict, module_id: str) -> bool:
+    if user["role"] in ("admin", "super_admin"):
+        return True
+    allowed = user.get("allowed_modules")
+    return allowed is None or module_id in allowed
+
+
+def _todo_store_rows(db, user: dict, store_id: int | None) -> list[dict]:
+    visible = visible_store_ids(user)
+    if store_id is not None:
+        if visible is not None and store_id not in visible:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+        row = db.execute("SELECT id, name, status FROM stores WHERE id = ?", (store_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="店铺不存在")
+        return [dict(row)]
+    rows = db.execute("SELECT id, name, status FROM stores ORDER BY id").fetchall()
+    if visible is None:
+        return [dict(row) for row in rows]
+    return [dict(row) for row in rows if row["id"] in visible]
+
+
+def _todo_item(
+    *,
+    key: str,
+    module: str,
+    category: str,
+    severity: str,
+    title: str,
+    description: str,
+    count: int,
+    route: str = "",
+    external_url: str = "",
+    retry_task: str = "",
+    store: dict | None = None,
+    updated_at: str | None = None,
+) -> dict:
+    return {
+        "key": key,
+        "module": module,
+        "category": category,
+        "severity": severity,
+        "title": title,
+        "description": description,
+        "count": count,
+        "route": route,
+        "external_url": external_url,
+        "retryable": bool(retry_task),
+        "retry_task": retry_task,
+        "store_id": store["id"] if store else None,
+        "store_name": store["name"] if store else "",
+        "updated_at": updated_at,
+    }
+
+
+@router.get("/todos")
+def dashboard_todos(
+    store_id: int | None = None,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """统一今日待办：直接聚合源业务状态，不复制任务完成状态。"""
+    _ensure_todo_snoozes(db)
+    stores = _todo_store_rows(db, user, store_id)
+    items: list[dict] = []
+
+    if _module_allowed(user, "gifts"):
+        remark_meta = {
+            "order_not_found": ("warning", "订单未查到", "每 3 分钟自动重试，也可核对订单号或旺旺号"),
+            "awaiting_payment": ("warning", "订单待付款", "买家付款后系统会再次检查并插旗备注"),
+            "remark_failed": ("critical", "千牛备注失败", "请检查千牛登录状态或前往礼品单重试"),
+            "order_closed": ("critical", "订单已关闭", "已关闭订单不会插旗备注，请人工核对"),
+        }
+        for store in stores:
+            rows = db.execute(
+                """
+                SELECT remark_status, COUNT(*) AS count,
+                       MAX(COALESCE(remark_attempted_at, created_at)) AS updated_at
+                FROM gifts
+                WHERE store_id = ? AND remark_status IN ('order_not_found','awaiting_payment','remark_failed','order_closed')
+                GROUP BY remark_status
+                """,
+                (store["id"],),
+            ).fetchall()
+            for row in rows:
+                severity, label, description = remark_meta[row["remark_status"]]
+                items.append(_todo_item(
+                    key=f"gifts:remark:{row['remark_status']}:{store['id']}", module="gifts", category="礼品单",
+                    severity=severity, title=f"{row['count']} 笔{label}", description=description,
+                    count=row["count"], route=f"/gifts?remark_status={row['remark_status']}&store_id={store['id']}",
+                    store=store, updated_at=row["updated_at"],
+                ))
+            sync_row = db.execute(
+                """
+                SELECT COUNT(*) AS count, MAX(COALESCE(tencent_synced_at, created_at)) AS updated_at
+                FROM gifts WHERE store_id = ? AND TRIM(tencent_sync_error) != ''
+                """,
+                (store["id"],),
+            ).fetchone()
+            if sync_row["count"]:
+                items.append(_todo_item(
+                    key=f"gifts:tencent_sync:{store['id']}", module="gifts", category="礼品单",
+                    severity="critical", title=f"{sync_row['count']} 笔礼品单同步失败",
+                    description="腾讯文档未成功接收最新内容，请检查同步状态",
+                    count=sync_row["count"], route=f"/gifts?sync_status=error&store_id={store['id']}", store=store,
+                    updated_at=sync_row["updated_at"],
+                ))
+
+        if user["role"] in ("admin", "super_admin"):
+            config_row = db.execute("SELECT value FROM meta WHERE key = 'tencent_docs_gifts_config'").fetchone()
+            try:
+                config = json.loads(config_row["value"] or "{}") if config_row else {}
+            except (TypeError, ValueError):
+                config = {}
+            if config.get("last_error"):
+                items.append(_todo_item(
+                    key="gifts:tencent_global", module="gifts", category="礼品单", severity="critical",
+                    title="腾讯文档同步异常", description=str(config["last_error"])[:160], count=1,
+                    route="/settings", updated_at=config.get("last_sync_at"),
+                ))
+
+    if _module_allowed(user, "customers"):
+        for store in stores:
+            review_sources = [
+                (
+                    "alert", "critical", "待处理评价预警",
+                    "SELECT COUNT(*) AS count, MAX(created_at) AS updated_at FROM review_alerts WHERE store_id = ? AND status = 'open'",
+                    f"/customers?sentiment=negative&process_status=pending&store_id={store['id']}",
+                ),
+                (
+                    "draft", "warning", "条评价回复待审核",
+                    "SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at FROM product_reviews WHERE store_id = ? AND reply_status = 'draft'",
+                    f"/customers?reply_status=draft&store_id={store['id']}",
+                ),
+                (
+                    "failed", "critical", "条评价回复发布失败",
+                    "SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at FROM product_reviews WHERE store_id = ? AND reply_status = 'failed'",
+                    f"/customers?reply_status=failed&store_id={store['id']}",
+                ),
+            ]
+            for source, severity, label, sql, route in review_sources:
+                row = db.execute(sql, (store["id"],)).fetchone()
+                if not row["count"]:
+                    continue
+                title = f"{row['count']} 个{label}" if source == "alert" else f"{row['count']} {label}"
+                items.append(_todo_item(
+                    key=f"customers:{source}:{store['id']}", module="customers", category="评价",
+                    severity=severity, title=title,
+                    description="进入评价管理查看原文、处理记录和回复状态",
+                    count=row["count"], route=route, store=store, updated_at=row["updated_at"],
+                ))
+
+    if _module_allowed(user, "promotions"):
+        from backend.app.api.promotions.data import promo_alerts
+
+        for store in stores:
+            result = promo_alerts(store_id=store["id"], user=user, db=db)
+            if result["count"]:
+                first = result["items"][0]["message"] if result["items"] else "存在推广经营异常"
+                has_error = any(item["level"] == "error" for item in result["items"])
+                items.append(_todo_item(
+                    key=f"promotions:alerts:{store['id']}", module="promotions", category="推广",
+                    severity="critical" if has_error else "warning",
+                    title=f"{result['count']} 项推广预警", description=first,
+                    count=result["count"], route=f"/promotions/plans?todo=alerts&store_id={store['id']}", store=store,
+                ))
+
+    if _module_allowed(user, "stores"):
+        for store in stores:
+            if store["status"] != "active":
+                continue
+            status_row = db.execute(
+                "SELECT key, value FROM meta WHERE key IN (?, ?, ?)",
+                (
+                    f"store_{store['id']}_sycm_status",
+                    f"store_{store['id']}_sycm_error",
+                    f"store_{store['id']}_sycm_checked_at",
+                ),
+            ).fetchall()
+            meta = {row["key"]: row["value"] for row in status_row}
+            status = meta.get(f"store_{store['id']}_sycm_status") or "unknown"
+            error = meta.get(f"store_{store['id']}_sycm_error") or ""
+            checked_at = meta.get(f"store_{store['id']}_sycm_checked_at")
+            if not has_profile(store["id"]):
+                items.append(_todo_item(
+                    key=f"stores:not_configured:{store['id']}", module="stores", category="店铺",
+                    severity="critical", title="店铺尚未绑定登录态",
+                    description="绑定生意参谋登录后才能自动同步经营数据",
+                    count=1, route="/stores?login_status=error", store=store, updated_at=checked_at,
+                ))
+            elif status == "error" or error:
+                items.append(_todo_item(
+                    key=f"stores:login_error:{store['id']}", module="stores", category="店铺",
+                    severity="critical", title="店铺登录状态异常",
+                    description=(error or "登录验证失败，请重新验证")[:160],
+                    count=1, route="/stores?login_status=error", store=store, updated_at=checked_at,
+                ))
+
+    if _module_allowed(user, "tasks"):
+        task_labels = {"realtime_sync": "经营数据同步", "promo_daily": "推广数据补录", "inspect": "系统巡检"}
+        retryable_tasks = {"realtime_sync", "promo_daily", "inspect"}
+        for status in loops.get_all_status():
+            name = status["name"]
+            if name == "product_catalog_sync" or status["error_count"] <= 0:
+                continue
+            items.append(_todo_item(
+                key=f"tasks:error:{name}", module="tasks", category="系统", severity="critical",
+                title=f"{task_labels.get(name, name)}连续失败 {status['error_count']} 次",
+                description=status.get("last_error") or "后台任务执行异常",
+                count=status["error_count"], route=f"/tasks?task={name}&status=error",
+                retry_task=name if name in retryable_tasks else "", updated_at=status.get("last_run"),
+            ))
+
+    if _module_allowed(user, "gifts"):
+        for store in stores:
+            row = db.execute(
+                "SELECT pending_shipments, updated_at FROM store_operational_status WHERE store_id = ?",
+                (store["id"],),
+            ).fetchone()
+            if row and row["pending_shipments"] > 0:
+                items.append(_todo_item(
+                    key=f"fulfillment:pending:{store['id']}", module="gifts", category="订单",
+                    severity="warning", title=f"{row['pending_shipments']} 笔订单待发货",
+                    description="前往千牛已卖出宝贝处理发货",
+                    count=row["pending_shipments"],
+                    external_url="https://trade.taobao.com/trade/itemlist/list_sold_items.htm",
+                    store=store, updated_at=row["updated_at"],
+                ))
+
+    now = datetime.now().astimezone()
+    snoozed_rows = db.execute(
+        "SELECT todo_key, snoozed_until FROM dashboard_todo_snoozes WHERE user_id = ?",
+        (user["id"],),
+    ).fetchall()
+    snoozed = {row["todo_key"]: row["snoozed_until"] for row in snoozed_rows}
+    for item in items:
+        until = snoozed.get(item["key"])
+        try:
+            is_snoozed = bool(until and datetime.fromisoformat(until) > now)
+        except (TypeError, ValueError):
+            is_snoozed = False
+        item["snoozed"] = is_snoozed
+        item["snoozed_until"] = until if is_snoozed else None
+
+    severity_order = {"critical": 0, "warning": 1, "info": 2}
+    items.sort(key=lambda item: (item["snoozed"], severity_order.get(item["severity"], 9), -item["count"], item["key"]))
+    return {
+        "items": items,
+        "summary": {
+            "urgent": sum(1 for item in items if item["severity"] == "critical" and not item["snoozed"]),
+            "pending": sum(1 for item in items if not item["snoozed"]),
+            "snoozed": sum(1 for item in items if item["snoozed"]),
+        },
+    }
+
+
+@router.post("/todos/{todo_key:path}/snooze")
+def snooze_dashboard_todo(
+    todo_key: str,
+    body: DashboardTodoSnoozeIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    _ensure_todo_snoozes(db)
+    now = datetime.now().astimezone()
+    snoozed_until = now + timedelta(minutes=body.minutes)
+    db.execute(
+        """
+        INSERT INTO dashboard_todo_snoozes (user_id, todo_key, snoozed_until, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, todo_key) DO UPDATE SET
+            snoozed_until = excluded.snoozed_until, updated_at = excluded.updated_at
+        """,
+        (user["id"], todo_key, snoozed_until.isoformat(), now.isoformat()),
+    )
+    return {"ok": True, "todo_key": todo_key, "snoozed_until": snoozed_until.isoformat()}
 
 
 @router.get("/config")

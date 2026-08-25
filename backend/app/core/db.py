@@ -168,6 +168,8 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE gifts ADD COLUMN review_status TEXT NOT NULL DEFAULT 'none'")
     if "settle_status" not in cols:
         conn.execute("ALTER TABLE gifts ADD COLUMN settle_status TEXT NOT NULL DEFAULT 'unsettled'")
+    if "remark_status" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_status TEXT NOT NULL DEFAULT 'unremarked'")
     if "order_time" not in cols:
         conn.execute("ALTER TABLE gifts ADD COLUMN order_time TEXT")
     if "qr_code" not in cols:
@@ -176,6 +178,84 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE gifts ADD COLUMN image TEXT NOT NULL DEFAULT ''")
     if "store_name" not in cols:
         conn.execute("ALTER TABLE gifts ADD COLUMN store_name TEXT NOT NULL DEFAULT ''")
+    if "tencent_row" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN tencent_row INTEGER")
+    if "tencent_synced_at" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN tencent_synced_at TEXT")
+    if "tencent_sync_error" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN tencent_sync_error TEXT NOT NULL DEFAULT ''")
+    if "tencent_image_synced" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN tencent_image_synced TEXT NOT NULL DEFAULT ''")
+    if "remark_auto_pending" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_auto_pending INTEGER NOT NULL DEFAULT 0")
+    if "remark_attempts" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_attempts INTEGER NOT NULL DEFAULT 0")
+    if "remark_attempted_at" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_attempted_at TEXT")
+    if "remarked_at" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remarked_at TEXT")
+    if "remark_error" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_error TEXT NOT NULL DEFAULT ''")
+    if "remark_next_retry_at" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_next_retry_at TEXT")
+    if "qianniu_price" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN qianniu_price REAL")
+    if "price_before_qianniu" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN price_before_qianniu REAL")
+    if "price_synced_at" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN price_synced_at TEXT")
+    if "price_sync_error" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN price_sync_error TEXT NOT NULL DEFAULT ''")
+    if "owner_nickname" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN owner_nickname TEXT NOT NULL DEFAULT ''")
+    buyer_lookup_added = False
+    if "remark_lookup_order_no" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_lookup_order_no TEXT NOT NULL DEFAULT ''")
+        buyer_lookup_added = True
+    if "remark_match_source" not in cols:
+        conn.execute("ALTER TABLE gifts ADD COLUMN remark_match_source TEXT NOT NULL DEFAULT ''")
+    if buyer_lookup_added:
+        conn.execute(
+            """
+            UPDATE gifts
+            SET remark_auto_pending = 1, remark_status = 'unremarked',
+                remark_error = '', remark_next_retry_at = NULL
+            WHERE order_no = '' AND TRIM(wangwang) != '' AND store_id > 0
+            """
+        )
+    for gift in conn.execute("SELECT id, created_at FROM gifts WHERE owner_nickname = ''").fetchall():
+        creator = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(u.nickname, ''), l.username, '') AS owner_nickname
+            FROM op_logs l
+            LEFT JOIN users u ON u.id = l.user_id
+            WHERE l.module = 'gifts' AND l.action = 'create'
+              AND ABS((julianday(l.created_at) - julianday(?)) * 86400) <= 5
+            ORDER BY ABS((julianday(l.created_at) - julianday(?)) * 86400)
+            LIMIT 1
+            """,
+            (gift["created_at"], gift["created_at"]),
+        ).fetchone()
+        if creator and creator["owner_nickname"]:
+            conn.execute(
+                "UPDATE gifts SET owner_nickname = ? WHERE id = ?",
+                (creator["owner_nickname"], gift["id"]),
+            )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS gift_price_sync_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            gift_id INTEGER NOT NULL,
+            order_no TEXT NOT NULL,
+            system_price_before REAL NOT NULL,
+            qianniu_price REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_gift_price_sync_logs_gift ON gift_price_sync_logs(gift_id, created_at DESC)"
+    )
     conn.execute("UPDATE gifts SET order_time = created_at WHERE order_time IS NULL OR order_time = ''")
     conn.execute("UPDATE gifts SET wangwang = recipient WHERE wangwang = '' AND recipient != ''")
     conn.execute("UPDATE gifts SET image = qr_code WHERE image = '' AND qr_code != ''")
@@ -966,6 +1046,9 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,
                 order_no TEXT NOT NULL,
+                owner_nickname TEXT NOT NULL DEFAULT '',
+                remark_lookup_order_no TEXT NOT NULL DEFAULT '',
+                remark_match_source TEXT NOT NULL DEFAULT '',
                 recipient TEXT NOT NULL DEFAULT '',
                 gift_name TEXT NOT NULL DEFAULT '',
                 quantity INTEGER NOT NULL DEFAULT 1,
