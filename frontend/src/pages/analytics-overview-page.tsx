@@ -73,19 +73,19 @@ export function AnalyticsOverviewPage() {
   };
 
   return (
-    <div>
+    <div className="ops-overview-page">
       <PageHeader
         icon={<BarChartOutlined />}
         eyebrow="数据洞察"
         title="今日总览"
         extra={
-          <Space>
-            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
-            <StoreScopeSelect value={storeId} onChange={setStoreId} />
-            <Button icon={<FullscreenOutlined />} onClick={() => navigate("/board")}>
+          <div className="ops-overview-controls">
+            <Text className="ops-overview-updated" type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
+            <span className="ops-overview-store"><StoreScopeSelect value={storeId} onChange={setStoreId} /></span>
+            <Button className="ops-overview-action" icon={<FullscreenOutlined />} onClick={() => navigate("/board")}>
               大屏模式
             </Button>
-            <Button icon={<ReloadOutlined />} onClick={load}>
+            <Button className="ops-overview-action" icon={<ReloadOutlined />} onClick={load}>
               刷新
             </Button>
             <Dropdown
@@ -98,14 +98,14 @@ export function AnalyticsOverviewPage() {
                 onClick: ({ key }) => syncHistory(Number(key)),
               }}
             >
-              <Button icon={<HistoryOutlined />} loading={syncingHistory}>
+              <Button className="ops-overview-action" icon={<HistoryOutlined />} loading={syncingHistory}>
                 补历史数据
               </Button>
             </Dropdown>
-            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
+            <Button className="ops-overview-action ops-overview-action--primary" type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
               同步店铺数据
             </Button>
-          </Space>
+          </div>
         }
       />
 
@@ -121,7 +121,7 @@ export function AnalyticsOverviewPage() {
         <>
           {today ? (
             <>
-              <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+              <Row className="ops-overview-kpis" gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 {[
                   { label: "今日销售额", value: `¥${today.kpi.sales.toLocaleString()}`, cmp: today.kpi.compare.sales, cmpText: "较昨日同时段", color: "var(--ops-accent)", icon: <BarChartOutlined /> },
                   { label: "今日买家数", value: (today.kpi.buyers ?? today.funnel.buyers).toLocaleString(), cmp: null, cmpText: "支付买家数（实时）", color: "var(--ops-success)", icon: <ShoppingOutlined /> },
@@ -134,6 +134,7 @@ export function AnalyticsOverviewPage() {
                 ].map((card) => (
                   <Col xs={12} sm={6} key={card.label}>
                     <Card
+                      className="ops-overview-kpi-card"
                       variant="borderless"
                       style={{
                         boxShadow: "var(--ops-shadow-sm)",
@@ -146,7 +147,7 @@ export function AnalyticsOverviewPage() {
                         {card.icon}
                         <Text type="secondary" style={{ fontSize: 12 }}>{card.label}</Text>
                       </Space>
-                      <div style={{ fontSize: 26, fontWeight: 700, marginTop: 4, letterSpacing: -0.5 }}>{card.value}</div>
+                      <div className="ops-overview-kpi-value" style={{ fontSize: 26, fontWeight: 700, marginTop: 4, letterSpacing: -0.5 }}>{card.value}</div>
                       {card.cmp !== null && card.cmp !== undefined ? (
                         <Tag style={{ marginTop: 6, fontSize: 12 }} color={(card.cmp ?? 0) >= 0 ? "red" : "green"}>
                           {(card.cmp ?? 0) >= 0 ? "▲" : "▼"} {Math.abs(card.cmp ?? 0)}% · {card.cmpText}

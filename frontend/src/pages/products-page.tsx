@@ -82,6 +82,7 @@ type SyncResult = { store_id: number; store_name: string; ok: boolean; count?: n
 type SyncResponse = { ok: number; total: number; results: SyncResult[] };
 type SavedView = { name: string; storeId?: number; stockStatus: string; salesStatus: string };
 type ColumnConfig = { hidden: string[]; order: string[] };
+type ShelfSortOrder = "ascend" | "descend" | null;
 
 const VIEW_STORAGE_KEY = "tb-product-saved-views";
 const COLUMN_STORAGE_KEY = "tb-product-columns";
@@ -120,6 +121,10 @@ export function ProductsPage() {
   const [salesStatus, setSalesStatus] = useState(() => searchParams.get("sales_status") || "all");
   const [searchValue, setSearchValue] = useState(() => searchParams.get("q") || "");
   const [keyword, setKeyword] = useState(() => searchParams.get("q") || "");
+  const [shelfSortOrder, setShelfSortOrder] = useState<ShelfSortOrder>(() => {
+    if (searchParams.get("sort_by") !== "shelf_at") return null;
+    return searchParams.get("sort_order") === "asc" ? "ascend" : "descend";
+  });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
@@ -141,6 +146,10 @@ export function ProductsPage() {
       });
       if (storeId) params.set("store_id", String(storeId));
       if (keyword) params.set("q", keyword);
+      if (shelfSortOrder) {
+        params.set("sort_by", "shelf_at");
+        params.set("sort_order", shelfSortOrder === "ascend" ? "asc" : "desc");
+      }
       const { data: response } = await http.get<ProductResponse>(`/products?${params.toString()}`);
       setData(response);
       setSelectedKeys([]);
@@ -149,7 +158,7 @@ export function ProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [keyword, page, pageSize, salesStatus, stockStatus, storeId]);
+  }, [keyword, page, pageSize, salesStatus, shelfSortOrder, stockStatus, storeId]);
 
   useEffect(() => {
     loadProducts();
@@ -173,8 +182,12 @@ export function ProductsPage() {
     if (stockStatus !== "all") params.set("stock_status", stockStatus);
     if (salesStatus !== "all") params.set("sales_status", salesStatus);
     if (keyword) params.set("q", keyword);
+    if (shelfSortOrder) {
+      params.set("sort_by", "shelf_at");
+      params.set("sort_order", shelfSortOrder === "ascend" ? "asc" : "desc");
+    }
     setSearchParams(params, { replace: true });
-  }, [keyword, salesStatus, setSearchParams, stockStatus, storeId]);
+  }, [keyword, salesStatus, setSearchParams, shelfSortOrder, stockStatus, storeId]);
 
   const syncProducts = async () => {
     setSyncing(true);
@@ -200,6 +213,7 @@ export function ProductsPage() {
     setSalesStatus("all");
     setSearchValue("");
     setKeyword("");
+    setShelfSortOrder(null);
     setPage(1);
   };
 
@@ -315,7 +329,16 @@ export function ProductsPage() {
     { key: "sold", title: "累计销量", dataIndex: "sold_quantity", width: 110, align: "right", sorter: (a, b) => a.sold_quantity - b.sold_quantity, render: (value: number) => value.toLocaleString("zh-CN") },
     { key: "monthly", title: "月销", dataIndex: "monthly_sold", width: 90, align: "right", sorter: (a, b) => a.monthly_sold - b.monthly_sold, render: (value: number) => <Text type={value <= 0 ? "secondary" : undefined}>{value.toLocaleString("zh-CN")}</Text> },
     { key: "quality", title: "质量分", dataIndex: "quality_score", width: 100, align: "center", sorter: (a, b) => a.quality_score - b.quality_score, render: (value: number) => <Tag color={value >= 90 ? "green" : value >= 70 ? "orange" : "red"}>{value || "—"}</Tag> },
-    { key: "shelf", title: "上架时间", dataIndex: "shelf_at", width: 150, render: (value: string) => value || "—" },
+    {
+      key: "shelf",
+      title: "上架时间",
+      dataIndex: "shelf_at",
+      width: 150,
+      sorter: true,
+      sortOrder: shelfSortOrder || undefined,
+      sortDirections: ["descend", "ascend"],
+      render: (value: string) => value || "—",
+    },
     { key: "status", title: "状态", dataIndex: "status", width: 90, render: (value: string) => <Tag color="green">{value || "出售中"}</Tag> },
     {
       key: "actions",
@@ -329,7 +352,7 @@ export function ProductsPage() {
         </Space>
       ),
     },
-  ], []);
+  ], [shelfSortOrder]);
 
   const columns = useMemo(() => {
     const position = new Map(columnConfig.order.map((key, index) => [key, index]));
@@ -375,7 +398,7 @@ export function ProductsPage() {
           <Select allowClear placeholder="全部店铺" value={storeId} onChange={async (value) => { await setCurrent(value ?? null); setStoreId(value); setPage(1); }} style={{ width: 180 }} options={stores.map((store) => ({ label: store.name, value: store.id }))} suffixIcon={<ShopOutlined />} />
           <Select value={stockStatus} onChange={(value) => { setStockStatus(value); setPage(1); }} style={{ width: 138 }} options={[{ label: "全部库存", value: "all" }, { label: "库存正常", value: "normal" }, { label: "低库存 ≤ 10", value: "low" }, { label: "零库存", value: "zero" }]} />
           <Select value={salesStatus} onChange={(value) => { setSalesStatus(value); setPage(1); }} style={{ width: 150 }} options={[{ label: "全部经营状态", value: "all" }, { label: "近月无销量", value: "no_sales" }, { label: "质量分低于 70", value: "low_quality" }]} />
-          <Input.Search allowClear value={searchValue} onChange={(event) => setSearchValue(event.target.value)} onSearch={(value) => { setKeyword(value.trim()); setPage(1); }} placeholder="搜索商品标题或商品 ID" enterButton={<SearchOutlined />} style={{ width: 300 }} />
+          <Input.Search className="ops-product-search" allowClear value={searchValue} onChange={(event) => setSearchValue(event.target.value)} onSearch={(value) => { setKeyword(value.trim()); setPage(1); }} placeholder="搜索商品标题或商品 ID" enterButton={<SearchOutlined aria-label="搜索" />} style={{ width: 300 }} />
           {filtersActive ? <Button type="text" onClick={resetFilters}>重置</Button> : null}
           <span className="ops-list-toolbar__meta">{summary?.last_sync ? `最近同步 ${dayjs(summary.last_sync).format("MM-DD HH:mm")}` : "尚未同步"}</span>
         </div>
@@ -407,6 +430,11 @@ export function ProductsPage() {
           sticky
           rowSelection={{ selectedRowKeys: selectedKeys, preserveSelectedRowKeys: false, onChange: setSelectedKeys }}
           onRow={(row) => ({ onClick: (event) => { if (!(event.target as HTMLElement).closest("a,button,input,.ant-checkbox-wrapper")) setDetail(row); } })}
+          onChange={(_pagination, _filters, sorter) => {
+            const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+            setShelfSortOrder(activeSorter?.columnKey === "shelf" ? (activeSorter.order ?? null) : null);
+            setPage(1);
+          }}
           scroll={{ x: 1500 }}
           pagination={{ current: page, pageSize, total: data?.total ?? 0, showSizeChanger: true, showQuickJumper: true, showTotal: (total) => `共 ${total} 个在售商品`, onChange: (nextPage, nextPageSize) => { setPage(nextPageSize === pageSize ? nextPage : 1); setPageSize(nextPageSize); } }}
           locale={{ emptyText: <div className="ops-data-empty"><Empty description={filtersActive ? "没有符合当前筛选的商品" : "尚未取得淘宝在售商品"}><Space>{filtersActive ? <Button onClick={resetFilters}>清空筛选</Button> : null}<Button type="primary" icon={<ReloadOutlined />} loading={syncing} onClick={syncProducts}>从淘宝同步</Button></Space></Empty></div> }}

@@ -168,7 +168,7 @@ export function AnalyticsInsightPage() {
         eyebrow="数据洞察"
         title="AI 解读"
         extra={
-          <Space wrap>
+          <Space className="ops-insight-controls" wrap>
             <StoreScopeSelect
               value={storeId}
               onChange={(v) => {
@@ -177,6 +177,7 @@ export function AnalyticsInsightPage() {
               }}
             />
             <Segmented
+              className="ops-insight-range"
               options={MODE_OPTIONS}
               value={mode}
               onChange={(v) => {
@@ -185,7 +186,7 @@ export function AnalyticsInsightPage() {
                 applyModeStore(m, storeId);
               }}
             />
-            <Button type="primary" icon={<RobotOutlined />} loading={loading} onClick={generate}>
+            <Button className="ops-insight-generate" type="primary" icon={<RobotOutlined />} loading={loading} onClick={generate}>
               生成 AI 解读
             </Button>
           </Space>
@@ -264,7 +265,7 @@ export function AnalyticsInsightPage() {
                   )}
                 </div>
               )}
-              <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <div className="ops-insight-chat-composer" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
                 <Input.TextArea
                   rows={2}
                   value={chatInput}
@@ -278,7 +279,7 @@ export function AnalyticsInsightPage() {
                   placeholder={"比如：为什么销售额降了？哪个商品该加推？推广 ROI 哪家店最高？"}
                   disabled={chatLoading}
                 />
-                <Button type="primary" icon={<SendOutlined />} loading={chatLoading} onClick={sendChat} style={{ flexShrink: 0 }}>
+                <Button className="ops-insight-send" type="primary" icon={<SendOutlined />} loading={chatLoading} onClick={sendChat} style={{ flexShrink: 0 }}>
                   发送
                 </Button>
               </div>

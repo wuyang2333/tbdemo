@@ -110,7 +110,7 @@ type TaskMeta = {
 const TASK_META: Record<string, TaskMeta> = {
   realtime_sync: { label: "经营数据同步", category: "数据同步", schedule: "每 3 分钟", description: "同步店铺经营、分时、推广、退款和流量来源数据", retryable: true },
   product_catalog_sync: { label: "在售商品同步", category: "数据同步", schedule: "每 15 分钟", description: "从淘宝后台更新在售商品、价格、库存和状态", retryable: true },
-  tencent_docs_sync: { label: "腾讯文档同步", category: "数据同步", schedule: "每 1 分钟", description: "同步礼品单，并回填腾讯文档中的旺旺号和订单号", retryable: false },
+  tencent_docs_sync: { label: "腾讯文档同步", category: "数据同步", schedule: "每 15 分钟", description: "差异同步礼品单，并回填腾讯文档中的旺旺号和订单号", retryable: false },
   promo_daily: { label: "推广数据补录", category: "数据同步", schedule: "每日 09:00", description: "补录近 7 天推广和商品按天数据", retryable: true },
   inspect: { label: "系统巡检", category: "系统维护", schedule: "每 5 分钟", description: "检查店铺授权、登录状态与基础服务健康度", retryable: true },
   report_push: { label: "经营日报推送", category: "消息推送", schedule: "每分钟检查", description: "按配置时间生成并推送经营日报" },

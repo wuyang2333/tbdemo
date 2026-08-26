@@ -9,6 +9,8 @@ const { Text } = Typography;
 
 type TencentDocsConfig = {
   enabled: boolean;
+  browser_fallback_enabled: boolean;
+  browser_cdp_url: string;
   document_url: string;
   file_id: string;
   sheet_id: string;
@@ -21,12 +23,14 @@ type TencentDocsConfig = {
   token_expires_at: string;
   last_sync_at: string;
   last_error: string;
-  last_result: { pushed?: number; pulled?: number; updated?: number; errors?: string[] };
+  last_result: { pushed?: number; pulled?: number; updated?: number; errors?: string[]; transport?: string; fallback_used?: boolean };
   poll_minutes: number;
 };
 
 const DEFAULT_CONFIG: TencentDocsConfig = {
   enabled: false,
+  browser_fallback_enabled: false,
+  browser_cdp_url: "http://127.0.0.1:9222",
   document_url: "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF",
   file_id: "",
   sheet_id: "",
@@ -40,7 +44,7 @@ const DEFAULT_CONFIG: TencentDocsConfig = {
   last_sync_at: "",
   last_error: "",
   last_result: {},
-  poll_minutes: 1,
+  poll_minutes: 15,
 };
 
 export function TencentDocsSettings() {
@@ -50,6 +54,7 @@ export function TencentDocsSettings() {
   const [openId, setOpenId] = useState("");
   const [loading, setLoading] = useState(false);
   const [action, setAction] = useState<"test" | "sync" | "authorize" | "disconnect" | null>(null);
+  const transportReady = config.authorized || config.browser_fallback_enabled;
 
   const load = useCallback(async () => {
     try {
@@ -69,6 +74,8 @@ export function TencentDocsSettings() {
     try {
       const { data } = await http.put<TencentDocsConfig>("/settings/tencent-docs", {
         enabled: overrides.enabled ?? config.enabled,
+        browser_fallback_enabled: overrides.browser_fallback_enabled ?? config.browser_fallback_enabled,
+        browser_cdp_url: config.browser_cdp_url,
         document_url: config.document_url,
         sheet_id: config.sheet_id,
         client_id: config.client_id,
@@ -97,7 +104,17 @@ export function TencentDocsSettings() {
     if (!(await save(false, { enabled }))) {
       setConfig((current) => ({ ...current, enabled: previous }));
     } else {
-      message.success(enabled ? "腾讯文档每 1 分钟自动同步已开启" : "腾讯文档自动同步已关闭");
+      message.success(enabled ? `腾讯文档每 ${config.poll_minutes} 分钟自动同步已开启` : "腾讯文档自动同步已关闭");
+    }
+  };
+
+  const toggleBrowserFallback = async (browser_fallback_enabled: boolean) => {
+    const previous = config.browser_fallback_enabled;
+    setConfig({ ...config, browser_fallback_enabled });
+    if (!(await save(false, { browser_fallback_enabled }))) {
+      setConfig((current) => ({ ...current, browser_fallback_enabled: previous }));
+    } else {
+      message.success(browser_fallback_enabled ? "已开启浏览器备用通道" : "已关闭浏览器备用通道");
     }
   };
 
@@ -142,16 +159,26 @@ export function TencentDocsSettings() {
       variant="borderless"
       title={<Space><CloudSyncOutlined style={{ color: "var(--ops-accent)" }} /><Text strong>礼品单 · 腾讯文档同步</Text></Space>}
       style={{ marginTop: 16 }}
-      extra={<Space><Tag color={config.authorized ? "green" : "orange"}>{config.authorized ? "已授权" : "未授权"}</Tag><Switch checked={config.enabled} loading={loading} onChange={(enabled) => void toggleEnabled(enabled)} /></Space>}
+      extra={<Space><Tag color={config.authorized ? "green" : config.browser_fallback_enabled ? "blue" : "orange"}>{config.authorized ? "已授权" : config.browser_fallback_enabled ? "浏览器备用" : "未授权"}</Tag><Switch checked={config.enabled} loading={loading} onChange={(enabled) => void toggleEnabled(enabled)} /></Space>}
     >
       <Space direction="vertical" size="middle" style={{ width: "100%" }}>
         <Alert
           type={config.last_error ? "warning" : "info"}
           showIcon
           message={config.last_error || "系统写入业务字段，云表格回传旺旺号和订单号"}
-          description={`启用后每 ${config.poll_minutes} 分钟自动同步；新增礼品单会立即排队写入。已有 access_token 和 open_id 时可以直接配置，无需 Client Secret。`}
+          description={`启用后每 ${config.poll_minutes} 分钟检查腾讯文档；系统内新增、编辑、状态、图片和删除变化会立即排队同步。已有 access_token 和 open_id 时可以直接配置，无需 Client Secret。浏览器备用通道只在官方 API 失败时尝试。`}
+        />
+        <Alert
+          type="warning"
+          showIcon
+          message="浏览器备用通道需要已登录的 Chrome 调试页"
+          description="请用 remote-debugging-port=9222 启动 Chrome，并保持目标腾讯文档标签页打开；系统不会读取或保存浏览器 Cookie。当前备用实现支持单元格读写和清除，图片上传仍需官方 API。"
+          action={<Switch checked={config.browser_fallback_enabled} loading={loading} onChange={(enabled) => void toggleBrowserFallback(enabled)} />}
         />
         <Form layout="vertical">
+          <Form.Item label="Chrome 调试地址">
+            <Input value={config.browser_cdp_url} onChange={(event) => setConfig({ ...config, browser_cdp_url: event.target.value })} placeholder="http://127.0.0.1:9222" />
+          </Form.Item>
           <Form.Item label="腾讯在线表格链接">
             <Input value={config.document_url} onChange={(event) => setConfig({ ...config, document_url: event.target.value })} prefix={<LinkOutlined />} />
           </Form.Item>
@@ -178,14 +205,15 @@ export function TencentDocsSettings() {
         <Space wrap>
           <Button type="primary" loading={loading} onClick={() => void save()}>保存配置</Button>
           <Button icon={<SafetyCertificateOutlined />} loading={action === "authorize"} disabled={!config.client_secret_configured || !config.redirect_uri} onClick={() => void authorize()}>OAuth 自动授权（可选）</Button>
-          <Button loading={action === "test"} disabled={!config.authorized} onClick={() => void runAction("test")}>测试连接</Button>
-          <Button icon={<CloudSyncOutlined />} loading={action === "sync"} disabled={!config.authorized || !config.enabled} onClick={() => void runAction("sync")}>立即同步</Button>
+          <Button loading={action === "test"} disabled={!transportReady} onClick={() => void runAction("test")}>测试连接</Button>
+          <Button icon={<CloudSyncOutlined />} loading={action === "sync"} disabled={!transportReady || !config.enabled} onClick={() => void runAction("sync")}>立即同步</Button>
           {config.authorized ? <Button danger loading={action === "disconnect"} onClick={() => void runAction("disconnect")}>断开授权</Button> : null}
           <Button onClick={() => void load()}>刷新状态</Button>
         </Space>
         <Space wrap>
           <Text type="secondary">子表：{config.sheet_title || config.sheet_id || "尚未识别"}</Text>
           <Text type="secondary">最近同步：{config.last_sync_at ? dayjs(config.last_sync_at).format("YYYY-MM-DD HH:mm:ss") : "尚未同步"}</Text>
+          {config.last_result?.transport ? <Text type="secondary">最近通道：{config.last_result.transport === "browser" ? "浏览器备用" : "官方 API"}</Text> : null}
           {config.token_expires_at ? <Text type="secondary">令牌到期：{dayjs(config.token_expires_at).format("YYYY-MM-DD HH:mm")}</Text> : null}
         </Space>
       </Space>

@@ -253,22 +253,6 @@ def dashboard_todos(
                 retry_task=name if name in retryable_tasks else "", updated_at=status.get("last_run"),
             ))
 
-    if _module_allowed(user, "gifts"):
-        for store in stores:
-            row = db.execute(
-                "SELECT pending_shipments, updated_at FROM store_operational_status WHERE store_id = ?",
-                (store["id"],),
-            ).fetchone()
-            if row and row["pending_shipments"] > 0:
-                items.append(_todo_item(
-                    key=f"fulfillment:pending:{store['id']}", module="gifts", category="订单",
-                    severity="warning", title=f"{row['pending_shipments']} 笔订单待发货",
-                    description="前往千牛已卖出宝贝处理发货",
-                    count=row["pending_shipments"],
-                    external_url="https://trade.taobao.com/trade/itemlist/list_sold_items.htm",
-                    store=store, updated_at=row["updated_at"],
-                ))
-
     now = datetime.now().astimezone()
     snoozed_rows = db.execute(
         "SELECT todo_key, snoozed_until FROM dashboard_todo_snoozes WHERE user_id = ?",

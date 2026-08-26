@@ -1,5 +1,7 @@
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from backend.app.core import tencent_docs
 from backend.app.core.db import DB_PATH, connect_db
 
@@ -91,7 +93,7 @@ def test_tencent_docs_accepts_manual_access_credentials(client, admin_token):
     assert saved.status_code == 200, saved.text
     assert saved.json()["authorized"] is True
     assert saved.json()["access_token_configured"] is True
-    assert saved.json()["poll_minutes"] == 1
+    assert saved.json()["poll_minutes"] == 15
     assert "access_token" not in saved.json()
     assert "open_id" not in saved.json()
 
@@ -101,6 +103,127 @@ def test_tencent_docs_accepts_manual_access_credentials(client, admin_token):
         assert configured.config["access_token"] == "manual-access-token"
         assert configured.config["open_id"] == "manual-open-id"
     finally:
+        conn.close()
+
+
+def test_tencent_docs_browser_fallback_config_is_local_only(client, admin_token):
+    saved = client.put(
+        "/api/settings/tencent-docs",
+        headers=_headers(admin_token),
+        json={
+            "enabled": False,
+            "browser_fallback_enabled": True,
+            "browser_cdp_url": "http://localhost:9222",
+            "document_url": "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["browser_fallback_enabled"] is True
+    assert saved.json()["browser_cdp_url"] == "http://localhost:9222"
+
+    rejected = client.put(
+        "/api/settings/tencent-docs",
+        headers=_headers(admin_token),
+        json={
+            "enabled": False,
+            "browser_fallback_enabled": True,
+            "browser_cdp_url": "https://example.com:9222",
+            "document_url": "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF",
+        },
+    )
+    assert rejected.status_code == 400
+    assert "本机" in rejected.json()["detail"]
+
+
+def test_parse_browser_a1_ranges():
+    assert tencent_docs._parse_a1_range("A1:M20") == (0, 19, 0, 12)
+    assert tencent_docs._parse_a1_range("$E$2") == (1, 1, 4, 4)
+    with pytest.raises(tencent_docs.TencentDocsError):
+        tencent_docs._parse_a1_range("bad-range")
+
+
+def test_test_connection_uses_browser_fallback_after_openapi_error(monkeypatch):
+    conn = connect_db()
+    try:
+        tencent_docs.update_config(
+            conn,
+            {
+                "enabled": True,
+                "browser_fallback_enabled": True,
+                "document_url": "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF",
+                "sheet_id": "sheet-browser",
+            },
+        )
+
+        class BrokenClient:
+            def __init__(self, db):
+                raise tencent_docs.TencentDocsError("Requests Use Up")
+
+        class BrowserClient:
+            def __init__(self, db):
+                self.config = {"sheet_id": "sheet-browser"}
+
+            def get_sheets(self):
+                return [{"sheetId": "sheet-browser", "title": "浏览器工作表", "rowCount": 20, "rowTotal": 20}]
+
+        monkeypatch.setattr(tencent_docs, "TencentDocsClient", BrokenClient)
+        monkeypatch.setattr(tencent_docs, "TencentDocsBrowserClient", BrowserClient)
+        result = tencent_docs.test_connection(conn)
+        assert result["transport"] == "browser"
+        assert result["fallback_used"] is True
+        assert result["sheet_title"] == "浏览器工作表"
+        assert "Requests Use Up" in result["primary_error"]
+    finally:
+        conn.close()
+
+
+def test_sync_uses_browser_fallback_after_openapi_error(monkeypatch):
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        tencent_docs.update_config(
+            conn,
+            {
+                "enabled": True,
+                "browser_fallback_enabled": True,
+                "document_url": "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF",
+                "sheet_id": "sheet-browser",
+            },
+        )
+        conn.commit()
+
+        class BrokenClient:
+            def __init__(self, db):
+                raise tencent_docs.TencentDocsError("Requests Use Up")
+
+        class BrowserClient:
+            transport = "browser"
+
+            def __init__(self, db):
+                self.requests = []
+
+            def get_sheets(self):
+                return [{"sheetId": "sheet-browser", "title": "浏览器工作表", "rowCount": 1, "rowTotal": 200}]
+
+            def get_range(self, sheet_id, range_a1):
+                return {"startRow": 0, "rows": [_cells(tencent_docs.HEADERS)]}
+
+            def batch_update(self, requests):
+                self.requests.extend(requests)
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(tencent_docs, "TencentDocsClient", BrokenClient)
+        monkeypatch.setattr(tencent_docs, "TencentDocsBrowserClient", BrowserClient)
+        result = tencent_docs.sync_gifts(conn)
+        assert result["transport"] == "browser"
+        assert result["fallback_used"] is True
+        assert result["pushed"] == 0
+        assert "Requests Use Up" in result["primary_error"]
+    finally:
+        tencent_docs.update_config(conn, {"browser_fallback_enabled": False, "quota_backoff_until": ""})
+        conn.commit()
         conn.close()
 
 
@@ -179,7 +302,7 @@ def test_sync_pulls_cloud_fields_and_preserves_them_on_push():
 
         updates = [item["updateRangeRequest"] for item in fake.requests]
         existing_updates = [item for item in updates if item["gridData"]["startRow"] == 1]
-        assert {item["gridData"]["startColumn"] for item in existing_updates} == {0, 4, 10}
+        assert {item["gridData"]["startColumn"] for item in existing_updates} == {10}
         assert all(item["gridData"]["startColumn"] not in {8, 9} for item in existing_updates)
         owner_update = next(item for item in existing_updates if item["gridData"]["startColumn"] == 10)
         assert owner_update["gridData"]["rows"][0]["values"][2]["cellValue"]["text"] == "系统负责人"
@@ -197,6 +320,132 @@ def test_sync_pulls_cloud_fields_and_preserves_them_on_push():
         assert price_cell["cellValue"]["text"] == "12.34"
     finally:
         conn.rollback()
+        conn.close()
+
+
+def test_sync_clears_rows_for_deleted_local_gifts():
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        tencent_docs.update_config(conn, {"enabled": True, "sheet_id": "sheet-1"})
+
+        class DeletedRowClient:
+            def __init__(self):
+                self.requests = []
+
+            def get_sheets(self):
+                return [{"sheetId": "sheet-1", "title": "工作表1", "rowCount": 2, "rowTotal": 200}]
+
+            def get_range(self, sheet_id: str, range_a1: str):
+                return {
+                    "startRow": 0,
+                    "rows": [
+                        _cells(tencent_docs.HEADERS),
+                        _cells(["999", "2026-08-25", "10:00", "已删除店铺", "旧数据"]),
+                    ],
+                }
+
+            def batch_update(self, requests: list[dict]):
+                self.requests.extend(requests)
+
+        fake = DeletedRowClient()
+        tencent_docs.sync_gifts(conn, client=fake)
+
+        clear_request = next(item["updateRangeRequest"] for item in fake.requests)
+        assert clear_request["gridData"]["startRow"] == 1
+        assert clear_request["gridData"]["startColumn"] == 0
+        assert all(
+            cell["cellValue"]["text"] == ""
+            for cell in clear_request["gridData"]["rows"][0]["values"]
+        )
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_sync_uses_cached_sheet_and_skips_write_when_values_match():
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        tencent_docs.update_config(conn, {"enabled": True, "sheet_id": "sheet-1"})
+        tencent_docs.update_config(
+            conn,
+            {
+                "sheet_title": "工作表1",
+                "sheet_row_count": 2,
+                "sheet_row_total": 200,
+                "sheet_metadata_refreshed_at": tencent_docs._now_text(),
+            },
+        )
+        created = conn.execute(
+            """INSERT INTO gifts
+            (store_id, store_name, order_no, recipient, gift_name, quantity, price, status, created_at,
+             keyword, spec, commission, wangwang, review_status, settle_status, order_time, image, owner_nickname)
+            VALUES (0, '测试店铺', '', '', '', 1, 9.9, 'pending', '2026-08-25T10:00:00+00:00',
+                    '测试关键词', '测试规格', 2.5, '', 'none', 'unsettled', '2026-08-25 10:00:00', '', '系统负责人')"""
+        )
+        gift = dict(conn.execute("SELECT * FROM gifts WHERE id = ?", (created.lastrowid,)).fetchone())
+        cloud_values = tencent_docs._gift_values(gift, include_cloud_fields=True)
+
+        class MatchingClient:
+            writes = 0
+
+            def get_sheets(self):
+                raise AssertionError("工作表元数据未命中缓存")
+
+            def get_range(self, sheet_id: str, range_a1: str):
+                return {"startRow": 0, "rows": [_cells(tencent_docs.HEADERS), _cells(cloud_values)]}
+
+            def batch_update(self, requests: list[dict]):
+                self.writes += 1
+
+        fake = MatchingClient()
+        result = tencent_docs.sync_gifts(conn, client=fake)
+
+        assert result["errors"] == []
+        assert fake.writes == 0
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_sync_backs_off_after_requests_use_up():
+    conn = connect_db()
+    try:
+        tencent_docs.update_config(conn, {"enabled": True, "sheet_id": "sheet-1"})
+        tencent_docs.update_config(
+            conn,
+            {
+                "sheet_title": "工作表1",
+                "sheet_row_count": 2,
+                "sheet_row_total": 200,
+                "sheet_metadata_refreshed_at": tencent_docs._now_text(),
+            },
+        )
+
+        class ExhaustedClient:
+            def get_range(self, sheet_id: str, range_a1: str):
+                raise tencent_docs.TencentDocsError("Requests Use Up. Please contact Us.")
+
+        with pytest.raises(tencent_docs.TencentDocsError, match="官方 API 额度已用尽"):
+            tencent_docs.sync_gifts(conn, client=ExhaustedClient())
+
+        class NoCallClient:
+            def get_sheets(self):
+                raise AssertionError("额度退避期间不应调用腾讯文档")
+
+            def get_range(self, sheet_id: str, range_a1: str):
+                raise AssertionError("额度退避期间不应调用腾讯文档")
+
+        skipped = tencent_docs.sync_gifts(conn, client=NoCallClient())
+        assert skipped["skipped"] is True
+        assert "官方 API 额度已用尽" in skipped["reason"]
+        config = tencent_docs.public_config(conn)
+        assert config["quota_backoff_until"]
+        assert config["last_error"] == tencent_docs.QUOTA_EXHAUSTED_MESSAGE
+    finally:
+        tencent_docs.update_config(conn, {"quota_backoff_until": ""})
+        conn.commit()
         conn.close()
 
 
@@ -319,6 +568,61 @@ def test_batch_create_commits_before_background_sync(client, admin_token, monkey
         assert all(row["status"] == "processing" for row in statuses)
     finally:
         conn.close()
+
+
+def test_gift_update_commits_before_background_sync(client, admin_token, monkeypatch):
+    from backend.app.api import gifts
+
+    monkeypatch.setattr(gifts, "_sync_tencent_docs_background", lambda: None)
+    created = client.post(
+        "/api/gifts/batch-create",
+        headers=_headers(admin_token),
+        json={
+            "date": "2026-08-25",
+            "start_time": "13:24",
+            "store_id": 0,
+            "store_name": "测试店铺",
+            "keyword": "本地变更同步测试",
+            "spec": "一支",
+            "price": 16,
+            "commission": 6,
+            "quantity": 1,
+            "image": "",
+        },
+    )
+    gift_id = created.json()["items"][0]["id"]
+    observed_prices = []
+
+    def background_read() -> None:
+        concurrent = connect_db()
+        try:
+            observed_prices.append(concurrent.execute("SELECT price FROM gifts WHERE id = ?", (gift_id,)).fetchone()["price"])
+        finally:
+            concurrent.close()
+
+    monkeypatch.setattr(gifts, "_sync_tencent_docs_background", background_read)
+    updated = client.put(
+        f"/api/gifts/{gift_id}",
+        headers=_headers(admin_token),
+        json={
+            "order_no": "",
+            "store_id": 0,
+            "store_name": "测试店铺",
+            "keyword": "本地变更同步测试",
+            "spec": "一支",
+            "price": 18.5,
+            "commission": 6,
+            "wangwang": "",
+            "order_time": "2026-08-25 13:24:00",
+            "review_status": "none",
+            "settle_status": "unsettled",
+            "remark_status": "unremarked",
+            "image": "",
+        },
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert observed_prices == [18.5]
 
 
 def test_sync_uploads_keyword_image_once_and_inserts_into_keyword_cell():

@@ -137,6 +137,8 @@ def list_products(
     q: str = "",
     stock_status: str = "all",
     sales_status: str = "all",
+    sort_by: str = Query("sold_quantity", pattern="^(sold_quantity|shelf_at)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user: dict = Depends(get_current_user),
@@ -185,6 +187,13 @@ def list_products(
         + summary_where,
         params,
     ).fetchone()
+    if sort_by == "shelf_at":
+        order_sql = (
+            "CASE WHEN TRIM(COALESCE(p.shelf_at, '')) = '' THEN 1 ELSE 0 END, "
+            f"p.shelf_at {sort_order.upper()}, p.item_id DESC"
+        )
+    else:
+        order_sql = f"p.sold_quantity {sort_order.upper()}, p.item_id DESC"
     rows = db.execute(
         """
         SELECT p.*, s.name AS store_name
@@ -192,7 +201,7 @@ def list_products(
         JOIN stores s ON s.id = p.store_id
         """
         + where
-        + " ORDER BY p.sold_quantity DESC, p.item_id DESC LIMIT ? OFFSET ?",
+        + f" ORDER BY {order_sql} LIMIT ? OFFSET ?",
         [*params, page_size, (page - 1) * page_size],
     ).fetchall()
     last_sync = summary["last_sync"]

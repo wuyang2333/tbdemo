@@ -89,3 +89,44 @@ def test_product_list_api(client, admin_token):
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert invalid.status_code == 400
+
+
+def test_product_list_sorts_all_pages_by_shelf_time(client, admin_token):
+    conn = sqlite3.connect(os.environ["TAOBAO_DB_PATH"])
+    store_id = conn.execute(
+        "INSERT INTO stores (name, status, created_at) VALUES (?, 'active', ?)",
+        ("上架时间排序店", "2026-08-26T00:00:00"),
+    ).lastrowid
+    oldest = _product("shelf-oldest", "最早上架")
+    oldest["shelf_at"] = "2024-01-09 18:27"
+    newest = _product("shelf-newest", "最近上架")
+    newest["shelf_at"] = "2026-08-26 09:30"
+    missing = _product("shelf-missing", "无上架时间")
+    missing["shelf_at"] = ""
+    products_api._save_store_products(
+        conn, store_id, [oldest, newest, missing], "2026-08-26T10:00:00"
+    )
+    conn.commit()
+    conn.close()
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    ascending = client.get(
+        f"/api/products?store_id={store_id}&sort_by=shelf_at&sort_order=asc&page_size=2",
+        headers=headers,
+    )
+    assert ascending.status_code == 200, ascending.text
+    assert [item["item_id"] for item in ascending.json()["items"]] == [
+        "shelf-oldest",
+        "shelf-newest",
+    ]
+
+    descending = client.get(
+        f"/api/products?store_id={store_id}&sort_by=shelf_at&sort_order=desc",
+        headers=headers,
+    )
+    assert descending.status_code == 200, descending.text
+    assert [item["item_id"] for item in descending.json()["items"]] == [
+        "shelf-newest",
+        "shelf-oldest",
+        "shelf-missing",
+    ]

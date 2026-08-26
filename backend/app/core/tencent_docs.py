@@ -12,6 +12,11 @@ from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 
+try:
+    import websocket
+except ImportError:
+    websocket = None
+
 from backend.app.core.db import DB_PATH
 
 
@@ -21,6 +26,10 @@ OAUTH_TOKEN_URL = "https://docs.qq.com/oauth/v2/token"
 API_ROOT = "https://docs.qq.com"
 DEFAULT_DOCUMENT_URL = "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF"
 SYNC_COLUMNS = 13
+POLL_MINUTES = 15
+SHEET_METADATA_TTL_HOURS = 24
+QUOTA_BACKOFF_HOURS = 4
+QUOTA_EXHAUSTED_MESSAGE = "腾讯文档官方 API 额度已用尽，请等待额度恢复后再同步"
 _SYNC_LOCK = threading.Lock()
 HEADERS = [
     "系统礼品单ID",
@@ -80,6 +89,9 @@ def _load_config(db) -> dict:
         "file_id": parse_file_id(DEFAULT_DOCUMENT_URL),
         "sheet_id": "",
         "sheet_title": "",
+        "sheet_row_count": 0,
+        "sheet_row_total": 0,
+        "sheet_metadata_refreshed_at": "",
         "client_id": "",
         "client_secret": "",
         "redirect_uri": "",
@@ -92,6 +104,9 @@ def _load_config(db) -> dict:
         "last_sync_at": "",
         "last_error": "",
         "last_result": {},
+        "quota_backoff_until": "",
+        "browser_fallback_enabled": False,
+        "browser_cdp_url": "http://127.0.0.1:9222",
     }
     defaults.update(data)
     return defaults
@@ -104,13 +119,36 @@ def _store_config(db, config: dict) -> None:
     )
 
 
+def _is_quota_exhausted(error: BaseException | str) -> bool:
+    text = str(error).lower()
+    return "requests use up" in text or "官方 api 额度已用尽" in text
+
+
+def _friendly_error_message(error: BaseException | str) -> str:
+    return QUOTA_EXHAUSTED_MESSAGE if _is_quota_exhausted(error) else str(error)
+
+
 def update_config(db, values: dict) -> dict:
     config = _load_config(db)
+    previous_file_id = str(config.get("file_id") or "")
+    previous_sheet_id = str(config.get("sheet_id") or "")
     for key, value in values.items():
         if key in config:
+            if key == "browser_cdp_url":
+                value = str(value or "").strip().rstrip("/") or "http://127.0.0.1:9222"
+                parsed = urlparse(value)
+                if parsed.scheme not in {"http", "https"} or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+                    raise TencentDocsError("Chrome 调试地址必须是本机 localhost、127.0.0.1 或 ::1")
+            if key == "browser_fallback_enabled":
+                value = bool(value)
             config[key] = value
     if "document_url" in values:
         config["file_id"] = parse_file_id(str(config["document_url"]))
+    if str(config.get("file_id") or "") != previous_file_id or str(config.get("sheet_id") or "") != previous_sheet_id:
+        config["sheet_title"] = ""
+        config["sheet_row_count"] = 0
+        config["sheet_row_total"] = 0
+        config["sheet_metadata_refreshed_at"] = ""
     _store_config(db, config)
     return config
 
@@ -132,7 +170,10 @@ def public_config(db) -> dict:
         "last_sync_at": config["last_sync_at"],
         "last_error": config["last_error"],
         "last_result": config["last_result"],
-        "poll_minutes": 1,
+        "quota_backoff_until": config["quota_backoff_until"],
+        "browser_fallback_enabled": bool(config["browser_fallback_enabled"]),
+        "browser_cdp_url": config["browser_cdp_url"],
+        "poll_minutes": POLL_MINUTES,
     }
 
 
@@ -262,15 +303,26 @@ class TencentDocsClient:
         }
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
+        response = None
         try:
             response = httpx.request(method, API_ROOT + path, headers=self._headers(), timeout=30.0, **kwargs)
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
+            message = str(exc)
+            if response is not None:
+                try:
+                    error_payload = response.json()
+                    message = str(error_payload.get("message") or error_payload.get("msg") or message)
+                except ValueError:
+                    pass
+            if _is_quota_exhausted(message):
+                raise TencentDocsError(QUOTA_EXHAUSTED_MESSAGE) from exc
             raise TencentDocsError(f"腾讯文档接口调用失败：{exc}") from exc
         code = payload.get("code", payload.get("ret", 0))
         if code not in (0, None):
-            raise TencentDocsError(str(payload.get("message") or payload.get("msg") or f"腾讯文档返回错误 {code}"))
+            message = str(payload.get("message") or payload.get("msg") or f"腾讯文档返回错误 {code}")
+            raise TencentDocsError(_friendly_error_message(message))
         data = payload.get("data")
         return data if isinstance(data, dict) else payload
 
@@ -333,8 +385,285 @@ class TencentDocsClient:
         )
 
 
+def _parse_a1_range(range_a1: str) -> tuple[int, int, int, int]:
+    import re
+
+    value = range_a1.split("!", 1)[-1].replace("$", "").strip().upper()
+    match = re.fullmatch(r"([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?", value)
+    if not match:
+        raise TencentDocsError(f"腾讯文档范围格式不支持：{range_a1}")
+
+    def column_index(column: str) -> int:
+        result = 0
+        for char in column:
+            result = result * 26 + ord(char) - ord("A") + 1
+        return result - 1
+
+    start_column = column_index(match.group(1))
+    start_row = int(match.group(2)) - 1
+    end_column = column_index(match.group(3) or match.group(1))
+    end_row = int(match.group(4) or match.group(2)) - 1
+    if min(start_row, end_row, start_column, end_column) < 0:
+        raise TencentDocsError(f"腾讯文档范围必须从第 1 行、第 A 列开始：{range_a1}")
+    return start_row, end_row, start_column, end_column
+
+
+class TencentDocsBrowserClient:
+    """通过已登录 Chrome 的本地 CDP 页面复用腾讯文档内部表格模型。"""
+
+    transport = "browser"
+
+    def __init__(self, db):
+        self.db = db
+        self.config = _load_config(db)
+        self.file_id = str(self.config.get("file_id") or "")
+        self.cdp_url = str(self.config.get("browser_cdp_url") or "http://127.0.0.1:9222").rstrip("/")
+        self.timeout = 15.0
+        self._socket = None
+        self._message_id = 0
+        self._lock = threading.Lock()
+
+    def _connect(self) -> None:
+        if websocket is None:
+            raise TencentDocsError("浏览器备用通道缺少 websocket-client 依赖")
+        try:
+            response = httpx.get(f"{self.cdp_url}/json/list", timeout=5.0, trust_env=False)
+            response.raise_for_status()
+            pages = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise TencentDocsError(f"无法连接 Chrome 调试端口 {self.cdp_url}：{exc}") from exc
+        target = next(
+            (
+                page
+                for page in pages
+                if page.get("type") == "page"
+                and self.file_id
+                and f"/sheet/{self.file_id}" in str(page.get("url") or "")
+            ),
+            None,
+        )
+        if target is None:
+            raise TencentDocsError(f"Chrome 中没有打开目标腾讯文档，请先打开文档（文件 ID：{self.file_id}）")
+        ws_url = str(target.get("webSocketDebuggerUrl") or "")
+        if not ws_url:
+            raise TencentDocsError("Chrome 调试页未返回 WebSocket 地址")
+        try:
+            self._socket = websocket.create_connection(ws_url, timeout=self.timeout, origin="http://127.0.0.1")
+        except Exception as exc:
+            try:
+                self._socket = websocket.create_connection(ws_url, timeout=self.timeout, suppress_origin=True)
+            except Exception as retry_exc:
+                raise TencentDocsError(f"无法连接 Chrome 调试页：{retry_exc}") from exc
+
+    def _call(self, method: str, params: dict | None = None) -> dict:
+        with self._lock:
+            if self._socket is None:
+                self._connect()
+            self._message_id += 1
+            message_id = self._message_id
+            try:
+                self._socket.send(json.dumps({"id": message_id, "method": method, "params": params or {}}))
+                while True:
+                    raw = self._socket.recv()
+                    message = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+                    if message.get("id") == message_id:
+                        if "error" in message:
+                            raise TencentDocsError(f"Chrome CDP 调用失败：{message['error']}")
+                        return message.get("result") or {}
+            except TencentDocsError:
+                raise
+            except Exception as exc:
+                self.close()
+                raise TencentDocsError(f"Chrome 调试连接中断：{exc}") from exc
+
+    def close(self) -> None:
+        socket = self._socket
+        self._socket = None
+        if socket is not None:
+            try:
+                socket.close()
+            except Exception:
+                pass
+
+    def _evaluate(self, expression: str):
+        result = self._call(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "returnByValue": True,
+                "awaitPromise": True,
+                "userGesture": True,
+            },
+        )
+        if result.get("exceptionDetails"):
+            details = result["exceptionDetails"]
+            exception = details.get("exception") or {}
+            message = exception.get("description") or exception.get("value") or details.get("text") or "未知页面异常"
+            raise TencentDocsError(f"腾讯文档浏览器接口执行失败：{message}")
+        value = (result.get("result") or {}).get("value")
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except ValueError:
+                return value
+        return value
+
+    def _page_context(self) -> dict:
+        return self._evaluate(
+            """(() => {
+                const workbook = window.SpreadsheetApp?.workbook;
+                const sheet = workbook?.activeSheet;
+                if (!workbook || !sheet) throw new Error("当前页面不是可编辑的腾讯文档表格");
+                return JSON.stringify({
+                    sheetId: String(workbook.activeSheetId || ""),
+                    title: String(sheet.getSheetName?.() || ""),
+                    rowCount: Number(sheet.getRowCount?.() || 0),
+                    colCount: Number(sheet.getColCount?.() || 0),
+                });
+            })()"""
+        )
+
+    def _assert_sheet(self, sheet_id: str, context: dict | None = None) -> dict:
+        context = context or self._page_context()
+        expected = str(sheet_id or self.config.get("sheet_id") or "")
+        if expected and context.get("sheetId") != expected:
+            raise TencentDocsError(
+                f"Chrome 当前打开的是工作表 {context.get('sheetId') or '未知'}，不是配置的工作表 {expected}；请切换到目标子表"
+            )
+        return context
+
+    def get_sheets(self) -> list[dict]:
+        context = self._page_context()
+        self._assert_sheet(str(self.config.get("sheet_id") or context.get("sheetId") or ""), context)
+        row_count = max(int(context.get("rowCount") or 0), 2)
+        return [{"sheetId": context["sheetId"], "title": context["title"], "rowCount": row_count, "rowTotal": row_count}]
+
+    def get_range(self, sheet_id: str, range_a1: str) -> dict:
+        start_row, end_row, start_column, end_column = _parse_a1_range(range_a1)
+        self._assert_sheet(sheet_id)
+        payload = json.dumps(
+            {
+                "sheetId": str(sheet_id),
+                "startRow": start_row,
+                "endRow": end_row,
+                "startColumn": start_column,
+                "endColumn": end_column,
+            },
+            ensure_ascii=False,
+        )
+        result = self._evaluate(
+            f"""(() => {{
+                const input = JSON.parse({json.dumps(payload)});
+                const sheet = window.SpreadsheetApp.workbook.activeSheet;
+                const rows = [];
+                for (let row = input.startRow; row <= input.endRow; row++) {{
+                    const values = [];
+                    for (let col = input.startColumn; col <= input.endColumn; col++) {{
+                        const cell = sheet.getCellDataAtPosition(row, col);
+                        const value = cell?.value;
+                        values.push({{cellValue: {{text: value == null ? "" : String(value)}}}});
+                    }}
+                    rows.push({{values}});
+                }}
+                return JSON.stringify({{startRow: input.startRow, rows}});
+            }})()"""
+        )
+        return result if isinstance(result, dict) else {"startRow": start_row, "rows": []}
+
+    def batch_update(self, requests: list[dict]) -> None:
+        operations = []
+        for request in requests:
+            update = request.get("updateRangeRequest") if isinstance(request, dict) else None
+            if not isinstance(update, dict):
+                raise TencentDocsError("浏览器备用通道暂不支持该批量更新类型")
+            grid = update.get("gridData") or {}
+            rows = grid.get("rows") or []
+            operations.append(
+                {
+                    "sheetId": str(update.get("sheetId") or self.config.get("sheet_id") or ""),
+                    "startRow": int(grid.get("startRow") or 0),
+                    "startColumn": int(grid.get("startColumn") or 0),
+                    "rows": [
+                        [
+                            str(((cell.get("cellValue") or {}).get("text")) or "")
+                            for cell in (row.get("values") or [])
+                        ]
+                        for row in rows
+                    ],
+                }
+            )
+        payload = json.dumps(operations, ensure_ascii=False)
+        self._evaluate(
+            f"""(async () => {{
+                const operations = JSON.parse({json.dumps(payload)});
+                const api = window.SpreadsheetApp.behaviorApi?.cellApi;
+                if (!api?.setRangeValue) throw new Error("腾讯文档内部写入接口不可用");
+                for (const operation of operations) {{
+                    const rangeValues = [];
+                    operation.rows.forEach((row, rowOffset) => row.forEach((value, colOffset) => rangeValues.push({{
+                        rowIndex: operation.startRow + rowOffset,
+                        colIndex: operation.startColumn + colOffset,
+                        userEnterValue: value,
+                    }})));
+                    if (rangeValues.length) await api.setRangeValue({{sheetId: operation.sheetId, rangeValues}});
+                }}
+                return JSON.stringify({{updated: operations.length}});
+            }})()"""
+        )
+
+    def convert_file_id(self) -> str:
+        raise TencentDocsError("浏览器备用通道暂不支持图片上传，请先用官方 API 完成图片同步")
+
+    def upload_image(self, image_path: Path) -> str:
+        raise TencentDocsError("浏览器备用通道暂不支持图片上传，请先用官方 API 完成图片同步")
+
+    def insert_cell_images(self, file_id: str, sheet_id: str, images: list[dict]) -> None:
+        raise TencentDocsError("浏览器备用通道暂不支持图片插入，请先用官方 API 完成图片同步")
+
+    def clear_range(self, file_id: str, range_a1: str) -> None:
+        sheet_id, _, a1 = range_a1.partition("!")
+        start_row, end_row, start_column, end_column = _parse_a1_range(a1 or range_a1)
+        self._assert_sheet(sheet_id)
+        self._evaluate(
+            f"""(async () => {{
+                const ranges = window.SpreadsheetApp.view?.getSelectionRanges?.() || [];
+                const GridRange = ranges[0]?.constructor;
+                if (!GridRange) throw new Error("腾讯文档范围对象不可用");
+                const range = new GridRange({json.dumps(sheet_id)}, {start_row}, {end_row}, {start_column}, {end_column});
+                await window.SpreadsheetApp.behaviorApi.cellApi.clearContent({{gridRanges: [range]}});
+                return JSON.stringify({{cleared: true}});
+            }})()"""
+        )
+
+
 def test_connection(db) -> dict:
-    client = TencentDocsClient(db)
+    config = _load_config(db)
+    try:
+        client = TencentDocsClient(db)
+        result = _test_connection_with_client(db, client)
+        result["transport"] = "openapi"
+        return result
+    except TencentDocsError as primary_error:
+        if not config.get("browser_fallback_enabled"):
+            raise
+        browser_client = None
+        try:
+            browser_client = TencentDocsBrowserClient(db)
+            result = _test_connection_with_client(db, browser_client)
+            result["transport"] = "browser"
+            result["fallback_used"] = True
+            result["primary_error"] = str(primary_error)
+            return result
+        except TencentDocsError as browser_error:
+            raise TencentDocsError(f"官方 API 失败：{primary_error}；浏览器备用通道失败：{browser_error}") from browser_error
+        finally:
+            if browser_client is not None:
+                close = getattr(browser_client, "close", None)
+                if callable(close):
+                    close()
+
+
+def _test_connection_with_client(db, client) -> dict:
     sheets = client.get_sheets()
     if not sheets:
         raise TencentDocsError("腾讯在线表格中没有可用工作表")
@@ -342,6 +671,9 @@ def test_connection(db) -> dict:
     selected = next((item for item in sheets if str(item.get("sheetId")) == str(config.get("sheet_id"))), sheets[0])
     config["sheet_id"] = str(selected.get("sheetId") or "")
     config["sheet_title"] = str(selected.get("title") or "")
+    config["sheet_row_count"] = int(selected.get("rowCount") or 0)
+    config["sheet_row_total"] = int(selected.get("rowTotal") or 200)
+    config["sheet_metadata_refreshed_at"] = _now_text()
     config["last_error"] = ""
     _store_config(db, config)
     return {"ok": True, "sheet_id": config["sheet_id"], "sheet_title": config["sheet_title"], "sheets": sheets}
@@ -444,6 +776,50 @@ def _groups(assignments: list[tuple[int, dict]]) -> list[list[tuple[int, dict]]]
     return grouped
 
 
+def _parse_config_time(value: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value or ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _cached_sheet(config: dict) -> dict | None:
+    refreshed_at = _parse_config_time(config.get("sheet_metadata_refreshed_at"))
+    if (
+        not config.get("sheet_id")
+        or int(config.get("sheet_row_total") or 0) <= 0
+        or refreshed_at is None
+        or refreshed_at <= _now() - timedelta(hours=SHEET_METADATA_TTL_HOURS)
+    ):
+        return None
+    return {
+        "sheetId": str(config["sheet_id"]),
+        "title": str(config.get("sheet_title") or ""),
+        "rowCount": int(config.get("sheet_row_count") or 0),
+        "rowTotal": int(config.get("sheet_row_total") or 200),
+    }
+
+
+def _quota_backoff_result(config: dict) -> dict | None:
+    if config.get("browser_fallback_enabled"):
+        return None
+    backoff_until = _parse_config_time(config.get("quota_backoff_until"))
+    if backoff_until is None or backoff_until <= _now():
+        return None
+    return {
+        "ok": False,
+        "skipped": True,
+        "reason": f"腾讯文档官方 API 额度已用尽，将在 {backoff_until.astimezone().strftime('%H:%M')} 后自动重试",
+        "pushed": 0,
+        "pulled": 0,
+        "errors": [],
+    }
+
+
+def _values_differ(cloud_values: list[str], start: int, desired_values: list[str]) -> bool:
+    return cloud_values[start:start + len(desired_values)] != desired_values
+
+
 def _layout_assignments(gifts: list[dict]) -> list[tuple[int, dict]]:
     assignments = []
     row_number = 2
@@ -502,9 +878,49 @@ def _update_cloud_fields(db, gift: dict, cloud_values: list[str]) -> list[str]:
     return errors
 
 
-def sync_gifts(db, client: TencentDocsClient | None = None) -> dict:
+def sync_gifts(db, client: TencentDocsClient | None = None, *, force: bool = False) -> dict:
     with _SYNC_LOCK:
-        return _sync_gifts_locked(db, client)
+        config = _load_config(db)
+        if not force:
+            backoff_result = _quota_backoff_result(config)
+            if backoff_result is not None:
+                return backoff_result
+        try:
+            if client is not None:
+                return _sync_gifts_locked(db, client)
+            try:
+                return _sync_gifts_locked(db, None)
+            except TencentDocsError as primary_error:
+                if not config.get("browser_fallback_enabled"):
+                    raise
+                browser_client = None
+                try:
+                    browser_client = TencentDocsBrowserClient(db)
+                    result = _sync_gifts_locked(db, browser_client)
+                    result["transport"] = "browser"
+                    result["fallback_used"] = True
+                    result["primary_error"] = str(primary_error)
+                    config = _load_config(db)
+                    config["last_result"] = result
+                    config["last_error"] = "；".join(result.get("errors") or [])
+                    _store_config(db, config)
+                    return result
+                except TencentDocsError as browser_error:
+                    raise TencentDocsError(f"官方 API 失败：{primary_error}；浏览器备用通道失败：{browser_error}") from browser_error
+                finally:
+                    if browser_client is not None:
+                        close = getattr(browser_client, "close", None)
+                        if callable(close):
+                            close()
+        except TencentDocsError as exc:
+            if _is_quota_exhausted(exc):
+                config = _load_config(db)
+                config["quota_backoff_until"] = (_now() + timedelta(hours=QUOTA_BACKOFF_HOURS)).isoformat()
+                config["last_error"] = QUOTA_EXHAUSTED_MESSAGE
+                _store_config(db, config)
+                db.commit()
+                raise TencentDocsError(QUOTA_EXHAUSTED_MESSAGE) from exc
+            raise
 
 
 def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
@@ -514,10 +930,14 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
     if not config["file_id"]:
         raise TencentDocsError("尚未配置腾讯在线表格链接")
     client = client or TencentDocsClient(db)
-    sheets = client.get_sheets()
-    if not sheets:
-        raise TencentDocsError("腾讯在线表格中没有可用工作表")
-    sheet = next((item for item in sheets if str(item.get("sheetId")) == str(config.get("sheet_id"))), sheets[0])
+    sheet = _cached_sheet(config)
+    sheet_metadata_refreshed = False
+    if sheet is None:
+        sheets = client.get_sheets()
+        if not sheets:
+            raise TencentDocsError("腾讯在线表格中没有可用工作表")
+        sheet = next((item for item in sheets if str(item.get("sheetId")) == str(config.get("sheet_id"))), sheets[0])
+        sheet_metadata_refreshed = True
     sheet_id = str(sheet.get("sheetId") or "")
     if not sheet_id:
         raise TencentDocsError("腾讯文档未返回工作表 ID")
@@ -582,17 +1002,21 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
     rows_to_clear = sorted(
         row_number
         for gift_id, (row_number, _) in cloud_by_id.items()
-        if gift_id in local_by_id and row_number not in desired_rows
+        if gift_id not in local_by_id or row_number not in desired_rows
     )
 
-    requests = [
-        {
+    desired_by_id = {
+        int(gift["id"]): _gift_values(gift, include_cloud_fields=False)
+        for gift in local_rows
+    }
+    requests = []
+    if table_rows.get(1, [""] * SYNC_COLUMNS)[:SYNC_COLUMNS] != HEADERS:
+        requests.append({
             "updateRangeRequest": {
                 "sheetId": sheet_id,
                 "gridData": {"startRow": 0, "startColumn": 0, "rows": [_row_payload(HEADERS)]},
             }
-        }
-    ]
+        })
     for group in _groups([(row_number, {}) for row_number in rows_to_clear]):
         requests.append(
             {
@@ -606,9 +1030,29 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
                 }
             }
         )
-    existing_without_images = [(row_number, gift) for row_number, gift in existing_same if not gift.get("image")]
-    existing_with_images = [(row_number, gift) for row_number, gift in existing_same if gift.get("image")]
-    for group in _groups(existing_same):
+    identity_changes = [
+        (row_number, gift)
+        for row_number, gift in existing_same
+        if _values_differ(cloud_by_id[int(gift["id"])][1], 0, desired_by_id[int(gift["id"])][:4])
+    ]
+    existing_without_images = [
+        (row_number, gift)
+        for row_number, gift in existing_same
+        if not gift.get("image")
+        and _values_differ(cloud_by_id[int(gift["id"])][1], 4, desired_by_id[int(gift["id"])][4:8])
+    ]
+    existing_with_images = [
+        (row_number, gift)
+        for row_number, gift in existing_same
+        if gift.get("image")
+        and _values_differ(cloud_by_id[int(gift["id"])][1], 5, desired_by_id[int(gift["id"])][5:8])
+    ]
+    status_changes = [
+        (row_number, gift)
+        for row_number, gift in existing_same
+        if _values_differ(cloud_by_id[int(gift["id"])][1], 10, desired_by_id[int(gift["id"])][10:])
+    ]
+    for group in _groups(identity_changes):
         requests.append(
             {
                 "updateRangeRequest": {
@@ -616,7 +1060,7 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
                     "gridData": {
                         "startRow": group[0][0] - 1,
                         "startColumn": 0,
-                        "rows": [_row_payload(_gift_values(gift, include_cloud_fields=False)[:4]) for _, gift in group],
+                        "rows": [_row_payload(desired_by_id[int(gift["id"])][:4]) for _, gift in group],
                     },
                 }
             }
@@ -629,7 +1073,7 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
                     "gridData": {
                         "startRow": group[0][0] - 1,
                         "startColumn": 4,
-                        "rows": [_row_payload(_gift_values(gift, include_cloud_fields=False)[4:8]) for _, gift in group],
+                        "rows": [_row_payload(desired_by_id[int(gift["id"])][4:8]) for _, gift in group],
                     },
                 }
             }
@@ -642,12 +1086,12 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
                     "gridData": {
                         "startRow": group[0][0] - 1,
                         "startColumn": 5,
-                        "rows": [_row_payload(_gift_values(gift, include_cloud_fields=False)[5:8]) for _, gift in group],
+                        "rows": [_row_payload(desired_by_id[int(gift["id"])][5:8]) for _, gift in group],
                     },
                 }
             }
         )
-    for group in _groups(existing_same):
+    for group in _groups(status_changes):
         requests.append(
             {
                 "updateRangeRequest": {
@@ -655,7 +1099,7 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
                     "gridData": {
                         "startRow": group[0][0] - 1,
                         "startColumn": 10,
-                        "rows": [_row_payload(_gift_values(gift, include_cloud_fields=False)[10:]) for _, gift in group],
+                        "rows": [_row_payload(desired_by_id[int(gift["id"])][10:]) for _, gift in group],
                     },
                 }
             }
@@ -690,7 +1134,8 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
             for row_number in sorted(set(row_numbers)):
                 client.clear_range(legacy_file_id, f"{sheet_id}!{column_name}{row_number}:{column_name}{row_number}")
 
-    client.batch_update(requests)
+    if requests:
+        client.batch_update(requests)
     image_uploads: dict[str, str] = {}
     image_rows = []
     image_gifts: list[tuple[int, dict]] = []
@@ -751,14 +1196,26 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
             (row_number, synced_at, "；".join(row_errors), gift["id"]),
         )
     config = _load_config(db)
-    result = {"ok": not errors, "skipped": False, "pushed": len(new), "updated": len(existing), "pulled": pulled, "errors": errors}
+    result = {
+        "ok": not errors,
+        "skipped": False,
+        "pushed": len(new),
+        "updated": len(existing),
+        "pulled": pulled,
+        "errors": errors,
+        "transport": getattr(client, "transport", "openapi"),
+    }
     config.update(
         {
             "sheet_id": sheet_id,
             "sheet_title": str(sheet.get("title") or ""),
+            "sheet_row_count": int(sheet.get("rowCount") or 0),
+            "sheet_row_total": row_total,
+            "sheet_metadata_refreshed_at": _now_text() if sheet_metadata_refreshed else config.get("sheet_metadata_refreshed_at"),
             "last_sync_at": synced_at,
             "last_error": "；".join(errors[:3]),
             "last_result": result,
+            "quota_backoff_until": "",
         }
     )
     _store_config(db, config)

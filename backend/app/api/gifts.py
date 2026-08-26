@@ -453,6 +453,7 @@ def batch_create_gifts(
 @router.post("/batch")
 def batch_update_gifts(
     body: GiftBatchIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -484,12 +485,15 @@ def batch_update_gifts(
             (body.remark_status, *body.ids),
         )
     log_op(db, user, "gifts", "batch", "", f"批量更新 {len(body.ids)} 单")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"ok": True, "count": len(body.ids)}
 
 
 @router.post("/batch-delete")
 def batch_delete_gifts(
     body: GiftBatchDeleteIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -499,6 +503,8 @@ def batch_delete_gifts(
     scf, _ = _store_clause(user, alias="")
     db.execute(f"DELETE FROM gifts WHERE id IN ({placeholders})" + scf, body.ids)
     log_op(db, user, "gifts", "delete", "", f"批量删除 {len(body.ids)} 单")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"ok": True, "count": len(body.ids)}
 
 
@@ -569,7 +575,7 @@ def tencent_docs_status(user: dict = Depends(get_current_user), db=Depends(get_d
 @router.post("/tencent-docs/sync")
 def sync_tencent_docs(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
     try:
-        return tencent_docs.sync_gifts(db)
+        return tencent_docs.sync_gifts(db, force=True)
     except tencent_docs.TencentDocsError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -578,6 +584,7 @@ def sync_tencent_docs(user: dict = Depends(get_current_user), db=Depends(get_db)
 def update_gift(
     gift_id: int,
     body: GiftIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -655,6 +662,8 @@ def update_gift(
         )
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "update", order_no, f"编辑礼品单 {row['order_no']}")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
 
@@ -662,6 +671,7 @@ def update_gift(
 def update_gift_review(
     gift_id: int,
     body: GiftStatusIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -672,6 +682,8 @@ def update_gift_review(
     db.execute("UPDATE gifts SET review_status = ? WHERE id = ?", (body.status, gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "review", row["order_no"], f"评论状态改为「{REVIEW_LABELS[body.status]}」")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
 
@@ -679,6 +691,7 @@ def update_gift_review(
 def update_gift_settle(
     gift_id: int,
     body: GiftStatusIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -689,6 +702,8 @@ def update_gift_settle(
     db.execute("UPDATE gifts SET settle_status = ? WHERE id = ?", (body.status, gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "settle", row["order_no"], f"结款状态改为「{SETTLE_LABELS[body.status]}」")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
 
@@ -696,6 +711,7 @@ def update_gift_settle(
 def update_gift_remark(
     gift_id: int,
     body: GiftStatusIn,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -713,6 +729,8 @@ def update_gift_remark(
     )
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "remark", row["order_no"], f"备注状态改为「{REMARK_LABELS[body.status]}」")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
 
@@ -782,6 +800,7 @@ def clear_gift_image(
 @router.delete("/{gift_id}")
 def delete_gift(
     gift_id: int,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -789,4 +808,6 @@ def delete_gift(
     _ensure_gift_access(user, row)
     db.execute("DELETE FROM gifts WHERE id = ?", (gift_id,))
     log_op(db, user, "gifts", "delete", row["order_no"], f"删除礼品单 {row['order_no']}")
+    db.commit()
+    background_tasks.add_task(_sync_tencent_docs_background)
     return {"ok": True}

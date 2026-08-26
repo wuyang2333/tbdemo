@@ -66,7 +66,7 @@ type ChangelogItem = { id: number; version: string; title: string; content: stri
 type DashboardTodo = {
   key: string;
   module: string;
-  category: "订单" | "礼品单" | "评价" | "推广" | "店铺" | "系统";
+  category: "礼品单" | "评价" | "推广" | "店铺" | "系统";
   severity: "critical" | "warning" | "info";
   title: string;
   description: string;
@@ -417,7 +417,7 @@ export function DashboardPage() {
   const clock = now.toLocaleTimeString("zh-CN", { hour12: false });
   const statusClass = backendOk === null ? "wait" : backendOk ? "ok" : "err";
   const statusLabel = backendOk === null ? "检测中" : backendOk ? "运行中" : "离线";
-  const todoCategories = ["全部", "订单", "礼品单", "评价", "推广", "店铺", "系统", "已稍后"];
+  const todoCategories = ["全部", "礼品单", "评价", "推广", "店铺", "系统", "已稍后"];
   const filteredTodos = todos.filter((todo) => {
     if (todoCategory === "已稍后") return todo.snoozed;
     if (todo.snoozed) return false;
@@ -425,7 +425,7 @@ export function DashboardPage() {
   });
   const visibleTodos = showAllTodos ? filteredTodos : filteredTodos.slice(0, 5);
   const todoIcon = (category: DashboardTodo["category"]) => ({
-    订单: <CarOutlined />, 礼品单: <ProfileOutlined />, 评价: <CommentOutlined />,
+    礼品单: <ProfileOutlined />, 评价: <CommentOutlined />,
     推广: <RocketOutlined />, 店铺: <ShopOutlined />, 系统: <ApiOutlined />,
   }[category]);
 

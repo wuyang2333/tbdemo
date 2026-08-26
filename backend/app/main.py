@@ -33,6 +33,7 @@ from backend.app.api import (
     stores,
     system,
     tasks,
+    workspaces,
 )
 from backend.app.api.auth import get_current_user, require_admin, require_module
 from backend.app.api.notifications import changelog_router, notifications_router
@@ -348,7 +349,7 @@ async def _review_sync_loop() -> None:
 
 
 async def _tencent_docs_sync_loop() -> None:
-    """每分钟把礼品单与腾讯在线表格双向同步。"""
+    """每十五分钟把礼品单与腾讯在线表格双向同步。"""
     await asyncio.sleep(150)
     while True:
         started = time.monotonic()
@@ -365,7 +366,7 @@ async def _tencent_docs_sync_loop() -> None:
             loops.record_error("tencent_docs_sync", exc, time.monotonic() - started)
         finally:
             conn.close()
-        await asyncio.sleep(60)
+        await asyncio.sleep(tencent_docs.POLL_MINUTES * 60)
 
 
 async def _gift_remark_loop() -> None:
@@ -731,6 +732,9 @@ def create_app() -> FastAPI:
         (promotions.router, "/api/promotions", "promotions"),
         (content.router, "/api/content", "content"),
         (monitoring.router, "/api/monitoring", "monitoring"),
+        (workspaces.market_router, "/api/market", "market"),
+        (workspaces.growth_lab_router, "/api/growth-lab", "growth-lab"),
+        (workspaces.ops_knowledge_router, "/api/ops-knowledge", "ops-knowledge"),
         (tasks.router, "/api/tasks", "tasks"),
         (model_configs.router, "/api/model-configs", "model-configs"),
         (ai.router, "/api/ai", "ai"),

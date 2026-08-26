@@ -5,6 +5,7 @@ import {
   CloseOutlined,
   DashboardOutlined,
   EyeOutlined,
+  ExperimentOutlined,
   FileTextOutlined,
   HistoryOutlined,
   IdcardOutlined,
@@ -12,7 +13,9 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
+  ReadOutlined,
   ProfileOutlined,
+  RadarChartOutlined,
   RobotOutlined,
   RocketOutlined,
   ScheduleOutlined,
@@ -64,6 +67,9 @@ const ICONS: Record<string, ReactNode> = {
   promotion: <RocketOutlined />,
   content: <FileTextOutlined />,
   monitor: <EyeOutlined />,
+  market: <RadarChartOutlined />,
+  experiment: <ExperimentOutlined />,
+  knowledge: <ReadOutlined />,
   task: <ScheduleOutlined />,
   model: <RobotOutlined />,
   robot: <RobotOutlined />,
@@ -88,15 +94,60 @@ const PROMOTIONS_CHILDREN = [
   { key: "/promotions/plans", label: "推广计划" },
 ];
 
+const CONTENT_CHILDREN = [
+  { key: "/content/overview", label: "内容运营总览" },
+  { key: "/content/topics", label: "选题策划中心" },
+  { key: "/content/calendar", label: "内容日历" },
+  { key: "/content/assets", label: "内容素材库" },
+  { key: "/content/studio", label: "内容创作工作台" },
+  { key: "/content/performance", label: "发布与效果复盘" },
+];
+
+const MONITORING_CHILDREN = [
+  { key: "/monitoring/overview", label: "竞品监控总览" },
+  { key: "/monitoring/shops", label: "竞品店铺库" },
+  { key: "/monitoring/products", label: "竞品商品追踪" },
+  { key: "/monitoring/pricing", label: "价格与活动追踪" },
+  { key: "/monitoring/radar", label: "竞品动作雷达" },
+  { key: "/monitoring/reports", label: "竞品分析报告" },
+];
+
+const MARKET_CHILDREN = [
+  { key: "/market/opportunities", label: "选品与市场机会" },
+  { key: "/market/keywords", label: "关键词运营中心" },
+  { key: "/market/radar", label: "经营机会雷达" },
+];
+
+const GROWTH_LAB_CHILDREN = [
+  { key: "/growth-lab/products", label: "商品策略中心" },
+  { key: "/growth-lab/pricing", label: "价格与促销中心" },
+  { key: "/growth-lab/simulator", label: "经营沙盘" },
+  { key: "/growth-lab/experiments", label: "营销实验中心" },
+  { key: "/growth-lab/creative", label: "素材洞察中心" },
+];
+
+const OPS_KNOWLEDGE_CHILDREN = [
+  { key: "/ops-knowledge/reviews", label: "经营复盘中心" },
+  { key: "/ops-knowledge/decisions", label: "运营决策档案" },
+  { key: "/ops-knowledge/knowledge", label: "知识库与 SOP" },
+  { key: "/ops-knowledge/automation", label: "运营自动化中心" },
+];
+
 const SUBMENU_ITEMS: Record<string, { key: string; label: string }[]> = {
   analytics: ANALYTICS_CHILDREN,
   promotions: PROMOTIONS_CHILDREN,
+  content: CONTENT_CHILDREN,
+  monitoring: MONITORING_CHILDREN,
+  market: MARKET_CHILDREN,
+  "growth-lab": GROWTH_LAB_CHILDREN,
+  "ops-knowledge": OPS_KNOWLEDGE_CHILDREN,
 };
 
 const MAIN_GROUPS = [
   { key: "home", label: "工作台", ids: ["dashboard"] },
   { key: "daily", label: "日常经营", ids: ["products", "gifts", "analytics", "promotions"] },
-  { key: "growth", label: "运营增长", ids: ["customers", "content", "monitoring"] },
+  { key: "growth", label: "运营增长", ids: ["customers", "content", "monitoring", "market", "growth-lab"] },
+  { key: "knowledge", label: "策略与沉淀", ids: ["ops-knowledge"] },
   { key: "smart", label: "智能工具", ids: ["ai"] },
   { key: "manage", label: "协作与管理", ids: ["stores"] },
 ];
@@ -603,6 +654,7 @@ export function AppShell() {
         }}
       >
         <Header
+          className="ops-app-header"
           style={{
             height: 64,
             lineHeight: "64px",
@@ -618,9 +670,9 @@ export function AppShell() {
             zIndex: 10,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: mobile ? 4 : 12, minWidth: 0 }}>
+          <div className="ops-header-left" style={{ display: "flex", alignItems: "center", gap: mobile ? 4 : 12, minWidth: 0 }}>
             {mobile && (<Button type="text" aria-label="打开菜单" icon={<MenuUnfoldOutlined style={{ fontSize: 16 }} />} onClick={() => setDrawerOpen(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} />)}
-            <Text type="secondary" style={{ fontSize: mobile ? 13 : 14, whiteSpace: "nowrap" }}>
+            <Text className="ops-breadcrumb" type="secondary" style={{ fontSize: mobile ? 13 : 14, whiteSpace: "nowrap" }}>
               工作台 <span style={{ padding: "0 5px", color: "var(--ops-text-3)" }}>/</span>
               <span style={{ color: "var(--ops-text)", fontWeight: 600 }}>{currentChild?.label ?? current?.name ?? "总览"}</span>
             </Text>
@@ -635,8 +687,8 @@ export function AppShell() {
             </Tooltip>
           </div>
 
-          <Space size={14} align="center">
-            {canAccessModule(user, "stores") && stores.length > 0 && (
+          <Space className="ops-header-actions" size={14} align="center">
+            {!mobile && canAccessModule(user, "stores") && stores.length > 0 && (
               <Select
                 value={currentStore?.id ?? undefined}
                 allowClear
@@ -709,9 +761,9 @@ export function AppShell() {
                 </Badge>
               </Tooltip>
             </Popover>
-            <div style={{ width: 1, height: 24, background: borderColor }} />
+            <div className="ops-header-divider" style={{ width: 1, height: 24, background: borderColor }} />
             <Dropdown menu={{ items: userMenu }} placement="bottomRight" trigger={["click"]}>
-              <Space size={9} align="center" style={{ cursor: "pointer" }}>
+              <Space className="ops-header-user" size={9} align="center" style={{ cursor: "pointer" }}>
                 <Avatar
                   size={32}
                   src={user?.avatar_url || undefined}
@@ -719,11 +771,25 @@ export function AppShell() {
                 >
                   {displayName.slice(0, 1)}
                 </Avatar>
-                <Text style={{ fontSize: 13 }}>{displayName}</Text>
+                <Text className="ops-header-user-name" style={{ fontSize: 13 }}>{displayName}</Text>
               </Space>
             </Dropdown>
           </Space>
         </Header>
+
+        {mobile && canAccessModule(user, "stores") && stores.length > 0 ? (
+          <div className="ops-mobile-scope" aria-label="数据范围">
+            <span className="ops-mobile-scope__label">数据范围</span>
+            <Select
+              value={currentStore?.id ?? undefined}
+              allowClear
+              placeholder="全部店铺"
+              onChange={(value) => changeStore(value ?? null)}
+              options={stores.map((store) => ({ value: store.id, label: store.name }))}
+              className="ops-mobile-scope__select"
+            />
+          </div>
+        ) : null}
 
         <Content
           style={{
@@ -772,10 +838,11 @@ export function AppShell() {
           </div>
         </Content>
       </Layout>
-      <Drawer placement="left" width={280} open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} styles={{ body: { padding: 0 } }}>
-        <div style={{ height: 64, display: "flex", alignItems: "center", gap: 11, padding: "0 20px", borderBottom: "1px solid var(--ops-border)" }}>
+      <Drawer placement="left" width={280} open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} closable={false} styles={{ body: { padding: 0 } }}>
+        <div className="ops-mobile-drawer-head" style={{ height: 64, display: "flex", alignItems: "center", gap: 11, padding: "0 16px 0 20px", borderBottom: "1px solid var(--ops-border)" }}>
           <span style={{ width: 34, height: 34, borderRadius: "var(--ops-radius)", background: BRAND.logoUrl ? "transparent" : BRAND.gradient, color: "#fff", fontWeight: 800, fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{BRAND.logoUrl ? <img src={BRAND.logoUrl} alt="" style={{ width: "100%", height: "100%", borderRadius: "var(--ops-radius)", objectFit: "cover", display: "block" }} /> : (BRAND.name || "淘").slice(0, 1)}</span>
-          <span style={{ fontSize: 15, fontWeight: 700, color: "var(--ops-text)" }}>{BRAND.name}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: 700, color: "var(--ops-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{BRAND.name}</span>
+          <Button type="text" size="small" aria-label="关闭菜单" icon={<CloseOutlined />} onClick={() => setDrawerOpen(false)} />
         </div>
         <div style={{ padding: "10px 0 4px" }}>
           <Menu mode="inline" selectedKeys={selectedKeys} onClick={(event) => { handleMenuClick(event); setDrawerOpen(false); }} items={mainItems} className="ops-sider-menu" style={{ borderRight: 0, background: "transparent" }} />

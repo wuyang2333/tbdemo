@@ -1,5 +1,5 @@
-import { PlaceholderPage } from "../components/ui/placeholder-page";
+import { StrategyWorkspacePage } from "./strategy-workspace-page";
 
-export function ContentPage() {
-  return <PlaceholderPage moduleId="content" />;
+export function ContentPage({ sectionId }: { sectionId: string }) {
+  return <StrategyWorkspacePage sectionId={sectionId} />;
 }

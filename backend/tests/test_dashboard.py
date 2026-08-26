@@ -136,7 +136,7 @@ def test_dashboard_todos_aggregate_and_exclude_products(client, admin_token, mon
     data = response.json()
     keys = {item["key"] for item in data["items"]}
     assert f"gifts:remark:order_not_found:{store_id}" in keys
-    assert f"fulfillment:pending:{store_id}" in keys
+    assert f"fulfillment:pending:{store_id}" not in keys
     assert "tasks:error:realtime_sync" in keys
     assert "tasks:error:product_catalog_sync" not in keys
     assert all(item["module"] != "products" for item in data["items"])

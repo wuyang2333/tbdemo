@@ -57,6 +57,8 @@ class BrandIn(BaseModel):
 
 class TencentDocsConfigIn(BaseModel):
     enabled: bool = False
+    browser_fallback_enabled: bool = False
+    browser_cdp_url: str = "http://127.0.0.1:9222"
     document_url: str = tencent_docs.DEFAULT_DOCUMENT_URL
     sheet_id: str = ""
     client_id: str = ""
@@ -99,6 +101,8 @@ def set_tencent_docs_config(body: TencentDocsConfigIn, actor: dict = Depends(req
     current = tencent_docs.public_config(db)
     values = {
         "enabled": body.enabled,
+        "browser_fallback_enabled": body.browser_fallback_enabled,
+        "browser_cdp_url": body.browser_cdp_url.strip(),
         "document_url": body.document_url.strip(),
         "sheet_id": body.sheet_id.strip(),
         "client_id": body.client_id.strip(),

@@ -32,6 +32,7 @@ const PromotionsPlansPage = lazy(() => import("../pages/promotions-plans-page").
 const RegisterPage = lazy(() => import("../pages/register-page").then((m) => ({ default: m.RegisterPage })));
 const SettingsPage = lazy(() => import("../pages/settings-page").then((m) => ({ default: m.SettingsPage })));
 const StoresPage = lazy(() => import("../pages/stores-page").then((m) => ({ default: m.StoresPage })));
+const StrategyWorkspacePage = lazy(() => import("../pages/strategy-workspace-page").then((m) => ({ default: m.StrategyWorkspacePage })));
 const TeamPage = lazy(() => import("../pages/team-page").then((m) => ({ default: m.TeamPage })));
 const TasksPage = lazy(() => import("../pages/tasks-page").then((m) => ({ default: m.TasksPage })));
 
@@ -146,22 +147,35 @@ export function AppRouter() {
           <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
           <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
           <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />
-          <Route
-            path="/content"
-            element={
-              <RequireModule id="content">
-                <ContentPage />
-              </RequireModule>
-            }
-          />
-          <Route
-            path="/monitoring"
-            element={
-              <RequireModule id="monitoring">
-                <MonitoringPage />
-              </RequireModule>
-            }
-          />
+          <Route path="/content" element={<Navigate to="/content/overview" replace />} />
+          <Route path="/content/overview" element={<RequireModule id="content"><ContentPage sectionId="content-overview" /></RequireModule>} />
+          <Route path="/content/topics" element={<RequireModule id="content"><ContentPage sectionId="content-topics" /></RequireModule>} />
+          <Route path="/content/calendar" element={<RequireModule id="content"><ContentPage sectionId="content-calendar" /></RequireModule>} />
+          <Route path="/content/assets" element={<RequireModule id="content"><ContentPage sectionId="content-assets" /></RequireModule>} />
+          <Route path="/content/studio" element={<RequireModule id="content"><ContentPage sectionId="content-studio" /></RequireModule>} />
+          <Route path="/content/performance" element={<RequireModule id="content"><ContentPage sectionId="content-performance" /></RequireModule>} />
+          <Route path="/monitoring" element={<Navigate to="/monitoring/overview" replace />} />
+          <Route path="/monitoring/overview" element={<RequireModule id="monitoring"><MonitoringPage sectionId="monitoring-overview" /></RequireModule>} />
+          <Route path="/monitoring/shops" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-shops" /></RequireModule>} />
+          <Route path="/monitoring/products" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-products" /></RequireModule>} />
+          <Route path="/monitoring/pricing" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-pricing" /></RequireModule>} />
+          <Route path="/monitoring/radar" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-radar" /></RequireModule>} />
+          <Route path="/monitoring/reports" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-reports" /></RequireModule>} />
+          <Route path="/market" element={<Navigate to="/market/opportunities" replace />} />
+          <Route path="/market/opportunities" element={<RequireModule id="market"><StrategyWorkspacePage sectionId="opportunities" /></RequireModule>} />
+          <Route path="/market/keywords" element={<RequireModule id="market"><StrategyWorkspacePage sectionId="keywords" /></RequireModule>} />
+          <Route path="/market/radar" element={<RequireModule id="market"><StrategyWorkspacePage sectionId="radar" /></RequireModule>} />
+          <Route path="/growth-lab" element={<Navigate to="/growth-lab/products" replace />} />
+          <Route path="/growth-lab/products" element={<RequireModule id="growth-lab"><StrategyWorkspacePage sectionId="products" /></RequireModule>} />
+          <Route path="/growth-lab/pricing" element={<RequireModule id="growth-lab"><StrategyWorkspacePage sectionId="pricing" /></RequireModule>} />
+          <Route path="/growth-lab/simulator" element={<RequireModule id="growth-lab"><StrategyWorkspacePage sectionId="simulator" /></RequireModule>} />
+          <Route path="/growth-lab/experiments" element={<RequireModule id="growth-lab"><StrategyWorkspacePage sectionId="experiments" /></RequireModule>} />
+          <Route path="/growth-lab/creative" element={<RequireModule id="growth-lab"><StrategyWorkspacePage sectionId="creative" /></RequireModule>} />
+          <Route path="/ops-knowledge" element={<Navigate to="/ops-knowledge/reviews" replace />} />
+          <Route path="/ops-knowledge/reviews" element={<RequireModule id="ops-knowledge"><StrategyWorkspacePage sectionId="reviews" /></RequireModule>} />
+          <Route path="/ops-knowledge/decisions" element={<RequireModule id="ops-knowledge"><StrategyWorkspacePage sectionId="decisions" /></RequireModule>} />
+          <Route path="/ops-knowledge/knowledge" element={<RequireModule id="ops-knowledge"><StrategyWorkspacePage sectionId="knowledge" /></RequireModule>} />
+          <Route path="/ops-knowledge/automation" element={<RequireModule id="ops-knowledge"><StrategyWorkspacePage sectionId="automation" /></RequireModule>} />
           <Route
             path="/tasks"
             element={
