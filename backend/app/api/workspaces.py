@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 market_router = APIRouter()
 growth_lab_router = APIRouter()
 ops_knowledge_router = APIRouter()
+promotions_workspace_router = APIRouter()
 
 
 WORKSPACES = {
@@ -37,6 +38,19 @@ WORKSPACES = {
             {"id": "decisions", "name": "运营决策档案"},
             {"id": "knowledge", "name": "知识库与 SOP"},
             {"id": "automation", "name": "运营自动化中心"},
+        ],
+    },
+    "promotions": {
+        "name": "推广管理",
+        "message": "推广管理工作区框架已就绪",
+        "sections": [
+            {"id": "overview", "name": "投放驾驶舱"},
+            {"id": "data", "name": "推广数据"},
+            {"id": "plans", "name": "推广计划"},
+            {"id": "budget", "name": "预算与预警中心"},
+            {"id": "assets", "name": "商品与素材中心"},
+            {"id": "targets", "name": "关键词与人群中心"},
+            {"id": "experiments", "name": "实验与归因中心"},
         ],
     },
 }
@@ -82,3 +96,13 @@ def ops_knowledge_overview() -> dict:
 @ops_knowledge_router.get("/{section_id}")
 def ops_knowledge_section(section_id: str) -> dict:
     return _section("ops-knowledge", section_id)
+
+
+@promotions_workspace_router.get("")
+def promotions_workspace_overview() -> dict:
+    return _overview("promotions")
+
+
+@promotions_workspace_router.get("/{section_id}")
+def promotions_workspace_section(section_id: str) -> dict:
+    return _section("promotions", section_id)

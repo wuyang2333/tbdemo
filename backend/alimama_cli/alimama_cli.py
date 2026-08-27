@@ -8,8 +8,7 @@
 - 不导出 Cookie，不关闭浏览器安全保护，不接管用户默认 Profile
 
 接口完全反向工程自万相台 onebp 客户端 JS（onebp/merge bundle）。
-查询类命令全部只读；唯一写操作 promo-off（按宝贝ID关停在投单元）默认 dry-run，
-必须 --execute 才执行，且只关单元(pause)，不调价/不删除/不新建。
+查询类命令全部只读；写操作默认 dry-run，必须 --execute 才执行。
 
 子命令：
     doctor               检查 cookie 与登录态
@@ -1187,6 +1186,35 @@ def set_adgroups_status(biz_code: str, units: list[dict[str, Any]], status: str,
     }
     return _api_call(f"/adgroup/updatePart.json?bizCode={biz_code}",
                      body, method="POST", cookies=cookies)
+
+
+def update_campaign_budget(biz_code: str, campaigns: list[dict[str, Any]],
+                           cookies: dict[str, str]) -> dict[str, Any]:
+    """批量更新计划预算。campaigns 至少包含 campaignId 和 dayBudget。"""
+    if not campaigns:
+        raise ValueError("至少需要一个计划预算")
+    body = {"bizCode": biz_code, "budgetList": campaigns, "csrfId": ensure_csrf(cookies)}
+    return _api_call(f"/campaign/budget/batchUpdate.json?bizCode={biz_code}",
+                     body, method="POST", cookies=cookies)
+
+
+def update_campaign_bid(biz_code: str, campaigns: list[dict[str, Any]],
+                        cookies: dict[str, str]) -> dict[str, Any]:
+    """批量更新计划出价。campaigns 至少包含 campaignId 和 constraintValue。"""
+    if not campaigns:
+        raise ValueError("至少需要一个计划出价")
+    body = {"bizCode": biz_code, "bidList": campaigns, "csrfId": ensure_csrf(cookies)}
+    return _api_call(f"/campaign/bid/batchUpdate.json?bizCode={biz_code}",
+                     body, method="POST", cookies=cookies)
+
+
+def add_campaign_solutions(biz_code: str, solution_list: list[dict[str, Any]],
+                           cookies: dict[str, str]) -> dict[str, Any]:
+    """创建推广计划，solution_list 使用万相台 solution/addList 的原始结构。"""
+    if not solution_list:
+        raise ValueError("至少需要一个推广方案")
+    body = {"bizCode": biz_code, "solutionList": solution_list, "csrfId": ensure_csrf(cookies)}
+    return _api_call("/solution/addList.json", body, method="POST", cookies=cookies)
 
 
 def fetch_promo_campaigns(*, biz_code: str, page_size: int = 20, offset: int = 0,

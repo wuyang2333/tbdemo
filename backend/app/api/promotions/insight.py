@@ -43,6 +43,7 @@ from ._common import (
     sync_promo_realtime_all,
     sync_promo_items_realtime_all,
     _promo_insight_data,
+    _build_promo_drafts,
     _build_promo_prompt,
     _lookup_item_image,
     _refresh_plan_items,
@@ -59,6 +60,7 @@ router = APIRouter()
 @router.post("/insight")
 def promo_ai_insight(
     mode: str = "realtime",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -70,14 +72,20 @@ def promo_ai_insight(
     cfg = get_default_config(db)
     if not cfg or not cfg["api_key"]:
         raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
-    data = _promo_insight_data(mode, db, user)
+    data = _promo_insight_data(mode, db, user, store_id)
     try:
         reply = chat_completion(cfg, [{"role": "user", "content": _build_promo_prompt(data)}], timeout=120.0)
     except AIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {
+        "decision_id": f"promo-{datetime.now().strftime('%Y%m%d%H%M%S')}-{abs(hash(reply)) % 100000:05d}",
         "sections": _parse_insight_sections(reply),
         "reply": reply,
+        "drafts": _build_promo_drafts(data),
+        "strategies": data.get("strategies", []),
+        "strategy_groups": data.get("strategy_groups", []),
+        "learning_summary": data.get("learning", {}).get("summary", {}),
+        "decision_constraints": list(data.get("decision_constraints", {}).values()),
         "mode": data["mode"],
         "summary": {
             "total_spend": data["total_spend"],

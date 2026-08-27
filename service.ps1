@@ -75,7 +75,7 @@ function Find-Python {
 
     foreach ($candidate in $candidates) {
         try {
-            & $candidate -c 'import uvicorn' 2>$null
+            & $candidate -c 'import fastapi, uvicorn' 2>$null
             if ($LASTEXITCODE -eq 0) {
                 return $candidate
             }

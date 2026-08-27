@@ -90,8 +90,15 @@ const ANALYTICS_CHILDREN = [
 ];
 
 const PROMOTIONS_CHILDREN = [
-  { key: "/promotions/data", label: "推广数据" },
-  { key: "/promotions/plans", label: "推广计划" },
+  { key: "/promotions/cockpit", label: "闭环作战台" },
+  { key: "/promotions/diagnostics", label: "异常诊断" },
+  { key: "/promotions/overview", label: "推广数据中心" },
+  { key: "/promotions/decisions", label: "AI 决策中心" },
+  { key: "/promotions/plans", label: "计划执行中心" },
+  { key: "/promotions/collaboration", label: "执行协同" },
+  { key: "/promotions/validation", label: "观察验证" },
+  { key: "/promotions/strategies", label: "经验策略库" },
+  { key: "/promotions/review", label: "经营复盘" },
 ];
 
 const CONTENT_CHILDREN = [
@@ -838,7 +845,7 @@ export function AppShell() {
           </div>
         </Content>
       </Layout>
-      <Drawer placement="left" width={280} open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} closable={false} styles={{ body: { padding: 0 } }}>
+      <Drawer placement="left" size={280} open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} closable={false} styles={{ body: { padding: 0 } }}>
         <div className="ops-mobile-drawer-head" style={{ height: 64, display: "flex", alignItems: "center", gap: 11, padding: "0 16px 0 20px", borderBottom: "1px solid var(--ops-border)" }}>
           <span style={{ width: 34, height: 34, borderRadius: "var(--ops-radius)", background: BRAND.logoUrl ? "transparent" : BRAND.gradient, color: "#fff", fontWeight: 800, fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{BRAND.logoUrl ? <img src={BRAND.logoUrl} alt="" style={{ width: "100%", height: "100%", borderRadius: "var(--ops-radius)", objectFit: "cover", display: "block" }} /> : (BRAND.name || "淘").slice(0, 1)}</span>
           <span style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: 700, color: "var(--ops-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{BRAND.name}</span>

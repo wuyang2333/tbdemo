@@ -735,6 +735,7 @@ def create_app() -> FastAPI:
         (workspaces.market_router, "/api/market", "market"),
         (workspaces.growth_lab_router, "/api/growth-lab", "growth-lab"),
         (workspaces.ops_knowledge_router, "/api/ops-knowledge", "ops-knowledge"),
+        (workspaces.promotions_workspace_router, "/api/promotions-workspace", "promotions"),
         (tasks.router, "/api/tasks", "tasks"),
         (model_configs.router, "/api/model-configs", "model-configs"),
         (ai.router, "/api/ai", "ai"),

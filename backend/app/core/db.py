@@ -153,6 +153,67 @@ def _migrate_model_configs(conn: sqlite3.Connection) -> None:
 
 
 
+def _migrate_promo_action_executed_at(conn: sqlite3.Connection) -> None:
+    columns = {row[1]: row for row in conn.execute("PRAGMA table_info(promo_action_records)").fetchall()}
+    executed_at = columns.get("executed_at")
+    if executed_at and executed_at[3]:
+        conn.execute("ALTER TABLE promo_action_records RENAME TO promo_action_records_legacy")
+        conn.execute(
+            """
+            CREATE TABLE promo_action_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT NOT NULL,
+                store_id INTEGER NOT NULL,
+                plan_id INTEGER NOT NULL,
+                action_type TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                before_value REAL,
+                after_value REAL,
+                before_spend REAL NOT NULL DEFAULT 0,
+                before_sales REAL NOT NULL DEFAULT 0,
+                before_roi REAL NOT NULL DEFAULT 0,
+                expected TEXT NOT NULL DEFAULT '',
+                observation_hours INTEGER NOT NULL DEFAULT 48,
+                status TEXT NOT NULL DEFAULT 'observing',
+                result TEXT NOT NULL DEFAULT '',
+                executed_at TEXT,
+                verified_at TEXT,
+                after_spend REAL NOT NULL DEFAULT 0,
+                after_sales REAL NOT NULL DEFAULT 0,
+                after_roi REAL NOT NULL DEFAULT 0,
+                baseline_start TEXT,
+                baseline_end TEXT,
+                observation_due_at TEXT,
+                data_quality TEXT NOT NULL DEFAULT '',
+                created_at TEXT,
+                decision_id TEXT,
+                strategy_id INTEGER,
+                success_criteria TEXT NOT NULL DEFAULT '{}',
+                interference_notes TEXT NOT NULL DEFAULT '',
+                manual_conclusion TEXT NOT NULL DEFAULT '',
+                confidence TEXT NOT NULL DEFAULT '',
+                baseline_days INTEGER NOT NULL DEFAULT 0,
+                after_days INTEGER NOT NULL DEFAULT 0,
+                metric_summary TEXT NOT NULL DEFAULT '{}',
+                rollback_condition TEXT NOT NULL DEFAULT '',
+                decision_record_id INTEGER,
+                decision_tier TEXT NOT NULL DEFAULT '',
+                change_pct REAL
+            )
+            """
+        )
+        column_names = ", ".join(columns)
+        conn.execute(
+            f"INSERT INTO promo_action_records ({column_names}) SELECT {column_names} FROM promo_action_records_legacy"
+        )
+        conn.execute("DROP TABLE promo_action_records_legacy")
+    conn.execute(
+        "UPDATE promo_action_records SET executed_at = NULL "
+        "WHERE status = 'planned' AND observation_due_at IS NULL"
+    )
+
+
 def _migrate_gifts(conn: sqlite3.Connection) -> None:
     """礼品单台账化：补充关键词、规格、佣金、旺旺号、评论/结款状态、下单时间。"""
     cols = {row[1] for row in conn.execute("PRAGMA table_info(gifts)")}
@@ -253,6 +314,102 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    try:
+        action_cols = {row[1] for row in conn.execute("PRAGMA table_info(promo_action_records)")}
+        for name, definition in (
+            ("after_spend", "REAL NOT NULL DEFAULT 0"),
+            ("after_sales", "REAL NOT NULL DEFAULT 0"),
+            ("after_roi", "REAL NOT NULL DEFAULT 0"),
+            ("baseline_start", "TEXT"),
+            ("baseline_end", "TEXT"),
+            ("observation_due_at", "TEXT"),
+            ("data_quality", "TEXT NOT NULL DEFAULT ''"),
+            ("created_at", "TEXT"),
+            ("decision_id", "TEXT"),
+            ("strategy_id", "INTEGER"),
+            ("success_criteria", "TEXT NOT NULL DEFAULT '{}'"),
+            ("interference_notes", "TEXT NOT NULL DEFAULT ''"),
+            ("manual_conclusion", "TEXT NOT NULL DEFAULT ''"),
+            ("confidence", "TEXT NOT NULL DEFAULT ''"),
+            ("baseline_days", "INTEGER NOT NULL DEFAULT 0"),
+            ("after_days", "INTEGER NOT NULL DEFAULT 0"),
+            ("metric_summary", "TEXT NOT NULL DEFAULT '{}'"),
+            ("rollback_condition", "TEXT NOT NULL DEFAULT ''"),
+            ("decision_record_id", "INTEGER"),
+            ("decision_tier", "TEXT NOT NULL DEFAULT ''"),
+            ("change_pct", "REAL"),
+        ):
+            if name not in action_cols:
+                conn.execute(f"ALTER TABLE promo_action_records ADD COLUMN {name} {definition}")
+    except sqlite3.OperationalError:
+        pass
+    _migrate_promo_action_executed_at(conn)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS promo_strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            store_id INTEGER NOT NULL,
+            source_action_id INTEGER,
+            name TEXT NOT NULL,
+            action_type TEXT NOT NULL DEFAULT '',
+            conditions TEXT NOT NULL DEFAULT '',
+            evidence TEXT NOT NULL DEFAULT '',
+            use_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            outcome TEXT NOT NULL DEFAULT 'success',
+            scene TEXT NOT NULL DEFAULT '',
+            min_roi REAL,
+            max_roi REAL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS promo_decision_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            decision_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            store_id INTEGER NOT NULL,
+            plan_id INTEGER NOT NULL,
+            strategy_id INTEGER,
+            recommended_tier TEXT NOT NULL DEFAULT '',
+            selected_tier TEXT NOT NULL DEFAULT '',
+            feedback_status TEXT NOT NULL DEFAULT 'adopted',
+            workflow_status TEXT NOT NULL DEFAULT 'selected',
+            ai_field TEXT NOT NULL DEFAULT '',
+            ai_change_pct REAL,
+            final_field TEXT NOT NULL DEFAULT '',
+            final_change_pct REAL,
+            ai_success_criteria TEXT NOT NULL DEFAULT '{}',
+            final_success_criteria TEXT NOT NULL DEFAULT '{}',
+            ai_observation_hours INTEGER NOT NULL DEFAULT 48,
+            final_observation_hours INTEGER NOT NULL DEFAULT 48,
+            rollback_condition TEXT NOT NULL DEFAULT '',
+            feedback_reason TEXT NOT NULL DEFAULT '',
+            feedback_note TEXT NOT NULL DEFAULT '',
+            action_record_id INTEGER,
+            result_status TEXT NOT NULL DEFAULT '',
+            result_summary TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(decision_id, plan_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_promo_decisions_store_updated ON promo_decision_records(store_id, updated_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_promo_decisions_action ON promo_decision_records(action_record_id)")
+    try:
+        strategy_cols = {row[1] for row in conn.execute("PRAGMA table_info(promo_strategies)")}
+        for name, definition in (("outcome", "TEXT NOT NULL DEFAULT 'success'"), ("scene", "TEXT NOT NULL DEFAULT ''"), ("min_roi", "REAL"), ("max_roi", "REAL")):
+            if name not in strategy_cols:
+                conn.execute(f"ALTER TABLE promo_strategies ADD COLUMN {name} {definition}")
+    except sqlite3.OperationalError:
+        pass
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_gift_price_sync_logs_gift ON gift_price_sync_logs(gift_id, created_at DESC)"
     )
@@ -966,6 +1123,43 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS promo_action_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            store_id INTEGER NOT NULL,
+            plan_id INTEGER NOT NULL,
+            action_type TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            before_value REAL,
+            after_value REAL,
+            before_spend REAL NOT NULL DEFAULT 0,
+            before_sales REAL NOT NULL DEFAULT 0,
+            before_roi REAL NOT NULL DEFAULT 0,
+            expected TEXT NOT NULL DEFAULT '',
+            observation_hours INTEGER NOT NULL DEFAULT 48,
+            status TEXT NOT NULL DEFAULT 'observing',
+            result TEXT NOT NULL DEFAULT '',
+            executed_at TEXT,
+            verified_at TEXT,
+            decision_id TEXT,
+            strategy_id INTEGER,
+            success_criteria TEXT NOT NULL DEFAULT '{}',
+            interference_notes TEXT NOT NULL DEFAULT '',
+            manual_conclusion TEXT NOT NULL DEFAULT '',
+            confidence TEXT NOT NULL DEFAULT '',
+            baseline_days INTEGER NOT NULL DEFAULT 0,
+            after_days INTEGER NOT NULL DEFAULT 0,
+            metric_summary TEXT NOT NULL DEFAULT '{}',
+            rollback_condition TEXT NOT NULL DEFAULT '',
+            decision_record_id INTEGER,
+            decision_tier TEXT NOT NULL DEFAULT '',
+            change_pct REAL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS store_daily_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,
@@ -1250,5 +1444,9 @@ def init_db() -> None:
         _seed_gifts(conn)
         _migrate_gifts(conn)
         _migrate_reviews(conn)
+        from backend.app.api.promotions.collaboration import ensure_promo_collaboration_tables
+
+        ensure_promo_collaboration_tables(conn)
+        conn.commit()
     finally:
         conn.close()

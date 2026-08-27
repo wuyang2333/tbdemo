@@ -27,8 +27,13 @@ const ModelConfigsPage = lazy(() => import("../pages/model-configs-page").then((
 const MonitoringPage = lazy(() => import("../pages/monitoring-page").then((m) => ({ default: m.MonitoringPage })));
 const ProductsPage = lazy(() => import("../pages/products-page").then((m) => ({ default: m.ProductsPage })));
 const ProfilePage = lazy(() => import("../pages/profile-page").then((m) => ({ default: m.ProfilePage })));
-const PromotionsDataPage = lazy(() => import("../pages/promotions-data-page").then((m) => ({ default: m.PromotionsDataPage })));
 const PromotionsPlansPage = lazy(() => import("../pages/promotions-plans-page").then((m) => ({ default: m.PromotionsPlansPage })));
+const PromotionsOverviewPage = lazy(() => import("../pages/promotions-overview-page").then((m) => ({ default: m.PromotionsOverviewPage })));
+const PromotionsWorkflowPage = lazy(() => import("../pages/promotions-workflow-page").then((m) => ({ default: m.PromotionsWorkflowPage })));
+const PromotionsCollaborationPage = lazy(() => import("../pages/promotions-collaboration-page").then((m) => ({ default: m.PromotionsCollaborationPage })));
+const PromotionsReviewPage = lazy(() => import("../pages/promotions-review-page").then((m) => ({ default: m.PromotionsReviewPage })));
+const PromotionsCockpitPage = lazy(() => import("../pages/promotions-cockpit-page").then((m) => ({ default: m.PromotionsCockpitPage })));
+const PromotionsDiagnosticsPage = lazy(() => import("../pages/promotions-diagnostics-page").then((m) => ({ default: m.PromotionsDiagnosticsPage })));
 const RegisterPage = lazy(() => import("../pages/register-page").then((m) => ({ default: m.RegisterPage })));
 const SettingsPage = lazy(() => import("../pages/settings-page").then((m) => ({ default: m.SettingsPage })));
 const StoresPage = lazy(() => import("../pages/stores-page").then((m) => ({ default: m.StoresPage })));
@@ -144,9 +149,21 @@ export function AppRouter() {
           <Route path="/analytics/hours" element={<RequireModule id="analytics"><AnalyticsHoursPage /></RequireModule>} />
           <Route path="/analytics/products" element={<RequireModule id="analytics"><AnalyticsProductsPage /></RequireModule>} />
 <Route path="/analytics/glossary" element={<RequireModule id="analytics"><AnalyticsGlossaryPage /></RequireModule>} />
-          <Route path="/promotions" element={<Navigate to="/promotions/data" replace />} />
-          <Route path="/promotions/data" element={<RequireModule id="promotions"><PromotionsDataPage /></RequireModule>} />
+          <Route path="/promotions" element={<Navigate to="/promotions/cockpit" replace />} />
+          <Route path="/promotions/cockpit" element={<RequireModule id="promotions"><PromotionsCockpitPage /></RequireModule>} />
+          <Route path="/promotions/diagnostics" element={<RequireModule id="promotions"><PromotionsDiagnosticsPage /></RequireModule>} />
+          <Route path="/promotions/overview" element={<RequireModule id="promotions"><PromotionsOverviewPage /></RequireModule>} />
+          <Route path="/promotions/data" element={<Navigate to="/promotions/overview" replace />} />
           <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />
+          <Route path="/promotions/budget" element={<Navigate to="/promotions/overview" replace />} />
+          <Route path="/promotions/decisions" element={<RequireModule id="promotions"><PromotionsWorkflowPage section="decision" /></RequireModule>} />
+          <Route path="/promotions/validation" element={<RequireModule id="promotions"><PromotionsWorkflowPage section="validation" /></RequireModule>} />
+          <Route path="/promotions/strategies" element={<RequireModule id="promotions"><PromotionsWorkflowPage section="strategies" /></RequireModule>} />
+          <Route path="/promotions/collaboration" element={<RequireModule id="promotions"><PromotionsCollaborationPage /></RequireModule>} />
+          <Route path="/promotions/review" element={<RequireModule id="promotions"><PromotionsReviewPage /></RequireModule>} />
+          <Route path="/promotions/assets" element={<RequireModule id="promotions"><StrategyWorkspacePage sectionId="promotion-assets" /></RequireModule>} />
+          <Route path="/promotions/targets" element={<RequireModule id="promotions"><StrategyWorkspacePage sectionId="promotion-targets" /></RequireModule>} />
+          <Route path="/promotions/experiments" element={<RequireModule id="promotions"><StrategyWorkspacePage sectionId="promotion-experiments" /></RequireModule>} />
           <Route path="/content" element={<Navigate to="/content/overview" replace />} />
           <Route path="/content/overview" element={<RequireModule id="content"><ContentPage sectionId="content-overview" /></RequireModule>} />
           <Route path="/content/topics" element={<RequireModule id="content"><ContentPage sectionId="content-topics" /></RequireModule>} />

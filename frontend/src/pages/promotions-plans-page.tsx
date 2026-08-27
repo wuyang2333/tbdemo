@@ -1,5 +1,5 @@
 import { BarChartOutlined, CopyOutlined, DownloadOutlined, HolderOutlined, LineChartOutlined, PauseCircleOutlined, PlayCircleOutlined, ProfileOutlined, ReloadOutlined, RobotOutlined, SearchOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Checkbox, Col, Drawer, Empty, Input, Modal, Popover, Row, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Card, Checkbox, Col, Drawer, Empty, Input, InputNumber, Modal, Popover, Row, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -63,11 +63,38 @@ function ChangeBadge({ change, unit = "%" }: { change: number | null | undefined
   );
 }
 
+function parseSuccessCriteria(value: string | null): Record<string, number> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === "number"));
+  } catch {
+    return {};
+  }
+}
+
+function successCriteriaText(criteria: Record<string, number>): string {
+  const labels: Record<string, string> = { target_roi_min: "最终 ROI≥", roi_change_min: "ROI 提升≥", sales_change_pct_min: "日均成交变化≥", spend_change_pct_max: "日均花费变化≤" };
+  return Object.entries(criteria).map(([key, value]) => `${labels[key] || key}${value}${key.includes("pct") ? "%" : ""}`).join("；");
+}
+
 
 export function PromotionsPlansPage() {
   const [searchParams] = useSearchParams();
   const { currentStore } = useStores();
   const todoStoreId = Number(searchParams.get("store_id")) || undefined;
+  const todoPlanId = Number(searchParams.get("plan_id")) || undefined;
+  const draftFieldParam = searchParams.get("draft_field");
+  const draftPctParam = Number(searchParams.get("draft_pct"));
+  const draftDecisionId = searchParams.get("decision_id") || "";
+  const draftDecisionRecordId = Number(searchParams.get("decision_record_id")) || undefined;
+  const draftStrategyId = Number(searchParams.get("strategy_id")) || undefined;
+  const draftReason = searchParams.get("draft_reason") || "";
+  const draftExpected = searchParams.get("draft_expected") || "";
+  const draftObservationHours = Number(searchParams.get("draft_observation_hours")) || 48;
+  const draftSuccessCriteria = parseSuccessCriteria(searchParams.get("draft_success_criteria"));
+  const draftRollbackCondition = searchParams.get("draft_rollback_condition") || "";
+  const draftTier = searchParams.get("draft_tier") || "";
   const alertCardRef = useRef<HTMLDivElement>(null);
   const [plans, setPlans] = useState<PromoPlan[]>([]);
   const [lastUpdated, setLastUpdated] = useState("");
@@ -90,6 +117,30 @@ export function PromotionsPlansPage() {
   const [opPlan, setOpPlan] = useState<PromoPlan | null>(null);
   const [opStatus, setOpStatus] = useState<"pause" | "start">("pause");
   const [opLoading, setOpLoading] = useState(false);
+  const [selectedPlanIds, setSelectedPlanIds] = useState<number[]>([]);
+  const [batchStatus, setBatchStatus] = useState<"pause" | "start" | null>(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustField, setAdjustField] = useState<"day_budget" | "bid_value">("day_budget");
+  const [adjustPct, setAdjustPct] = useState(10);
+  const [adjustPreview, setAdjustPreview] = useState<{
+    field: string;
+    change_pct: number;
+    valid_count: number;
+    items: { plan_id: number; plan_name?: string; status?: string; ok: boolean; old_value?: number; new_value?: number; risks?: string[]; error?: string }[];
+  } | null>(null);
+  const [adjustLoading, setAdjustLoading] = useState(false);
+  const [adjustExecuteLoading, setAdjustExecuteLoading] = useState(false);
+  const [actionRecording, setActionRecording] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createBizCode, setCreateBizCode] = useState("onebpSite");
+  const [createPayload, setCreatePayload] = useState("[{\n  \"campaign\": {\n    \"campaignName\": \"新计划\",\n    \"dayBudget\": 100,\n    \"bidType\": \"custom_bid\",\n    \"constraintType\": \"roi\",\n    \"constraintValue\": 2\n  },\n  \"adgroupList\": []\n}]");
+  const appliedDraftKeyRef = useRef("");
+  const [writeCapabilities, setWriteCapabilities] = useState<{
+    day_budget: { read: boolean; write: boolean; message: string };
+    bid_value: { read: boolean; write: boolean; message: string };
+  } | null>(null);
   const { config: alertConfig, saveConfig: saveAlertConfig } = useAlertConfig();
   const [alertCfgOpen, setAlertCfgOpen] = useState(false);
   const [alertSaving, setAlertSaving] = useState(false);
@@ -101,6 +152,12 @@ export function PromotionsPlansPage() {
   const [trendOpen, setTrendOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailPlan, setDetailPlan] = useState<PromoPlan | null>(null);
+  const [detailFunnel, setDetailFunnel] = useState<{
+    item: { item_id: string; item_title: string; image?: string } | null;
+    links: { type: string; label: string; status: string }[];
+    timeline: { action: string; detail: string; username: string; created_at: string }[];
+  } | null>(null);
+  const [detailFunnelLoading, setDetailFunnelLoading] = useState(false);
   const [trendPlan, setTrendPlan] = useState<PromoPlan | null>(null);
   const [trendDays, setTrendDays] = useState(7);
   const [trendData, setTrendData] = useState<{ date: string; spend: number; sales: number; roi: number; clicks: number }[]>([]);
@@ -126,7 +183,7 @@ export function PromotionsPlansPage() {
       setPlans(data.items);
       setLastUpdated(dayjs().format("HH:mm:ss"));
       try {
-        const { data: al } = await http.get<{ items: { level: string; type: string; message: string }[] }>("/promotions/alerts");
+        const { data: al } = await http.get<{ items: { level: string; type: string; message: string }[] }>(`/promotions/alerts${currentStore ? `?store_id=${currentStore.id}` : ""}`);
         setAlerts(al.items);
       } catch {
         setAlerts([]);
@@ -194,6 +251,12 @@ export function PromotionsPlansPage() {
     if (p.roi >= 1) return { label: "关注", color: "orange" as const };
     return { label: "建议暂停", color: "red" as const };
   };
+  const diagReason = (p: PromoPlan) => {
+    if (!p.spend) return "暂无花费，先确认计划是否已开始投放";
+    if (p.roi >= 2) return "ROI 达到健康线，可继续观察并考虑放量";
+    if (p.roi >= 1) return "ROI 处于关注区间，建议检查出价、素材和转化";
+    return "ROI 低于 1，建议优先检查成本并考虑暂停";
+  };
   const filteredPlans = plans.filter((p) => {
     if (diagFilter && diag(p).label !== diagFilter) return false;
     if (search.trim()) {
@@ -202,6 +265,27 @@ export function PromotionsPlansPage() {
     }
     return true;
   });
+  useEffect(() => {
+    if (!todoPlanId || plans.length === 0) return;
+    const target = plans.find((plan) => plan.id === todoPlanId);
+    if (!target) return;
+    if (!search.trim()) setSearch(target.plan_name);
+    window.setTimeout(() => {
+      document.querySelector(`[data-row-key="${todoPlanId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+  }, [plans, search, todoPlanId]);
+  useEffect(() => {
+    if (!todoPlanId || plans.length === 0 || !["day_budget", "bid_value"].includes(draftFieldParam || "")) return;
+    const target = plans.find((plan) => plan.id === todoPlanId);
+    if (!target) return;
+    const draftKey = `${todoPlanId}:${draftDecisionRecordId || ""}:${draftDecisionId}:${draftFieldParam}:${draftPctParam}`;
+    if (appliedDraftKeyRef.current === draftKey) return;
+    appliedDraftKeyRef.current = draftKey;
+    setSelectedPlanIds((current) => current.includes(todoPlanId) ? current : [todoPlanId]);
+    setAdjustField(draftFieldParam as "day_budget" | "bid_value");
+    if (Number.isFinite(draftPctParam)) setAdjustPct(draftPctParam);
+    if (!adjustOpen) void openAdjustPanel();
+  }, [draftDecisionId, draftDecisionRecordId, draftFieldParam, draftPctParam, plans, todoPlanId]);
   const counts = {
     high: plans.filter((p) => diag(p).label === "健康").length,
     mid: plans.filter((p) => diag(p).label === "关注").length,
@@ -228,7 +312,7 @@ export function PromotionsPlansPage() {
     setAiLoading(true);
     setAiResult(null);
     try {
-      const { data } = await http.post(`/promotions/insight?mode=${encodeURIComponent(mode)}`, undefined, { timeout: 120000 });
+      const { data } = await http.post(`/promotions/insight?mode=${encodeURIComponent(mode)}${currentStore ? `&store_id=${currentStore.id}` : ""}`, undefined, { timeout: 120000 });
       setAiResult(data);
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -286,8 +370,19 @@ export function PromotionsPlansPage() {
   };
   const openDetail = (row: PromoPlan) => {
     setDetailPlan(row);
+    setDetailFunnel(null);
     setDetailOpen(true);
   };
+  useEffect(() => {
+    if (!detailPlan) return;
+    let cancelled = false;
+    setDetailFunnelLoading(true);
+    http.get<typeof detailFunnel>(`/promotions/plans/${detailPlan.id}/funnel`)
+      .then(({ data }) => { if (!cancelled) setDetailFunnel(data); })
+      .catch(() => { if (!cancelled) setDetailFunnel(null); })
+      .finally(() => { if (!cancelled) setDetailFunnelLoading(false); });
+    return () => { cancelled = true; };
+  }, [detailPlan]);
   const changeTrendDays = (d: number) => {
     setTrendDays(d);
     if (trendPlan) loadTrend(trendPlan.id, d);
@@ -364,6 +459,165 @@ export function PromotionsPlansPage() {
       message.error(getApiErrorMessage(error));
     } finally {
       setOpLoading(false);
+    }
+  };
+
+  const runBatchStatus = async () => {
+    if (!batchStatus || selectedPlanIds.length === 0) return;
+    setBatchLoading(true);
+    try {
+      const { data } = await http.post<{ ok: number; total: number; items: { plan_id: number; ok: boolean; error?: string }[] }>(
+        "/promotions/plans/batch-status",
+        { plan_ids: selectedPlanIds, status: batchStatus, execute: true },
+        { timeout: 120000 },
+      );
+      const failed = data.items.filter((item) => !item.ok);
+      setBatchStatus(null);
+      setSelectedPlanIds([]);
+      if (failed.length === 0) {
+        message.success(`已${batchStatus === "pause" ? "暂停" : "开启"} ${data.ok} 个推广计划`);
+      } else {
+        message.warning(`已完成 ${data.ok}/${data.total} 个计划，${failed.length} 个计划未执行`);
+      }
+      await load(scene, mode);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const runAdjustPreview = async () => {
+    if (selectedPlanIds.length === 0) return;
+    setAdjustLoading(true);
+    try {
+      const { data } = await http.post<typeof adjustPreview>(
+        "/promotions/plans/batch-adjust-preview",
+        { plan_ids: selectedPlanIds, field: adjustField, change_pct: adjustPct },
+      );
+      setAdjustPreview(data);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAdjustLoading(false);
+    }
+  };
+
+  const executeAdjustments = () => {
+    if (!adjustPreview || adjustPreview.valid_count === 0) return;
+    Modal.confirm({
+      title: "确认写入万相台？",
+      content: `将${adjustField === "day_budget" ? "日预算" : "出价"}调整 ${adjustPct > 0 ? "+" : ""}${adjustPct}% 并立即影响 ${adjustPreview.valid_count} 个计划。`,
+      okText: "确认写入",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setAdjustExecuteLoading(true);
+        try {
+          const { data } = await http.post<{ ok: number; total: number; items: { ok: boolean; error?: string }[] }>(
+            "/promotions/plans/batch-adjust",
+            { plan_ids: selectedPlanIds, field: adjustField, change_pct: adjustPct, execute: true },
+            { timeout: 120000 },
+          );
+          const failed = data.items.filter((item) => !item.ok).length;
+          if (failed) message.warning(`已写入 ${data.ok}/${data.total} 个计划，${failed} 个失败`);
+          else message.success(`已写入 ${data.ok} 个计划，并同步本地数据`);
+          await createAdjustmentRecords();
+          setAdjustOpen(false);
+          await load(scene, mode);
+        } catch (error) {
+          message.error(getApiErrorMessage(error));
+        } finally {
+          setAdjustExecuteLoading(false);
+        }
+      },
+    });
+  };
+
+  const createPlan = async () => {
+    let solutionList: unknown;
+    try {
+      solutionList = JSON.parse(createPayload);
+    } catch {
+      message.error("solutionList 不是有效 JSON");
+      return;
+    }
+    if (!Array.isArray(solutionList) || solutionList.length === 0) {
+      message.error("至少需要一个方案");
+      return;
+    }
+    Modal.confirm({
+      title: "确认新建万相台计划？",
+      content: "该操作会直接在万相台创建计划，创建后请刷新计划列表确认结果。",
+      okText: "确认创建",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setCreateLoading(true);
+        try {
+          await http.post("/promotions/plans/create", { biz_code: createBizCode, solution_list: solutionList }, { timeout: 120000 });
+          message.success("万相台计划创建请求已提交");
+          setCreateOpen(false);
+          await load(scene, mode);
+        } catch (error) {
+          message.error(getApiErrorMessage(error));
+        } finally {
+          setCreateLoading(false);
+        }
+      },
+    });
+  };
+
+  const openAdjustPanel = async (planId?: number) => {
+    if (planId != null) setSelectedPlanIds([planId]);
+    setAdjustPreview(null);
+    setAdjustOpen(true);
+    try {
+      const { data } = await http.get<typeof writeCapabilities>("/promotions/plans/write-capabilities");
+      setWriteCapabilities(data);
+    } catch {
+      setWriteCapabilities(null);
+    }
+  };
+
+  const createAdjustmentRecords = async () => {
+    if (!adjustPreview) return;
+    const validItems = adjustPreview.items.filter((item) => item.ok && item.new_value != null);
+    if (validItems.length === 0) return;
+    setActionRecording(true);
+    let created = 0;
+    try {
+      for (const item of validItems) {
+        const plan = plans.find((candidate) => candidate.id === item.plan_id);
+        const actionType = adjustField === "day_budget"
+          ? (adjustPct >= 0 ? "增加预算/放量" : "降低预算/止损")
+          : (adjustPct >= 0 ? "提高出价" : "降低出价/控成本");
+        await http.post("/promotions/action-records", {
+          plan_id: item.plan_id,
+          action_type: actionType,
+          description: draftReason || `确认${adjustField === "day_budget" ? "日预算" : "出价"}调整 ${adjustPct > 0 ? "+" : ""}${adjustPct}%；执行后进入观察窗口`,
+          after_value: item.new_value,
+          expected: draftExpected || (adjustPct >= 0 ? "成交增长且 ROI 保持稳定" : "ROI 改善并减少无效花费"),
+          observation_hours: draftObservationHours,
+          decision_id: draftDecisionId || undefined,
+          decision_record_id: draftDecisionRecordId,
+          decision_tier: draftTier,
+          decision_field: adjustField,
+          change_pct: adjustPct,
+          strategy_id: draftStrategyId,
+          success_criteria: Object.keys(draftSuccessCriteria).length ? draftSuccessCriteria : adjustPct >= 0
+            ? { target_roi_min: Math.max(1, Number(((plan?.roi || 0) * 0.85).toFixed(2))), sales_change_pct_min: 5 }
+            : { roi_change_min: 0.1, spend_change_pct_max: -5 },
+          rollback_condition: draftRollbackCondition,
+        });
+        created += 1;
+      }
+      message.success(`已建立 ${created} 个待执行观察任务`);
+      setAdjustOpen(false);
+    } catch (error) {
+      message.error(created ? `已建立 ${created} 个任务，后续任务创建失败` : getApiErrorMessage(error));
+    } finally {
+      setActionRecording(false);
     }
   };
 
@@ -469,25 +723,35 @@ export function PromotionsPlansPage() {
       width: 90,
       render: (_, row: PromoPlan) => {
         const d = diag(row);
-        return <Tag color={d.color}>{d.label}</Tag>;
+        return <Tooltip title={diagReason(row)}><Tag color={d.color}>{d.label}</Tag></Tooltip>;
       },
     },
     { title: "点击", key: "clicks", dataIndex: "clicks", align: "right", width: 82, sorter: (a, b) => a.clicks - b.clicks, render: (v: number) => (v ? fmtInt(v) : "—") },
     {
       title: "操作",
       key: "op",
-      width: 92,
+      width: 160,
       render: (_, row: PromoPlan) =>
         row.scene === "content" ? (
           <Text type="secondary" style={{ fontSize: 12 }}>不支持</Text>
         ) : row.status === "在投" ? (
-          <Button size="small" danger icon={<PauseCircleOutlined />} onClick={() => askPlanStatus(row, "pause")}>
-            暂停
-          </Button>
+          <Space size={4} wrap>
+            <Button size="small" danger icon={<PauseCircleOutlined />} onClick={() => askPlanStatus(row, "pause")}>
+              暂停
+            </Button>
+            <Button size="small" icon={<SettingOutlined />} onClick={() => void openAdjustPanel(row.id)}>
+              修改预算/出价
+            </Button>
+          </Space>
         ) : (
-          <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />} onClick={() => askPlanStatus(row, "start")}>
-            开启
-          </Button>
+          <Space size={4} wrap>
+            <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />} onClick={() => askPlanStatus(row, "start")}>
+              开启
+            </Button>
+            <Button size="small" icon={<SettingOutlined />} onClick={() => void openAdjustPanel(row.id)}>
+              修改预算/出价
+            </Button>
+          </Space>
         ),
     },
     { title: "标记", key: "tag", width: 130, render: (_, row) => <PlanTagCell plan={row} onSaved={() => load(scene, mode)} /> },
@@ -538,7 +802,8 @@ export function PromotionsPlansPage() {
       <PageHeader
         icon={<BarChartOutlined />}
         eyebrow="推广管理"
-        title="推广计划"
+        title="计划执行中心"
+        description="勾选计划后可批量修改预算/出价，也可在表格右侧按单个计划修改；真实执行动作会进入观察验证。"
         extra={
           <Space>
             <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
@@ -548,6 +813,7 @@ export function PromotionsPlansPage() {
             <Button icon={<DownloadOutlined />} onClick={exportPlans}>
               导出
             </Button>
+            <Button onClick={() => setCreateOpen(true)}>新建计划</Button>
             <HourlyPushButton scope="promotions" />
             <Button icon={<ReloadOutlined />} onClick={() => load(scene, mode)}>
               刷新
@@ -624,6 +890,33 @@ export function PromotionsPlansPage() {
           <Tag color="red">建议暂停 {counts.low}</Tag> · 显示{periodTitle}数据
         </Text>
       </Space>
+      <Row gutter={[12, 12]} style={{ marginBottom: 14 }}>
+        {[
+          { label: "计划总数", value: plans.length, tone: "var(--ops-text-primary)", hint: "当前筛选范围" },
+          { label: "健康计划", value: counts.high, tone: "var(--ops-success)", hint: "ROI ≥ 2" },
+          { label: "需要关注", value: counts.mid, tone: "var(--ops-warn)", hint: "1 ≤ ROI < 2" },
+          { label: "建议暂停", value: counts.low, tone: "var(--ops-danger)", hint: "ROI < 1" },
+        ].map((item) => (
+          <Col xs={12} sm={6} key={item.label}>
+            <Card variant="borderless" size="small" style={{ height: "100%" }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Text>
+              <div style={{ color: item.tone, fontSize: 24, fontWeight: 700, lineHeight: 1.3, margin: "4px 0" }}>{item.value}</div>
+              <Text type="secondary" style={{ fontSize: 11 }}>{item.hint}</Text>
+            </Card>
+          </Col>
+        ))}
+      </Row>
+      {selectedPlanIds.length > 0 && (
+        <Card size="small" variant="borderless" style={{ marginBottom: 14, background: "var(--ops-accent-soft)" }}>
+          <Space wrap>
+            <Text strong>已选择 {selectedPlanIds.length} 个计划</Text>
+            <Button size="small" danger onClick={() => setBatchStatus("pause")}>批量暂停</Button>
+            <Button size="small" type="primary" ghost onClick={() => setBatchStatus("start")}>批量开启</Button>
+            <Button size="small" onClick={() => void openAdjustPanel()}>修改预算/出价</Button>
+            <Button size="small" type="link" onClick={() => setSelectedPlanIds([])}>清空选择</Button>
+          </Space>
+        </Card>
+      )}
       <Text type="secondary" style={{ fontSize: 11, marginBottom: 8, display: "block" }}>
         环比口径：实时较昨日全天 · 昨天较前天 · 近7天较上一周（涨红跌绿，红色=上涨）
       </Text>
@@ -668,10 +961,15 @@ export function PromotionsPlansPage() {
             tableLayout="fixed"
             columns={visibleColumns}
             dataSource={filteredPlans}
+            rowSelection={{
+              selectedRowKeys: selectedPlanIds,
+              onChange: (keys) => setSelectedPlanIds(keys.map((key) => Number(key))),
+            }}
             onRow={(record) => ({
               onMouseEnter: () => setHoverKey(record.id),
               onMouseLeave: () => setHoverKey((k) => (k === record.id ? null : k)),
             })}
+            rowClassName={(record) => (record.id === todoPlanId ? "ops-promo-target-row" : "")}
             pagination={{
               defaultPageSize: 20,
               showSizeChanger: true,
@@ -684,7 +982,7 @@ export function PromotionsPlansPage() {
       )}
       <Drawer
         title="AI 推广解读"
-        width={520}
+        size="large"
         open={aiOpen}
         onClose={() => setAiOpen(false)}
         destroyOnHidden
@@ -744,7 +1042,7 @@ export function PromotionsPlansPage() {
       </Drawer>
       <Drawer
         title={trendPlan ? `趋势：${trendPlan.plan_name}` : "计划趋势"}
-        width={640}
+        size="large"
         open={trendOpen}
         onClose={() => setTrendOpen(false)}
         destroyOnHidden
@@ -796,7 +1094,7 @@ export function PromotionsPlansPage() {
       </Drawer>
       <Drawer
         title={planAiPlan ? `AI 分析：${planAiPlan.plan_name}` : "AI 分析"}
-        width={560}
+        size="large"
         open={planAiOpen}
         onClose={() => setPlanAiOpen(false)}
         destroyOnHidden
@@ -926,11 +1224,119 @@ export function PromotionsPlansPage() {
           </div>
         )}
       </Modal>
+      <Modal
+        title={batchStatus === "pause" ? "批量暂停推广计划" : "批量开启推广计划"}
+        open={!!batchStatus}
+        onCancel={() => setBatchStatus(null)}
+        onOk={runBatchStatus}
+        okText={batchStatus === "pause" ? "确认批量暂停" : "确认批量开启"}
+        cancelText="再想想"
+        confirmLoading={batchLoading}
+        okButtonProps={{ danger: batchStatus === "pause" }}
+        destroyOnHidden
+      >
+        <p>将{batchStatus === "pause" ? "暂停" : "开启"}以下 {selectedPlanIds.length} 个计划：</p>
+        <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+          {selectedPlanIds.slice(0, 8).map((planId) => {
+            const plan = plans.find((item) => item.id === planId);
+            return <Text key={planId}>· {plan?.plan_name || `计划 ${planId}`}</Text>;
+          })}
+          {selectedPlanIds.length > 8 ? <Text type="secondary">还有 {selectedPlanIds.length - 8} 个计划未展开</Text> : null}
+        </Space>
+        <p style={{ color: "var(--ops-warn)", fontSize: 13, marginTop: 12, marginBottom: 0 }}>此操作会直接修改万相台投放状态，请确认选择无误。</p>
+      </Modal>
+      <Modal
+        title="批量预算 / 出价调整预览"
+        open={adjustOpen}
+        onCancel={() => setAdjustOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <Alert
+          type="info"
+          showIcon
+          title={draftDecisionId ? "来自 AI 决策草案的调整预览" : "当前仅生成调整方案"}
+          description={draftReason ? `${draftReason}${draftExpected ? ` 预期：${draftExpected}` : ""}` : "预览不会修改本地数据或万相台。确认方案后可立即写入平台，或只建立观察任务。"}
+          style={{ marginBottom: 14 }}
+        />
+        {draftDecisionId && (Object.keys(draftSuccessCriteria).length || draftRollbackCondition) ? <Alert
+          type="warning"
+          showIcon
+          title={`${draftTier === "aggressive" ? "激进" : draftTier === "balanced" ? "平衡" : "稳健"}方案的验证与回退条件`}
+          description={<Space orientation="vertical" size={2}><Text>成功标准：{successCriteriaText(draftSuccessCriteria) || "按默认标准"}</Text><Text>回退条件：{draftRollbackCondition || "待人工补充"}</Text></Space>}
+          style={{ marginBottom: 14 }}
+        /> : null}
+        {writeCapabilities ? (
+          <Space size={8} wrap style={{ marginBottom: 14 }}>
+            <Text type="secondary">平台能力：</Text>
+            <Tag color={writeCapabilities.day_budget.write ? "green" : "orange"}>预算写入 {writeCapabilities.day_budget.write ? "已支持" : "待接入"}</Tag>
+            <Tag color={writeCapabilities.bid_value.write ? "green" : "orange"}>出价写入 {writeCapabilities.bid_value.write ? "已支持" : "待接入"}</Tag>
+          </Space>
+        ) : null}
+        <Space wrap style={{ marginBottom: 14 }}>
+          <Select
+            value={adjustField}
+            onChange={(value) => { setAdjustField(value); setAdjustPreview(null); }}
+            options={[{ value: "day_budget", label: "日预算" }, { value: "bid_value", label: "出价" }]}
+            style={{ width: 130 }}
+          />
+          <InputNumber
+            value={adjustPct}
+            onChange={(value) => setAdjustPct(value ?? 0)}
+            min={-90}
+            max={300}
+            precision={1}
+            addonAfter="%"
+            style={{ width: 130 }}
+          />
+          <Button type="primary" loading={adjustLoading} onClick={() => void runAdjustPreview()}>生成预览</Button>
+        </Space>
+        {adjustPreview ? (
+          <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+            <Text type="secondary">共 {adjustPreview.items.length} 个计划，{adjustPreview.valid_count} 个可预览</Text>
+            {adjustPreview.items.map((item) => (
+              <Card key={item.plan_id} size="small" style={{ background: "var(--ops-panel-2)" }}>
+                <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                  <Text strong>{item.plan_name || `计划 ${item.plan_id}`}</Text>
+                  {item.ok ? (
+                    <Text>{adjustField === "day_budget" ? "日预算" : "出价"}：{item.old_value} → <Text strong>{item.new_value}</Text></Text>
+                  ) : <Text type="danger">{item.error || "无法预览"}</Text>}
+                  {item.risks?.map((risk) => <Tag color="orange" key={risk}>{risk}</Tag>)}
+                </Space>
+              </Card>
+            ))}
+          </Space>
+        ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="选择调整项后生成预览" />}
+        {adjustPreview?.valid_count ? <Space orientation="vertical" style={{ width: "100%" }} size={8}>
+          {writeCapabilities?.[adjustField]?.write ? <Button type="primary" danger block loading={adjustExecuteLoading} onClick={executeAdjustments} style={{ marginTop: 16 }}>
+            立即写入万相台（{adjustPreview.valid_count} 个）
+          </Button> : null}
+          <Button block loading={actionRecording} onClick={() => void createAdjustmentRecords()}>
+            只建立观察任务（不写入平台）
+          </Button>
+        </Space> : null}
+      </Modal>
+      <Modal
+        title="新建万相台计划"
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        onOk={() => void createPlan()}
+        okText="确认创建"
+        cancelText="取消"
+        confirmLoading={createLoading}
+        destroyOnHidden
+      >
+        <Alert type="warning" showIcon title="需要使用万相台 solutionList 原始结构" description="平台字段因场景而异；可先在万相台创建页准备方案 JSON，再粘贴到这里。提交会直接创建平台计划。" style={{ marginBottom: 12 }} />
+        <Space orientation="vertical" style={{ width: "100%" }} size={10}>
+          <Select value={createBizCode} onChange={setCreateBizCode} options={[{ value: "onebpSite", label: "货品全站推广" }, { value: "onebpSearch", label: "关键词推广" }, { value: "onebpDisplay", label: "人群推广" }, { value: "onebpShortVideo", label: "内容营销" }]} />
+          <Input.TextArea value={createPayload} onChange={(event) => setCreatePayload(event.target.value)} autoSize={{ minRows: 10, maxRows: 18 }} />
+        </Space>
+      </Modal>
       <Drawer
         title={detailPlan ? `详细数据：${detailPlan.plan_name}` : "详细数据"}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        width={520}
+        size="large"
       >
         {detailPlan ? (
           <div>
@@ -970,6 +1376,39 @@ export function PromotionsPlansPage() {
                 );
               })}
             </Row>
+            <Card size="small" title="投放链路" style={{ marginTop: 14, background: "var(--ops-panel-2)" }} loading={detailFunnelLoading}>
+              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+                <Space wrap>
+                  {(detailFunnel?.links || [
+                    { type: "item", label: "商品", status: "empty" },
+                    { type: "keyword", label: "关键词", status: "pending" },
+                    { type: "crowd", label: "人群", status: "pending" },
+                    { type: "creative", label: "素材", status: "pending" },
+                  ]).map((link) => (
+                    <Tag color={link.status === "ready" ? "green" : link.status === "empty" ? "default" : "orange"} key={link.type}>
+                      {link.label} · {link.status === "ready" ? "已关联" : link.status === "empty" ? "暂无" : "待接入"}
+                    </Tag>
+                  ))}
+                </Space>
+                {detailFunnel?.item ? <Text type="secondary">关联商品：{detailFunnel.item.item_title || detailFunnel.item.item_id}</Text> : <Text type="secondary">暂未找到关联商品</Text>}
+              </Space>
+            </Card>
+            <Card size="small" title="操作与复盘时间线" style={{ marginTop: 12, background: "var(--ops-panel-2)" }}>
+              {detailFunnel?.timeline?.length ? (
+                <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+                  {detailFunnel.timeline.map((event, index) => (
+                    <div key={`${event.created_at}-${index}`} style={{ borderLeft: "2px solid var(--ops-accent)", paddingLeft: 10 }}>
+                      <Space size={6} wrap>
+                        <Tag color="blue">{event.action}</Tag>
+                        <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(event.created_at).format("MM-DD HH:mm")}</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>{event.username}</Text>
+                      </Space>
+                      <div style={{ fontSize: 12, marginTop: 3 }}>{event.detail || "—"}</div>
+                    </div>
+                  ))}
+                </Space>
+              ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无计划操作记录" />}
+            </Card>
           </div>
         ) : (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />

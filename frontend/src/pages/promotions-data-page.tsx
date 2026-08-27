@@ -88,11 +88,12 @@ export function PromotionsDataPage() {
   const sync = async () => {
     setSyncing(true);
     try {
+      const dateScope = mode === "range" && range ? `&start=${range[0]}&end=${range[1]}` : "";
       const { data: res } = await http.post<{ ok: number; total: number; results: { store_name: string; ok: boolean; error?: string }[] }>(
-        `/promotions/sync?mode=${encodeURIComponent(mode)}${currentStore ? `&store_id=${currentStore.id}` : ""}`
+        `/promotions/sync?mode=${encodeURIComponent(mode)}${dateScope}${currentStore ? `&store_id=${currentStore.id}` : ""}`
       );
       showSyncFeedback("同步", [{ ok: res.ok, total: res.total, results: res.results }]);
-      await load(mode);
+      await load(mode, mode === "range" ? range : null);
     } catch (error) {
       message.error(getApiErrorMessage(error));
     } finally {
@@ -103,7 +104,7 @@ export function PromotionsDataPage() {
   const labels = (data?.trend ?? []).map((p) => p.label);
   const trend = data?.trend ?? [];
   const isRealtime = data?.mode === "realtime";
-  const periodTitle = mode === "realtime" ? "今日实时" : mode === "yesterday" ? "昨天" : "近七天";
+  const periodTitle = mode === "realtime" ? "今日实时" : mode === "yesterday" ? "昨天" : mode === "range" ? "自定义区间" : "近七天";
 
   return (
     <div>
@@ -118,7 +119,7 @@ export function PromotionsDataPage() {
               导出
             </Button>
             <Button onClick={openKeywords}>关键词报表</Button>
-            <Button icon={<ReloadOutlined />} onClick={() => load(mode)}>
+            <Button icon={<ReloadOutlined />} onClick={() => load(mode, mode === "range" ? range : null)}>
               刷新
             </Button>
             <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={sync}>
@@ -195,7 +196,7 @@ export function PromotionsDataPage() {
 
           {data.alerts.length > 0 && (
             <Card variant="borderless" style={{ marginBottom: 16, borderColor: "var(--ops-warn)" }} size="small">
-              <Space direction="vertical" size={4}>
+              <Space orientation="vertical" size={4}>
                 {data.alerts.map((a, i) => (
                   <Text key={i} style={{ color: "var(--ops-warn)", fontSize: 13 }}>⚠ {a.message}</Text>
                 ))}
@@ -249,7 +250,7 @@ export function PromotionsDataPage() {
                     const good = hours.filter((h) => h.roi >= 2).sort((a, b) => b.roi - a.roi).slice(0, 4);
                     const bad = hours.filter((h) => h.roi < 1).sort((a, b) => a.roi - b.roi).slice(0, 4);
                     return (
-                      <Space direction="vertical" size={10}>
+                      <Space orientation="vertical" size={10}>
                         <div>
                           <Text strong style={{ color: "var(--ops-success)" }}>高效时段（ROI ≥ 2，建议加大投放）</Text>
                           <div style={{ marginTop: 6 }}>
@@ -278,7 +279,7 @@ export function PromotionsDataPage() {
       )}
       <Drawer
         title="关键词报表"
-        width={640}
+        size="large"
         open={kwOpen}
         onClose={() => setKwOpen(false)}
         destroyOnHidden

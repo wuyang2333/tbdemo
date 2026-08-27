@@ -66,7 +66,7 @@ export function OperationHistory({ compact = false }: { compact?: boolean }) {
       </Button>
       <Drawer
         title="操作历史"
-        width={440}
+        size={440}
         open={open}
         onClose={() => setOpen(false)}
         extra={<Button type="text" icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>}

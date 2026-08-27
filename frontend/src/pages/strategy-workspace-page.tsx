@@ -40,6 +40,46 @@ type WorkspaceSection = {
 };
 
 const SECTIONS: Record<string, WorkspaceSection> = {
+  "promotion-budget": {
+    workspace: "推广管理",
+    title: "预算与预警中心",
+    description: "统一管理店铺、场景和计划预算，沉淀可解释的投放预警。",
+    objective: "回答“预算是否花得合理，哪些异常需要立即处理”。",
+    icon: <FundOutlined />,
+    capabilities: ["预算进度与预测", "预算分配建议", "异常预警规则", "预警转任务闭环"],
+    inputs: ["计划预算", "实时花费", "成交与利润", "目标与底线"],
+    outputs: ["预算看板", "投放预警", "处理任务", "执行验证"],
+  },
+  "promotion-assets": {
+    workspace: "推广管理",
+    title: "商品与素材中心",
+    description: "关联商品、主图、视频和详情页版本，识别真正带来转化的投放资产。",
+    objective: "回答“预算具体花在哪些商品和素材上，哪些值得继续放大”。",
+    icon: <PictureOutlined />,
+    capabilities: ["商品投放表现", "素材版本管理", "素材效果归因", "素材疲劳识别"],
+    inputs: ["商品与 SKU", "主图与视频", "计划关联", "点击与成交"],
+    outputs: ["商品排行", "素材排行", "高效卖点", "替换建议"],
+  },
+  "promotion-targets": {
+    workspace: "推广管理",
+    title: "关键词与人群中心",
+    description: "统一沉淀关键词、人群包及其与计划和商品的承接关系。",
+    objective: "回答“哪些词和人群带来有效成交，哪些正在浪费预算”。",
+    icon: <SearchOutlined />,
+    capabilities: ["关键词分层", "搜索词挖掘", "人群表现", "浪费识别"],
+    inputs: ["关键词报表", "人群包", "计划投放", "成交与退款"],
+    outputs: ["词库", "否定词建议", "人群排行", "优化清单"],
+  },
+  "promotion-experiments": {
+    workspace: "推广管理",
+    title: "实验与归因中心",
+    description: "记录投放调整、观察窗口和结果，判断策略是否真正有效。",
+    objective: "回答“这次投放变化带来的增长是否可复制”。",
+    icon: <ExperimentOutlined />,
+    capabilities: ["实验假设", "版本对比", "观察窗口", "结果与复盘"],
+    inputs: ["计划变更", "商品与素材版本", "核心指标", "活动日历"],
+    outputs: ["实验结论", "增量评估", "策略模板", "复盘案例"],
+  },
   "monitoring-overview": {
     workspace: "竞品监控",
     title: "竞品监控总览",

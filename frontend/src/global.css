@@ -641,6 +641,15 @@ h4,
   background: color-mix(in srgb, var(--ops-danger) 10%, transparent) !important;
 }
 
+.ops-promo-target-row > td {
+  background: color-mix(in srgb, var(--ops-accent) 14%, transparent) !important;
+  box-shadow: inset 3px 0 0 var(--ops-accent);
+}
+
+.ops-promo-target-row:hover > td {
+  background: color-mix(in srgb, var(--ops-accent) 20%, transparent) !important;
+}
+
 .ops-fav-item {
   cursor: pointer !important;
   transition: background .16s ease, opacity .16s ease;
