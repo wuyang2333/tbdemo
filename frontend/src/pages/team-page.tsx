@@ -8,6 +8,7 @@ import {
 import {
   Button,
   Card,
+  Empty,
   Form,
   Input,
   Modal,
@@ -91,7 +92,7 @@ export function TeamPage() {
     load();
   }, [load]);
 
-  const create = async (values: { username: string; nickname: string; password: string }) => {
+  const create = async (values: { username: string; nickname: string; password: string; confirm: string }) => {
     setCreateSaving(true);
     try {
       await http.post("/accounts/my/sub-accounts", {
@@ -232,7 +233,12 @@ export function TeamPage() {
 
   return (
     <div>
-      <PageHeader icon={<TeamOutlined />} eyebrow="团队管理" title="我的团队" />
+      <PageHeader
+        icon={<TeamOutlined />}
+        eyebrow="团队管理"
+        title="我的团队"
+        description="管理子账号、登录凭据和可见店铺范围。"
+      />
 
       {isSub ? (
         <Card variant="borderless">
@@ -245,7 +251,7 @@ export function TeamPage() {
             style={{ marginBottom: 16 }}
             title="团队说明"
             extra={
-              <Space size={8}>
+              <Space size={8} wrap>
                 {isAdmin ? (
                   <>
                     <Tag color="blue">子账号 {items.length} 个（不限配额）</Tag>
@@ -295,6 +301,24 @@ export function TeamPage() {
               columns={columns}
               dataSource={items}
               pagination={false}
+              scroll={{ x: 1080 }}
+              locale={{
+                emptyText: (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有子账号">
+                    <Button
+                      type="primary"
+                      icon={<UserAddOutlined />}
+                      onClick={() => {
+                        form.resetFields();
+                        setSelectedStores([]);
+                        setCreateOpen(true);
+                      }}
+                    >
+                      创建子账号
+                    </Button>
+                  </Empty>
+                ),
+              }}
             />
           </Card>
         </>

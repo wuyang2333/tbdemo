@@ -1,4 +1,4 @@
-import { Empty, Input, Select, Space, Table, Tag, message } from "antd";
+import { Empty, Input, Select, Table, message } from "antd";
 import { useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../../lib/api";
@@ -44,43 +44,116 @@ export type LineSeries = {
   format?: (value: number) => string;
 };
 
-export function LineChart({ labels, series, height = 200 }: { labels: string[]; series: LineSeries[]; height?: number }) {
+function compactNumber(value: number, money = false): string {
+  const absolute = Math.abs(value);
+  const amount = absolute >= 10000 ? `${(value / 10000).toFixed(value >= 100000 ? 0 : 1)}万` : absolute >= 1000 ? `${(value / 1000).toFixed(1)}k` : value.toFixed(value < 10 && value !== 0 ? 1 : 0);
+  return money ? `¥${amount}` : amount;
+}
+
+function niceMaximum(value: number): number {
+  if (value <= 0) return 1;
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const normalized = value / magnitude;
+  const step = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return step * magnitude;
+}
+
+export function LineChart({ labels, series, height = 240, sharedScale = false }: { labels: string[]; series: LineSeries[]; height?: number; sharedScale?: boolean }) {
   const width = 720;
-  const pad = 14;
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
   if (!labels.length) return <Empty description="暂无数据，先点「同步数据」" style={{ padding: 24 }} />;
+  const cleanSeries = series.map((item) => ({ ...item, values: labels.map((_, index) => {
+    const value = item.values[index];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  }) }));
   const n = labels.length;
-  const xs = labels.map((_, i) => (n === 1 ? width / 2 : pad + (i * (width - pad * 2)) / (n - 1)));
-  const paths = series.map((s) => {
-    const nums = s.values.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : 0));
-    const max = Math.max(1, ...nums);
-    const pts = nums.map((v, i) => `${xs[i]},${height - pad - (v / max) * (height - pad * 2)}`);
-    return { ...s, path: pts.join(" ") };
+  const margin = { top: 14, right: sharedScale || cleanSeries.length === 1 ? 18 : 58, bottom: 30, left: 58 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const xs = labels.map((_, index) => (n === 1 ? margin.left + plotWidth / 2 : margin.left + (index * plotWidth) / (n - 1)));
+  const sharedMaximum = niceMaximum(Math.max(1, ...cleanSeries.flatMap((item) => item.values)));
+  const maxima = cleanSeries.map((item) => sharedScale ? sharedMaximum : niceMaximum(Math.max(1, ...item.values)));
+  const paths = cleanSeries.map((item, seriesIndex) => {
+    const maximum = maxima[seriesIndex];
+    const points = item.values.map((value, index) => ({ x: xs[index], y: margin.top + plotHeight - (value / maximum) * plotHeight, value }));
+    return { ...item, points, path: points.map((point) => `${point.x},${point.y}`).join(" ") };
   });
+  const gridValues = [0, 0.25, 0.5, 0.75, 1];
+  const labelStep = Math.max(1, Math.ceil(n / 6));
+  const visibleLabelIndexes = labels.map((_, index) => index).filter((index) => index === 0 || index === n - 1 || index % labelStep === 0);
+  const activeX = activeIndex == null ? null : xs[activeIndex];
+  const firstIsMoney = Boolean(cleanSeries[0]?.format?.(1).startsWith("¥"));
+  const lastSeries = cleanSeries[cleanSeries.length - 1];
+  const lastIsMoney = Boolean(lastSeries?.format?.(1).startsWith("¥"));
+  const chartLabel = cleanSeries.map((item) => `${item.name}最新${item.format ? item.format(item.values[n - 1] || 0) : item.values[n - 1] || 0}`).join("，");
   return (
-    <div>
-      <Space style={{ marginBottom: 8 }} wrap>
-        {series.map((s) => {
-          const latest = s.values.length ? s.values[s.values.length - 1] : 0;
-          const latestText =
-            latest === null || latest === undefined ? "—" : s.format ? s.format(latest) : latest;
+    <div className="ops-line-chart">
+      <div className="ops-line-chart__legend">
+        {cleanSeries.map((item) => {
+          const latest = item.values[n - 1] || 0;
+          const previous = item.values[n - 2] || 0;
+          const change = previous ? ((latest - previous) / previous) * 100 : null;
           return (
-            <Tag key={s.name} color={s.color}>
-              {s.name} · 最新 {latestText}
-            </Tag>
+            <div className="ops-line-chart__legend-item" key={item.name}>
+              <span className="ops-line-chart__legend-dot" style={{ background: item.color }} aria-hidden="true" />
+              <span className="ops-line-chart__legend-name">{item.name}</span>
+              <strong>{item.format ? item.format(latest) : latest}</strong>
+              {change != null ? <span className={change >= 0 ? "is-up" : "is-down"}>{change >= 0 ? "+" : ""}{change.toFixed(1)}%</span> : null}
+            </div>
           );
         })}
-      </Space>
-      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height, display: "block" }}>
-        {paths.map((s) => (
-          <polyline key={s.name} points={s.path} fill="none" stroke={s.color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-        ))}
-        <text x={pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)">
-          {labels[0]}
-        </text>
-        <text x={width - pad} y={height - 4} fontSize={10} fill="var(--ops-text-3)" textAnchor="end">
-          {labels[n - 1]}
-        </text>
-      </svg>
+      </div>
+      <div className="ops-line-chart__stage">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="ops-line-chart__svg"
+          role="img"
+          aria-label={`趋势图。${chartLabel}`}
+          tabIndex={0}
+          onFocus={() => setActiveIndex((current) => current ?? n - 1)}
+          onBlur={() => setActiveIndex(null)}
+          onMouseLeave={() => setActiveIndex(null)}
+          onMouseMove={(event) => {
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const chartX = ((event.clientX - bounds.left) / bounds.width) * width;
+            const index = Math.max(0, Math.min(n - 1, Math.round(((chartX - margin.left) / plotWidth) * (n - 1))));
+            setActiveIndex(index);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            setActiveIndex((current) => Math.max(0, Math.min(n - 1, (current ?? n - 1) + (event.key === "ArrowRight" ? 1 : -1))));
+          }}
+        >
+          {gridValues.map((ratio) => {
+            const y = margin.top + plotHeight * (1 - ratio);
+            return (
+              <g key={ratio}>
+                <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} className="ops-line-chart__grid" />
+                <text x={margin.left - 10} y={y + 3} textAnchor="end" className="ops-line-chart__axis-label">{compactNumber(maxima[0] * ratio, firstIsMoney)}</text>
+                {!sharedScale && cleanSeries.length > 1 ? <text x={width - margin.right + 10} y={y + 3} className="ops-line-chart__axis-label">{compactNumber(maxima[maxima.length - 1] * ratio, lastIsMoney)}</text> : null}
+              </g>
+            );
+          })}
+          {visibleLabelIndexes.map((index) => (
+            <text key={`${labels[index]}-${index}`} x={xs[index]} y={height - 6} textAnchor={index === 0 ? "start" : index === n - 1 ? "end" : "middle"} className="ops-line-chart__axis-label">{labels[index]}</text>
+          ))}
+          {activeX != null ? <line x1={activeX} x2={activeX} y1={margin.top} y2={margin.top + plotHeight} className="ops-line-chart__crosshair" /> : null}
+          {paths.map((item) => (
+            <g key={item.name}>
+              <polyline points={item.path} fill="none" stroke={item.color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+              {activeIndex != null ? <circle cx={item.points[activeIndex].x} cy={item.points[activeIndex].y} r={4} fill="var(--ops-card-bg)" stroke={item.color} strokeWidth={2.5} vectorEffect="non-scaling-stroke" /> : null}
+            </g>
+          ))}
+        </svg>
+        {activeIndex != null ? (
+          <div className="ops-line-chart__tooltip" style={{ left: `${(xs[activeIndex] / width) * 100}%` }}>
+            <strong>{labels[activeIndex]}</strong>
+            {cleanSeries.map((item) => <span key={item.name}><i style={{ background: item.color }} />{item.name}<b>{item.format ? item.format(item.values[activeIndex]) : item.values[activeIndex]}</b></span>)}
+          </div>
+        ) : null}
+      </div>
+      <div className="ops-line-chart__hint">悬停查看明细 · 键盘方向键切换时间</div>
     </div>
   );
 }

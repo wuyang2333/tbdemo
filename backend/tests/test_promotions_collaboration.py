@@ -67,7 +67,7 @@ def test_collaboration_lifecycle_and_store_scope(client, admin_token):
     assert api.get("/api/promotions/collaboration/tasks", headers=headers).json()["items"][0]["reminder_count"] == 1
 
 
-def test_action_record_creates_and_syncs_collaboration_task(client, admin_token):
+def test_action_record_runs_single_operator_workflow_without_collaboration_task(client, admin_token):
     db_path = os.environ["TAOBAO_DB_PATH"]
     conn = sqlite3.connect(db_path)
     conn.execute("INSERT INTO stores (name, status, created_at) VALUES ('动作协同店', 'active', '2026-08-27')")
@@ -96,23 +96,16 @@ def test_action_record_creates_and_syncs_collaboration_task(client, admin_token)
     assert created.status_code == 200, created.text
     action_id = created.json()["id"]
     collaboration_task_id = created.json()["collaboration_task_id"]
+    assert collaboration_task_id is None
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    task = conn.execute("SELECT * FROM promo_collaboration_tasks WHERE id = ?", (collaboration_task_id,)).fetchone()
+    task = conn.execute("SELECT * FROM promo_collaboration_tasks WHERE action_record_id = ?", (action_id,)).fetchone()
     action = conn.execute("SELECT status, executed_at FROM promo_action_records WHERE id = ?", (action_id,)).fetchone()
-    assert task["action_record_id"] == action_id
-    assert task["execution_status"] == "executing"
+    assert task is None
     assert action["status"] == "planned"
     assert action["executed_at"] is None
     conn.close()
-
-    blocked_status = client.patch(
-        f"/api/promotions/collaboration/tasks/{collaboration_task_id}",
-        headers=headers,
-        json={"execution_status": "completed"},
-    )
-    assert blocked_status.status_code == 409
 
     marked = client.post(f"/api/promotions/action-records/{action_id}/mark-executed", headers=headers)
     assert marked.status_code == 200, marked.text
@@ -134,19 +127,13 @@ def test_action_record_creates_and_syncs_collaboration_task(client, admin_token)
             (store_id, data_date, now.isoformat(timespec="seconds")),
         )
     conn.commit()
-    observing = conn.execute("SELECT execution_status FROM promo_collaboration_tasks WHERE id = ?", (collaboration_task_id,)).fetchone()[0]
     conn.close()
-    assert observing == "observing"
 
     verified = client.post(f"/api/promotions/action-records/{action_id}/verify", headers=headers)
     assert verified.status_code == 200, verified.text
     assert verified.json()["status"] == "failed"
 
     conn = sqlite3.connect(db_path)
-    task = conn.execute(
-        "SELECT execution_status, rollback_reason FROM promo_collaboration_tasks WHERE id = ?",
-        (collaboration_task_id,),
-    ).fetchone()
+    task = conn.execute("SELECT * FROM promo_collaboration_tasks WHERE action_record_id = ?", (action_id,)).fetchone()
     conn.close()
-    assert task[0] == "needs_rollback"
-    assert "未达标" in task[1]
+    assert task is None

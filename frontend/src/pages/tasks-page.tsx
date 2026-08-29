@@ -1,7 +1,9 @@
 import {
+  ApiOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloudSyncOutlined,
+  DashboardOutlined,
   ExclamationCircleOutlined,
   EyeOutlined,
   LoadingOutlined,
@@ -15,7 +17,6 @@ import {
   Button,
   Card,
   Checkbox,
-  Col,
   Descriptions,
   Drawer,
   Empty,
@@ -24,10 +25,8 @@ import {
   Modal,
   Popconfirm,
   Radio,
-  Row,
   Select,
   Space,
-  Statistic,
   Table,
   Tag,
   Tooltip,
@@ -40,9 +39,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../components/ui/page-header";
+import { MetricRail, WorkspaceToolbar } from "../components/ui/workspace-template";
 import http, { getApiErrorMessage } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useStores } from "../lib/store";
+import { MODULES } from "../lib/modules";
 
 const { Text } = Typography;
 
@@ -169,6 +170,8 @@ export function TasksPage() {
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
   const [maintenanceForm] = Form.useForm();
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [now, setNow] = useState(() => dayjs());
   const requestSequence = useRef(0);
   const requestInFlight = useRef(false);
 
@@ -196,6 +199,18 @@ export function TasksPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((response) => { if (!cancelled) setBackendOk(response.ok); })
+      .catch(() => { if (!cancelled) setBackendOk(false); });
+    const timer = window.setInterval(() => setNow(dayjs()), 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const hasRunningTask = Boolean(data?.tasks.some((task) => task.running));
   useEffect(() => {
@@ -410,11 +425,41 @@ export function TasksPage() {
         )}
       />
 
+      <section className="ops-runtime-status" aria-labelledby="runtime-status-title">
+        <div className="ops-runtime-status__head">
+          <div>
+            <Text strong id="runtime-status-title">系统状态</Text>
+            <Text type="secondary">服务、接口与运行环境</Text>
+          </div>
+          <Tag color={backendOk === null ? "default" : backendOk ? "success" : "error"}>
+            {backendOk === null ? "检测中" : backendOk ? "服务正常" : "服务异常"}
+          </Tag>
+        </div>
+        <div className="ops-runtime-status__grid">
+          <div className="ops-runtime-status__item">
+            <ApiOutlined />
+            <span><Text type="secondary">后端服务</Text><Text strong>{backendOk === null ? "检测中" : backendOk ? "运行中" : "离线"}</Text></span>
+          </div>
+          <a className="ops-runtime-status__item" href="http://127.0.0.1:8008/docs" target="_blank" rel="noreferrer">
+            <CloudSyncOutlined />
+            <span><Text type="secondary">接口文档</Text><Text strong>Swagger UI</Text></span>
+          </a>
+          <div className="ops-runtime-status__item">
+            <DashboardOutlined />
+            <span><Text type="secondary">已注册模块</Text><Text strong>{MODULES.length} 个</Text></span>
+          </div>
+          <div className="ops-runtime-status__item">
+            <ClockCircleOutlined />
+            <span><Text type="secondary">当前时间</Text><Text strong style={{ fontVariantNumeric: "tabular-nums" }}>{now.format("HH:mm:ss")}</Text></span>
+          </div>
+        </div>
+      </section>
+
       {maintenanceState?.enabled ? (
         <Alert
           type="warning"
           showIcon
-          message={`后台任务处于维护模式：${maintenanceState.reason || "系统维护"}`}
+          title={`后台任务处于维护模式：${maintenanceState.reason || "系统维护"}`}
           description={`已暂停 ${maintenanceState.pause_tasks.length} 项任务；${maintenanceState.ends_at ? `预计 ${formatTime(maintenanceState.ends_at)} 自动恢复` : "需管理员手动恢复"}；恢复后${maintenanceState.resume_strategy === "run_once" ? "符合条件的任务补跑一次" : "等待下个调度周期"}。正在执行的任务不会被中断。`}
           style={{ marginBottom: 16 }}
         />
@@ -424,34 +469,18 @@ export function TasksPage() {
         <Alert
           type="error"
           showIcon
-          message={`${summary.abnormal} 项后台任务异常`}
+          title={`${summary.abnormal} 项后台任务异常`}
           description="异常任务已置顶显示。请查看最近错误，完成登录或配置修复后再手动执行。"
           style={{ marginBottom: 16 }}
         />
       ) : null}
 
-      <Row gutter={[14, 14]} className="ops-task-summary-grid">
-        <Col xs={12} lg={6}>
-          <Card variant="borderless" className="ops-task-summary-card">
-            <Statistic title="运行中" value={summary?.running ?? 0} prefix={<CloudSyncOutlined />} suffix="项" />
-          </Card>
-        </Col>
-        <Col xs={12} lg={6}>
-          <Card variant="borderless" className="ops-task-summary-card ops-task-summary-card--danger">
-            <Statistic title="异常任务" value={summary?.abnormal ?? 0} prefix={<ExclamationCircleOutlined />} suffix="项" />
-          </Card>
-        </Col>
-        <Col xs={12} lg={6}>
-          <Card variant="borderless" className="ops-task-summary-card">
-            <Statistic title="今日执行" value={summary?.today_total ?? 0} prefix={<ClockCircleOutlined />} suffix="次" />
-          </Card>
-        </Col>
-        <Col xs={12} lg={6}>
-          <Card variant="borderless" className="ops-task-summary-card ops-task-summary-card--success">
-            <Statistic title="今日成功率" value={summary?.success_rate ?? 0} precision={1} suffix="%" />
-          </Card>
-        </Col>
-      </Row>
+      <MetricRail columns={4} items={[
+        { label: "运行中", value: `${summary?.running ?? 0} 项`, hint: "正在执行" },
+        { label: "异常任务", value: `${summary?.abnormal ?? 0} 项`, hint: summary?.abnormal ? "请优先检查" : "暂无异常", tone: summary?.abnormal ? "var(--ops-danger)" : "var(--ops-success)" },
+        { label: "今日执行", value: `${summary?.today_total ?? 0} 次`, hint: "自动与手动合计" },
+        { label: "今日成功率", value: `${(summary?.success_rate ?? 0).toFixed(1)}%`, hint: "今日任务结果", tone: (summary?.success_rate ?? 0) >= 95 ? "var(--ops-success)" : "var(--ops-warn)" },
+      ]} />
 
       <Card variant="borderless" className="ops-task-panel" title="当前任务" extra={<Text type="secondary">运行中每 2 秒刷新，其余每 30 秒刷新</Text>}>
         <Table<TaskStatus>
@@ -468,7 +497,7 @@ export function TasksPage() {
       </Card>
 
       <Card variant="borderless" className="ops-task-panel" title="执行历史">
-        <div className="ops-task-filters">
+        <WorkspaceToolbar className="ops-task-filters">
           <Select
             value={taskFilter}
             onChange={setTaskFilter}
@@ -494,7 +523,7 @@ export function TasksPage() {
             style={{ width: 180 }}
           />
           <Text type="secondary">共 {filteredHistory.length} 条</Text>
-        </div>
+        </WorkspaceToolbar>
         <Table<TaskRun>
           rowKey="id"
           size="small"
@@ -506,10 +535,10 @@ export function TasksPage() {
         />
       </Card>
 
-      <Drawer title={selectedTask ? getTaskMeta(selectedTask.name).label : "任务详情"} width={560} open={Boolean(selectedTask)} onClose={() => setSelectedTask(null)}>
+      <Drawer title={selectedTask ? getTaskMeta(selectedTask.name).label : "任务详情"} size={560} open={Boolean(selectedTask)} onClose={() => setSelectedTask(null)}>
         {selectedTask ? (
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            {selectedTask.last_error ? <Alert type="error" showIcon message="最近一次执行失败" description={<Text copyable={{ text: selectedTask.last_error }}>{selectedTask.last_error}</Text>} /> : null}
+          <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+            {selectedTask.last_error ? <Alert type="error" showIcon title="最近一次执行失败" description={<Text copyable={{ text: selectedTask.last_error }}>{selectedTask.last_error}</Text>} /> : null}
             <Descriptions bordered size="small" column={1}>
               <Descriptions.Item label="任务状态"><TaskStateTag task={selectedTask} /></Descriptions.Item>
               <Descriptions.Item label="任务类型">{getTaskMeta(selectedTask.name).category}</Descriptions.Item>
@@ -540,10 +569,10 @@ export function TasksPage() {
         ) : null}
       </Drawer>
 
-      <Drawer title="执行详情" width={520} open={Boolean(selectedRun)} onClose={() => setSelectedRun(null)}>
+      <Drawer title="执行详情" size={520} open={Boolean(selectedRun)} onClose={() => setSelectedRun(null)}>
         {selectedRun ? (
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            {selectedRun.error ? <Alert type="error" showIcon message="执行失败" description={<Text copyable={{ text: selectedRun.error }}>{selectedRun.error}</Text>} /> : <Alert type="success" showIcon message="执行成功" />}
+          <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+            {selectedRun.error ? <Alert type="error" showIcon title="执行失败" description={<Text copyable={{ text: selectedRun.error }}>{selectedRun.error}</Text>} /> : <Alert type="success" showIcon title="执行成功" />}
             <Descriptions bordered size="small" column={1}>
               <Descriptions.Item label="任务">{getTaskMeta(selectedRun.name).label}</Descriptions.Item>
               <Descriptions.Item label="执行结果">{selectedRun.status === "success" ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag>}</Descriptions.Item>
@@ -566,7 +595,7 @@ export function TasksPage() {
         confirmLoading={maintenanceSaving}
         width={620}
       >
-        <Alert type="info" showIcon message="已在执行的任务会继续完成；维护期间不会启动新任务，也不会累计任务失败或发送失败告警。" style={{ marginBottom: 18 }} />
+        <Alert type="info" showIcon title="已在执行的任务会继续完成；维护期间不会启动新任务，也不会累计任务失败或发送失败告警。" style={{ marginBottom: 18 }} />
         <Form form={maintenanceForm} layout="vertical">
           <Form.Item name="reason" label="维护原因" rules={[{ required: true, message: "请填写维护原因" }, { max: 200, message: "最多 200 个字符" }]}>
             <Input.TextArea rows={3} placeholder="例如：升级淘宝抓取模块与数据库结构" showCount maxLength={200} />

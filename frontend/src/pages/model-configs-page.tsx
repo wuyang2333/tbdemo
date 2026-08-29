@@ -6,7 +6,7 @@ import {
   StarFilled,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Slider, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Card, Empty, Form, Input, Modal, Popconfirm, Select, Slider, Space, Table, Tag, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useState } from "react";
 
@@ -226,6 +226,7 @@ export function ModelConfigsPage() {
         icon={<ApiOutlined />}
         eyebrow="AI 模型接入"
         title="模型配置"
+        description="配置 AI 服务商、连接参数与默认对话模型。"
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
             新增模型
@@ -233,19 +234,28 @@ export function ModelConfigsPage() {
         }
       />
 
-      <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+      <Card variant="borderless">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={items}
           loading={loading}
           pagination={false}
-          locale={{ emptyText: "还没有模型，点击右上角「新增模型」添加第一个" }}
+          scroll={{ x: 900 }}
+          locale={{
+            emptyText: (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有可用模型">
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                  新增模型
+                </Button>
+              </Empty>
+            ),
+          }}
         />
       </Card>
 
       <Paragraph type="secondary" style={{ marginTop: 16, marginBottom: 0, fontSize: 13 }}>
-        💡 带 ⭐ 的是默认模型：AI 助手每次对话默认使用它。你可以在 AI 助手页面右上角随时切换本次对话用的模型。
+        默认模型会用于 AI 助手的新对话；你也可以在 AI 助手页面切换当前会话使用的模型。
       </Paragraph>
 
       <Modal

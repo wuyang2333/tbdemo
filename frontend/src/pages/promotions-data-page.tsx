@@ -101,9 +101,13 @@ export function PromotionsDataPage() {
     }
   };
 
-  const labels = (data?.trend ?? []).map((p) => p.label);
-  const trend = data?.trend ?? [];
   const isRealtime = data?.mode === "realtime";
+  const trend = (data?.trend ?? []).filter((item) => {
+    if (!isRealtime) return true;
+    const hour = item.label.match(/^(\d{1,2}):/)?.[1];
+    return hour == null || Number(hour) <= new Date().getHours();
+  });
+  const labels = trend.map((p) => p.label);
   const periodTitle = mode === "realtime" ? "今日实时" : mode === "yesterday" ? "昨天" : mode === "range" ? "自定义区间" : "近七天";
 
   return (
@@ -238,6 +242,7 @@ export function PromotionsDataPage() {
                     { name: "花费", color: "var(--ops-chart-accent)", values: trend.map((p) => p.spend), format: fmtMoney },
                     { name: "成交金额", color: "var(--ops-success)", values: trend.map((p) => p.sales), format: fmtMoney },
                   ]}
+                  sharedScale
                 />
               </Card>
               <Card variant="borderless" title={isRealtime ? "今日分时 ROI" : "ROI 趋势"} style={{ boxShadow: "var(--ops-shadow-sm)" }}>

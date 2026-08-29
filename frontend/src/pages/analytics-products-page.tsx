@@ -1,4 +1,4 @@
-import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, CopyOutlined, HolderOutlined, LineChartOutlined, RocketOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
+import { BulbOutlined, CheckCircleOutlined, CopyOutlined, HolderOutlined, LineChartOutlined, RocketOutlined, RobotOutlined, SendOutlined, SettingOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Card, Checkbox, Col, DatePicker, Drawer, Empty, Input, Popover, Row, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 import http, { getApiErrorMessage } from "../lib/api";
 import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
-import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney, fmtPct } from "../components/analytics/analytics-ui";
+import { DecisionBand, MetricRail, WorkspacePage, WorkspaceToolbar } from "../components/ui/workspace-template";
 import { LineChart } from "../components/promotions/promotions-ui";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
@@ -594,16 +594,67 @@ export function AnalyticsProductsPage() {
     return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
   });
   const tableX = visibleColumns.reduce((sum, col) => sum + ((col.width as number) || 90), 0);
+  const productSales = (data?.items ?? []).reduce((sum, item) => sum + (item.sales || 0), 0);
+  const attentionCount = (data?.items ?? []).filter((item) => ["下滑", "骤降", "需关注"].includes(productDiag(item).label)).length;
+  const promotedCount = (data?.items ?? []).filter((item) => (item.promo_spend ?? 0) > 0).length;
 
   return (
-    <div>
-      <PageHeader
-        icon={<BarChartOutlined />}
-        eyebrow="数据洞察"
-        title="商品分析"
-        extra={
-          <Space>
+    <WorkspacePage kind="analysis">
+      <DecisionBand
+        eyebrow="数据洞察 · 商品分析"
+        title={allProductAlerts.length > 0 ? `${allProductAlerts.length} 条商品预警需要优先判断` : "商品表现稳定，继续核对增长与投放机会"}
+        description={`当前展示 ${filteredItems.length}/${data?.total ?? 0} 个商品 · 最近更新 ${lastUpdated || "—"}`}
+        action={
+          <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
+            同步店铺数据
+          </Button>
+        }
+        ariaLabel="商品分析核心结论"
+      />
+
+      <WorkspaceToolbar>
+        <Space wrap>
             <StoreScopeSelect value={storeId} onChange={setStoreId} />
+            <Segmented
+              options={SEG_OPTIONS}
+              value={view === "range" ? undefined : view}
+              onChange={(v) => {
+                setData(null);
+                setView(String(v) as "realtime" | "yesterday");
+              }}
+            />
+            <DatePicker.RangePicker
+              presets={RANGE_PRESETS}
+              value={view === "range" && range ? [dayjs(range[0]), dayjs(range[1])] : null}
+              onChange={(dates) => {
+                setData(null);
+                if (dates && dates[0] && dates[1]) {
+                  setView("range");
+                  setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
+                } else {
+                  setView("realtime");
+                  setRange(null);
+                }
+              }}
+              placeholder={["开始日期", "结束日期"]}
+              allowClear
+            />
+            <Input allowClear placeholder="搜商品名 / ID" value={filterItemId} onChange={(e) => setFilterItemId(e.target.value)} style={{ width: 180 }} />
+            <Select
+              style={{ width: 120 }}
+              value={diagFilter}
+              onChange={setDiagFilter}
+              options={[
+                { value: "", label: "全部诊断" },
+                { value: "爆款", label: "爆款" },
+                { value: "稳定", label: "稳定" },
+                { value: "新品", label: "新品" },
+                { value: "下滑", label: "下滑" },
+                { value: "骤降", label: "骤降" },
+                { value: "需关注", label: "需关注" },
+                { value: "无销量", label: "无销量" },
+              ]}
+            />
             <Popover
               trigger="click"
               placement="bottomRight"
@@ -642,73 +693,26 @@ export function AnalyticsProductsPage() {
             <Button icon={<WarningOutlined />} onClick={openRefund}>退款分析</Button>
             </Popover>
             <HourlyPushButton scope="products" />
-            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
-              同步店铺数据
-            </Button>
-          </Space>
-        }
-      />
+        </Space>
+      </WorkspaceToolbar>
 
-      <Space style={{ marginBottom: 12 }} wrap>
-        <Segmented
-          options={SEG_OPTIONS}
-          value={view === "range" ? undefined : view}
-          onChange={(v) => {
-            setData(null);
-            setView(String(v) as "realtime" | "yesterday");
-          }}
-        />
-        <DatePicker.RangePicker
-          presets={RANGE_PRESETS}
-          value={view === "range" && range ? [dayjs(range[0]), dayjs(range[1])] : null}
-          onChange={(dates) => {
-            setData(null);
-            if (dates && dates[0] && dates[1]) {
-              setView("range");
-              setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
-            } else {
-              setView("realtime");
-              setRange(null);
-            }
-          }}
-          placeholder={["开始日期", "结束日期"]}
-          allowClear
-        />
-        <Input
-          allowClear
-          placeholder="搜商品名 / ID"
-          value={filterItemId}
-          onChange={(e) => setFilterItemId(e.target.value)}
-          style={{ width: 180 }}
-        />
-        <Select
-          style={{ width: 120 }}
-          value={diagFilter}
-          onChange={setDiagFilter}
-          options={[
-            { value: "", label: "全部诊断" },
-            { value: "爆款", label: "爆款" },
-            { value: "稳定", label: "稳定" },
-            { value: "新品", label: "新品" },
-            { value: "下滑", label: "下滑" },
-            { value: "骤降", label: "骤降" },
-            { value: "需关注", label: "需关注" },
-            { value: "无销量", label: "无销量" },
+      {data ? (
+        <MetricRail
+          columns={4}
+          items={[
+            { label: "商品总数", value: fmtInt(data.total), hint: isRealtime ? "今日实时商品" : `${data.days} 天口径` },
+            { label: "商品销售额", value: fmtMoney(productSales), hint: "当前范围合计" },
+            { label: "需要关注", value: fmtInt(attentionCount), hint: "下滑、骤降或低效" },
+            { label: "推广中商品", value: fmtInt(promotedCount), hint: "存在推广花费" },
           ]}
         />
-        <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
-        {isRealtime && (
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          全量商品 · 按销售额排序
-        </Text>
-      )}
-      </Space>
+      ) : null}
 
       {allProductAlerts.length > 0 && (
         <Card
           variant="borderless"
           title="商品预警"
-          style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 12 }}
+          style={{ marginBottom: 12 }}
           extra={
             <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
           }
@@ -738,7 +742,6 @@ export function AnalyticsProductsPage() {
         <Card
           variant="borderless"
           title={isRealtime ? "实时商品榜（今日）" : view === "yesterday" ? "昨日商品销售排行" : range ? `商品销售排行（${range[0]} ~ ${range[1]}）` : "商品销售排行"}
-          style={{ boxShadow: "var(--ops-shadow-sm)" }}
           extra={isRealtime ? <Tag color="green">实时</Tag> : undefined}
         >
           <Table<AnalyticsProduct>
@@ -1055,6 +1058,6 @@ export function AnalyticsProductsPage() {
           <Empty />
         )}
       </Drawer>
-    </div>
+    </WorkspacePage>
   );
 }

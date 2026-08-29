@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from backend.app.api.promotions import data as promotions_data
 from backend.app.core.db import DB_PATH
@@ -7,13 +7,27 @@ from backend.app.core.db import DB_PATH
 
 def _insert_promo_plan(*, campaign_id: str, day_budget: float = 100, bid_value: float = 10) -> int:
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("INSERT INTO stores (name, status, created_at) VALUES (?, 'active', ?)", (f"测试店-{campaign_id}", "2026-08-27T00:00:00"))
+    conn.row_factory = sqlite3.Row
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    conn.execute("INSERT INTO stores (name, status, created_at) VALUES (?, 'active', ?)", (f"测试店-{campaign_id}", now))
     store_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.execute(
         "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, bid_value, status, updated_at) VALUES (?, 'wholesite', '货品全站推广', ?, ?, ?, ?, '在投', ?)",
-        (store_id, campaign_id, f"测试计划-{campaign_id}", day_budget, bid_value, "2026-08-27T00:00:00"),
+        (store_id, campaign_id, f"测试计划-{campaign_id}", day_budget, bid_value, now),
     )
     plan_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) VALUES (?, ?, 'realtime', 10, 30, 3, 5, ?)",
+        (store_id, campaign_id, now),
+    )
+    from backend.app.api.promotions.health import record_sync_result
+
+    record_sync_result(
+        conn,
+        "plans_realtime",
+        {"total": 1, "ok": 1, "results": [{"store_id": store_id, "store_name": f"测试店-{campaign_id}", "ok": True, "plans": 1}]},
+        source="alimama_campaign_report",
+    )
     conn.commit()
     conn.close()
     return plan_id
@@ -63,6 +77,17 @@ def test_promotion_adjust_preview_validates_change_range(client, admin_token):
     assert "-90% 到 300%" in response.json()["detail"]
 
 
+def test_promotion_adjust_preview_uses_explicit_target_value(client, admin_token):
+    plan_id = _insert_promo_plan(campaign_id="target-value-test", day_budget=3000)
+    response = client.post(
+        "/api/promotions/plans/batch-adjust-preview",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"plan_ids": [plan_id], "field": "day_budget", "change_pct": 3.3, "target_value": 3100},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["items"][0]["new_value"] == 3100
+
+
 def test_promotion_batch_adjust_rejects_invalid_range(client, admin_token):
     response = client.post(
         "/api/promotions/plans/batch-adjust",
@@ -90,8 +115,30 @@ def test_promotion_plan_adjust_writes_platform_and_local_value(client, admin_tok
 
     conn = sqlite3.connect(DB_PATH)
     value = conn.execute("SELECT day_budget FROM promo_plans WHERE id = ?", (plan_id,)).fetchone()[0]
+    action = conn.execute(
+        "SELECT action_type, before_value, after_value, status, observation_hours, platform_status FROM promo_action_records WHERE id = ?",
+        (response.json()["action_id"],),
+    ).fetchone()
     conn.close()
     assert value == 180
+    assert action == ("增加预算/放量", 100, 180, "observing", 48, "submitted")
+
+
+def test_campaign_budget_write_includes_platform_budget_type(monkeypatch):
+    captured = {}
+
+    def fake_run_json(store, args):
+        captured["store"] = store
+        captured["args"] = args
+        return {"info": {"ok": True}}
+
+    monkeypatch.setattr("backend.app.core.alimama._run_json", fake_run_json)
+    row = {"scene": "wholesite", "campaign_id": "budget-type-test", "budget_type": "normal"}
+    result = promotions_data._write_campaign_field({"id": 1}, row, "day_budget", 250)
+
+    assert result["info"]["ok"] is True
+    body = __import__("json").loads(captured["args"][captured["args"].index("--body") + 1])
+    assert body["budgetList"] == [{"campaignId": "budget-type-test", "dayBudget": 250, "dmcType": "normal"}]
 
 
 def test_promotion_batch_adjust_reports_partial_platform_failure(client, admin_token, monkeypatch):

@@ -15,12 +15,10 @@ import {
 import {
   Button,
   Card,
-  Col,
   Form,
   Input,
   Modal,
   Popconfirm,
-  Row,
   Space,
   Table,
   Tag,
@@ -38,6 +36,7 @@ import { showSyncFeedback } from "../lib/sync-feedback";
 import { useStores } from "../lib/store";
 import { PageHeader } from "../components/ui/page-header";
 import { StoreDetailDrawer } from "../components/stores/store-detail";
+import { MetricRail } from "../components/ui/workspace-template";
 import type { Store, StoreLog } from "../types";
 
 const { Text } = Typography;
@@ -606,34 +605,12 @@ export function StoresPage() {
         }
       />
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={8}>
-          <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              店铺总数
-            </Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2 }}>{total}</div>
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              状态正常
-            </Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-success)" }}>{normal}</div>
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              需要关注
-            </Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: attention > 0 ? "var(--ops-warn)" : undefined }}>
-              {attention}
-            </div>
-          </Card>
-        </Col>
-      </Row>
+      <MetricRail columns={4} items={[
+        { label: "店铺总数", value: total, hint: "当前账号可见" },
+        { label: "状态正常", value: normal, hint: "可正常经营", tone: "var(--ops-success)" },
+        { label: "需要关注", value: attention, hint: attention > 0 ? "请检查登录或授权" : "暂无异常", tone: attention > 0 ? "var(--ops-warn)" : "var(--ops-success)" },
+        { label: "当前数据范围", value: currentStore?.name || "全部店铺", hint: "影响全站数据", tone: "var(--ops-text)" },
+      ]} />
 
       {isMember && (
         <Card

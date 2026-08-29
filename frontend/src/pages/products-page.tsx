@@ -1,11 +1,9 @@
 import {
-  AppstoreOutlined,
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
   ExportOutlined,
   EyeOutlined,
-  InboxOutlined,
   LinkOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -39,6 +37,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { ColumnSettings } from "../components/ui/column-settings";
 import { PageHeader } from "../components/ui/page-header";
+import { MetricRail, WorkspaceToolbar } from "../components/ui/workspace-template";
 import http, { getApiErrorMessage } from "../lib/api";
 import { useStores } from "../lib/store";
 
@@ -386,31 +385,31 @@ export function ProductsPage() {
         <Alert type="warning" showIcon icon={<WarningOutlined />} message="商品数据可能已过期" description={`最近成功同步：${dayjs(summary.last_sync).format("YYYY-MM-DD HH:mm:ss")}。当前仍展示上次成功数据，可手动重新同步。`} style={{ marginBottom: 16 }} />
       ) : null}
 
-      <div className="ops-metric-strip">
-        <div className="ops-metric-strip__item"><Statistic title="在售商品" value={summary?.total ?? 0} prefix={<AppstoreOutlined />} /></div>
-        <div className="ops-metric-strip__item"><Statistic title="低库存" value={summary?.low_stock ?? 0} prefix={<WarningOutlined />} /></div>
-        <div className="ops-metric-strip__item"><Statistic title="零库存" value={summary?.zero_stock ?? 0} prefix={<InboxOutlined />} /></div>
-        <div className="ops-metric-strip__item"><Statistic title="累计销量" value={summary?.sold_quantity ?? 0} prefix={<ShoppingOutlined />} /></div>
-      </div>
+      <MetricRail columns={4} items={[
+        { label: "在售商品", value: summary?.total ?? 0, hint: "当前经营商品" },
+        { label: "低库存", value: summary?.low_stock ?? 0, hint: "库存不高于 10", tone: "var(--ops-warn)" },
+        { label: "零库存", value: summary?.zero_stock ?? 0, hint: "建议优先补货", tone: (summary?.zero_stock ?? 0) > 0 ? "var(--ops-danger)" : "var(--ops-success)" },
+        { label: "累计销量", value: summary?.sold_quantity ?? 0, hint: "全部在售商品" },
+      ]} />
 
       <div className="ops-list-panel">
-        <div className="ops-list-toolbar">
+        <WorkspaceToolbar className="ops-list-toolbar">
           <Select allowClear placeholder="全部店铺" value={storeId} onChange={async (value) => { await setCurrent(value ?? null); setStoreId(value); setPage(1); }} style={{ width: 180 }} options={stores.map((store) => ({ label: store.name, value: store.id }))} suffixIcon={<ShopOutlined />} />
           <Select value={stockStatus} onChange={(value) => { setStockStatus(value); setPage(1); }} style={{ width: 138 }} options={[{ label: "全部库存", value: "all" }, { label: "库存正常", value: "normal" }, { label: "低库存 ≤ 10", value: "low" }, { label: "零库存", value: "zero" }]} />
           <Select value={salesStatus} onChange={(value) => { setSalesStatus(value); setPage(1); }} style={{ width: 150 }} options={[{ label: "全部经营状态", value: "all" }, { label: "近月无销量", value: "no_sales" }, { label: "质量分低于 70", value: "low_quality" }]} />
           <Input.Search className="ops-product-search" allowClear value={searchValue} onChange={(event) => setSearchValue(event.target.value)} onSearch={(value) => { setKeyword(value.trim()); setPage(1); }} placeholder="搜索商品标题或商品 ID" enterButton={<SearchOutlined aria-label="搜索" />} style={{ width: 300 }} />
           {filtersActive ? <Button type="text" onClick={resetFilters}>重置</Button> : null}
           <span className="ops-list-toolbar__meta">{summary?.last_sync ? `最近同步 ${dayjs(summary.last_sync).format("MM-DD HH:mm")}` : "尚未同步"}</span>
-        </div>
+        </WorkspaceToolbar>
 
-        <div className="ops-list-toolbar" style={{ paddingBlock: 9 }}>
+        <WorkspaceToolbar className="ops-list-toolbar">
           <Select placeholder="已保存视图" onChange={applyView} style={{ width: 160 }} options={savedViews.map((view) => ({ label: view.name, value: view.name }))} notFoundContent="暂无保存视图" />
           <Button icon={<SaveOutlined />} onClick={() => setSaveViewOpen(true)}>保存当前视图</Button>
           {savedViews.length > 0 ? <Select placeholder="删除视图" onChange={deleteView} style={{ width: 130 }} suffixIcon={<DeleteOutlined />} options={savedViews.map((view) => ({ label: view.name, value: view.name }))} /> : null}
           <div style={{ flex: 1 }} />
           <Select value={density} onChange={setDensity} style={{ width: 110 }} options={[{ label: "标准密度", value: "middle" }, { label: "紧凑密度", value: "small" }]} />
           <ColumnSettings columns={allColumns.map((column) => ({ key: String(column.key), title: String(column.title) }))} hidden={columnConfig.hidden} order={columnConfig.order} onChange={updateColumns} />
-        </div>
+        </WorkspaceToolbar>
 
         {selectedKeys.length > 0 ? (
           <div className="ops-list-selection">
@@ -441,7 +440,7 @@ export function ProductsPage() {
         />
       </div>
 
-      <Drawer title="商品详情" width={480} open={Boolean(detail)} onClose={() => setDetail(null)} extra={detail?.edit_url ? <Button type="primary" icon={<ExportOutlined />} href={detail.edit_url} target="_blank">淘宝后台编辑</Button> : null}>
+      <Drawer title="商品详情" size={480} open={Boolean(detail)} onClose={() => setDetail(null)} extra={detail?.edit_url ? <Button type="primary" icon={<ExportOutlined />} href={detail.edit_url} target="_blank">淘宝后台编辑</Button> : null}>
         {detail ? (
           <div className="ops-product-detail">
             <div className="ops-product-detail__hero">
@@ -454,7 +453,7 @@ export function ProductsPage() {
               <div className="ops-product-detail__metric"><Statistic title="累计销量" value={detail.sold_quantity} /></div>
               <div className="ops-product-detail__metric"><Statistic title="近月销量" value={detail.monthly_sold} /></div>
             </div>
-            {(detail.stock <= 10 || detail.monthly_sold <= 0 || detail.quality_score < 70) ? <Alert type="warning" showIcon message="经营提示" description={[detail.stock <= 0 ? "商品已无库存" : detail.stock <= 10 ? "商品库存偏低" : "", detail.monthly_sold <= 0 ? "近月暂无销量" : "", detail.quality_score < 70 ? "商品质量分偏低" : ""].filter(Boolean).join("；")} style={{ marginBottom: 16 }} /> : null}
+            {(detail.stock <= 10 || detail.monthly_sold <= 0 || detail.quality_score < 70) ? <Alert type="warning" showIcon title="经营提示" description={[detail.stock <= 0 ? "商品已无库存" : detail.stock <= 10 ? "商品库存偏低" : "", detail.monthly_sold <= 0 ? "近月暂无销量" : "", detail.quality_score < 70 ? "商品质量分偏低" : ""].filter(Boolean).join("；")} style={{ marginBottom: 16 }} /> : null}
             <Descriptions column={1} size="small" items={[
               { key: "quality", label: "质量分", children: detail.quality_score || "—" },
               { key: "category", label: "类目 ID", children: detail.category_id || "—" },
@@ -471,11 +470,11 @@ export function ProductsPage() {
         <Text type="secondary" style={{ display: "block", marginTop: 10 }}>保存当前店铺、库存和经营状态筛选，下次可一键恢复。</Text>
       </Modal>
 
-      <Modal title="在售商品同步" open={syncModalOpen} onCancel={() => { if (!syncing) setSyncModalOpen(false); }} footer={syncing ? null : <Button type="primary" onClick={() => setSyncModalOpen(false)}>完成</Button>} closable={!syncing} maskClosable={!syncing}>
+      <Modal title="在售商品同步" open={syncModalOpen} onCancel={() => { if (!syncing) setSyncModalOpen(false); }} footer={syncing ? null : <Button type="primary" onClick={() => setSyncModalOpen(false)}>完成</Button>} closable={!syncing} mask={{ closable: !syncing }}>
         {syncing ? (
           <div style={{ padding: "32px 0", textAlign: "center" }}><Spin size="large" /><Title level={5}>正在从淘宝千牛读取在售商品</Title><Text type="secondary">同步完成前会继续保留上一次成功数据，请勿重复操作。</Text></div>
         ) : syncResult ? (
-          <div><Alert type={syncResult.ok === syncResult.total ? "success" : "error"} showIcon message={syncResult.ok === syncResult.total ? `同步完成，共 ${syncResult.ok} 家店铺成功` : `同步未全部完成，成功 ${syncResult.ok} / ${syncResult.total} 家店铺`} style={{ marginBottom: 14 }} />{syncResult.results.map((result) => <div key={`${result.store_id}-${result.store_name}`} className="ops-sync-row"><div className="ops-sync-row__body"><Text strong>{result.store_name}</Text><Text type={result.ok ? "secondary" : "danger"}>{result.ok ? `已更新 ${result.count ?? 0} 个商品` : result.error || "同步失败"}</Text></div><Tag color={result.ok ? "green" : "red"}>{result.ok ? "成功" : "失败"}</Tag></div>)}</div>
+          <div><Alert type={syncResult.ok === syncResult.total ? "success" : "error"} showIcon title={syncResult.ok === syncResult.total ? `同步完成，共 ${syncResult.ok} 家店铺成功` : `同步未全部完成，成功 ${syncResult.ok} / ${syncResult.total} 家店铺`} style={{ marginBottom: 14 }} />{syncResult.results.map((result) => <div key={`${result.store_id}-${result.store_name}`} className="ops-sync-row"><div className="ops-sync-row__body"><Text strong>{result.store_name}</Text><Text type={result.ok ? "secondary" : "danger"}>{result.ok ? `已更新 ${result.count ?? 0} 个商品` : result.error || "同步失败"}</Text></div><Tag color={result.ok ? "green" : "red"}>{result.ok ? "成功" : "失败"}</Tag></div>)}</div>
         ) : null}
       </Modal>
     </div>

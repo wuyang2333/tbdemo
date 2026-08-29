@@ -12,6 +12,7 @@ import {
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoreOutlined,
   MoonOutlined,
   ReadOutlined,
   ProfileOutlined,
@@ -90,16 +91,37 @@ const ANALYTICS_CHILDREN = [
 ];
 
 const PROMOTIONS_CHILDREN = [
-  { key: "/promotions/cockpit", label: "闭环作战台" },
-  { key: "/promotions/diagnostics", label: "异常诊断" },
-  { key: "/promotions/overview", label: "推广数据中心" },
-  { key: "/promotions/decisions", label: "AI 决策中心" },
-  { key: "/promotions/plans", label: "计划执行中心" },
-  { key: "/promotions/collaboration", label: "执行协同" },
-  { key: "/promotions/validation", label: "观察验证" },
-  { key: "/promotions/strategies", label: "经验策略库" },
-  { key: "/promotions/review", label: "经营复盘" },
+  { key: "/promotions/cockpit", label: "闭环作战台", group: "日常操作" },
+  { key: "/promotions/overview", label: "推广数据中心", group: "日常操作" },
+  { key: "/promotions/diagnostics", label: "异常诊断", group: "日常操作" },
+  { key: "/promotions/decisions", label: "AI 决策中心", group: "决策验证" },
+  { key: "/promotions/plans", label: "计划执行中心", group: "日常操作" },
+  { key: "/promotions/validation", label: "观察验证", group: "决策验证" },
+  { key: "/promotions/review", label: "经营复盘", group: "决策验证" },
+  { key: "/promotions/strategies", label: "经验策略库", group: "经验分析" },
+  { key: "/promotions/extensions", label: "扩展分析", group: "经验分析" },
 ];
+
+const PROMOTION_PRIMARY_KEYS = new Set([
+  "/promotions/cockpit",
+  "/promotions/overview",
+  "/promotions/diagnostics",
+  "/promotions/decisions",
+  "/promotions/plans",
+  "/promotions/validation",
+]);
+
+const PROMOTION_SHORT_LABELS: Record<string, string> = {
+  "/promotions/cockpit": "作战台",
+  "/promotions/overview": "数据",
+  "/promotions/diagnostics": "诊断",
+  "/promotions/decisions": "AI 决策",
+  "/promotions/plans": "执行",
+  "/promotions/validation": "验证",
+};
+
+const isPromotionPathActive = (pathname: string, key: string) =>
+  pathname === key || pathname.startsWith(`${key}/`);
 
 const CONTENT_CHILDREN = [
   { key: "/content/overview", label: "内容运营总览" },
@@ -140,7 +162,7 @@ const OPS_KNOWLEDGE_CHILDREN = [
   { key: "/ops-knowledge/automation", label: "运营自动化中心" },
 ];
 
-const SUBMENU_ITEMS: Record<string, { key: string; label: string }[]> = {
+const SUBMENU_ITEMS: Record<string, { key: string; label: string; group?: string }[]> = {
   analytics: ANALYTICS_CHILDREN,
   promotions: PROMOTIONS_CHILDREN,
   content: CONTENT_CHILDREN,
@@ -151,12 +173,10 @@ const SUBMENU_ITEMS: Record<string, { key: string; label: string }[]> = {
 };
 
 const MAIN_GROUPS = [
-  { key: "home", label: "工作台", ids: ["dashboard"] },
-  { key: "daily", label: "日常经营", ids: ["products", "gifts", "analytics", "promotions"] },
-  { key: "growth", label: "运营增长", ids: ["customers", "content", "monitoring", "market", "growth-lab"] },
-  { key: "knowledge", label: "策略与沉淀", ids: ["ops-knowledge"] },
-  { key: "smart", label: "智能工具", ids: ["ai"] },
-  { key: "manage", label: "协作与管理", ids: ["stores"] },
+  { key: "operate", label: "经营", ids: ["dashboard", "products", "gifts", "analytics", "promotions"] },
+  { key: "growth", label: "增长", ids: ["customers", "content", "monitoring", "market", "growth-lab"] },
+  { key: "knowledge", label: "沉淀", ids: ["ops-knowledge", "ai"] },
+  { key: "manage", label: "管理", ids: ["stores"] },
 ];
 
 const FAVORITE_KEYS = "tb-sider-favs";
@@ -210,11 +230,11 @@ export function AppShell() {
   const { user, logout } = useAuth();
   const { stores, currentStore, setCurrent } = useStores();
   const [collapsed, setCollapsed] = useState(false);
-  const [mobile, setMobile] = useState(() => window.innerWidth < 768);
+  const [mobile, setMobile] = useState(() => window.innerWidth < 900);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
   useEffect(() => {
-    const onResize = () => setMobile(window.innerWidth < 768);
+    const onResize = () => setMobile(window.innerWidth < 900);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -370,6 +390,11 @@ export function AppShell() {
   const systemMenuActive = systemModules.some((module) => selectedKeys.includes(`/${module.id}`));
   const profileMenuActive = selectedKeys.includes("/profile");
   const contextTabs = current ? SUBMENU_ITEMS[current.id] : undefined;
+  const surfaceKind = ["dashboard", "ai"].includes(current?.id ?? "")
+    ? "cockpit"
+    : ["analytics", "content", "monitoring", "market", "growth-lab", "ops-knowledge"].includes(current?.id ?? "")
+      ? "analysis"
+      : "management";
 
   const handleMenuClick: MenuProps["onClick"] = ({ key }) => navigate(key);
 
@@ -437,7 +462,7 @@ export function AppShell() {
   const secondaryText = "var(--ops-text-3)";
 
   return (
-    <Layout style={{ minHeight: "100vh", background: "transparent" }}>
+    <Layout style={{ minHeight: "100dvh", background: "transparent" }}>
       <Sider
         collapsed={mobile || collapsed}
         width={224}
@@ -445,7 +470,7 @@ export function AppShell() {
         theme={darkSider ? "dark" : "light"}
         trigger={null}
         style={{
-          height: "100vh",
+          height: "100dvh",
           position: "fixed",
           left: 0,
           top: 0,
@@ -656,7 +681,6 @@ export function AppShell() {
       <Layout
         style={{
           marginLeft: mobile ? 0 : siderWidth,
-          transition: "margin-left .2s",
           background: "transparent",
         }}
       >
@@ -683,18 +707,9 @@ export function AppShell() {
               工作台 <span style={{ padding: "0 5px", color: "var(--ops-text-3)" }}>/</span>
               <span style={{ color: "var(--ops-text)", fontWeight: 600 }}>{currentChild?.label ?? current?.name ?? "总览"}</span>
             </Text>
-            <Tooltip title={isFav ? "取消收藏" : "收藏到常用"}>
-              <Button
-                type="text"
-                size="small"
-                aria-label={isFav ? "取消收藏" : "收藏本页"}
-                icon={isFav ? <StarFilled style={{ color: "var(--ops-warn)" }} /> : <StarOutlined />}
-                onClick={() => toggleFav(location.pathname)}
-              />
-            </Tooltip>
           </div>
 
-          <Space className="ops-header-actions" size={14} align="center">
+          <Space className="ops-header-actions" size={8} align="center">
             {!mobile && canAccessModule(user, "stores") && stores.length > 0 && (
               <Select
                 value={currentStore?.id ?? undefined}
@@ -705,25 +720,7 @@ export function AppShell() {
                 style={{ width: mobile ? 130 : 190 }}
               />
             )}
-{!mobile && (<Input value={keyword} onChange={(event) => setKeyword(event.target.value)} onPressEnter={handleSearch} prefix={<SearchOutlined style={{ color: "var(--ops-text-secondary)" }} />} placeholder="搜索模块，回车直达" allowClear style={{ width: 220, borderRadius: 999 }} />)}
-{!mobile && (<span className="ops-pill"><span className={`ops-dot ops-dot--${statusClass}`} />{statusLabel}</span>)}
             <SyncCenter compact={mobile} />
-            {!mobile ? <OperationHistory /> : null}
-            <Tooltip title={themeMode === "dark" ? "切换为浅色模式" : "切换为暗色模式"}>
-              <Button
-                type="text"
-                aria-label="切换主题"
-                icon={
-                  themeMode === "dark" ? (
-                    <SunOutlined style={{ fontSize: 16 }} />
-                  ) : (
-                    <MoonOutlined style={{ fontSize: 16 }} />
-                  )
-                }
-                onClick={toggleTheme}
-                style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
-              />
-            </Tooltip>
             <Popover
               placement="bottomRight"
               trigger="click"
@@ -768,6 +765,52 @@ export function AppShell() {
                 </Badge>
               </Tooltip>
             </Popover>
+            {!mobile ? (
+              <Popover
+                placement="bottomRight"
+                trigger="click"
+                content={(
+                  <div className="ops-header-more">
+                    <div className="ops-header-more__section">
+                      <Text className="ops-header-more__label" type="secondary">查找功能</Text>
+                      <Input
+                        value={keyword}
+                        onChange={(event) => setKeyword(event.target.value)}
+                        onPressEnter={handleSearch}
+                        prefix={<SearchOutlined />}
+                        placeholder="输入模块名称，回车直达"
+                        allowClear
+                      />
+                    </div>
+                    <div className="ops-header-more__status">
+                      <span><span className={`ops-dot ops-dot--${statusClass}`} />系统服务</span>
+                      <Text type="secondary">{statusLabel}</Text>
+                    </div>
+                    <div className="ops-header-more__actions">
+                      <Button
+                        type="text"
+                        icon={isFav ? <StarFilled style={{ color: "var(--ops-warn)" }} /> : <StarOutlined />}
+                        onClick={() => toggleFav(location.pathname)}
+                      >
+                        {isFav ? "取消常用" : "加入常用"}
+                      </Button>
+                      <OperationHistory />
+                      <Button
+                        type="text"
+                        icon={themeMode === "dark" ? <SunOutlined /> : <MoonOutlined />}
+                        onClick={toggleTheme}
+                      >
+                        {themeMode === "dark" ? "浅色模式" : "深色模式"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              >
+                <Tooltip title="更多工具">
+                  <Button type="text" aria-label="更多工具" icon={<MoreOutlined style={{ fontSize: 18 }} />} />
+                </Tooltip>
+              </Popover>
+            ) : null}
             <div className="ops-header-divider" style={{ width: 1, height: 24, background: borderColor }} />
             <Dropdown menu={{ items: userMenu }} placement="bottomRight" trigger={["click"]}>
               <Space className="ops-header-user" size={9} align="center" style={{ cursor: "pointer" }}>
@@ -799,11 +842,12 @@ export function AppShell() {
         ) : null}
 
         <Content
+          className="ops-app-content"
           style={{
-            padding: mobile ? 12 : 24,
-            minHeight: "calc(100vh - 64px)",
+            padding: mobile ? 12 : "20px 24px 32px",
+            minHeight: "calc(100dvh - 64px)",
             overflow: "auto",
-            maxWidth: 1560,
+            maxWidth: 1480,
             margin: "0 auto",
             width: "100%",
           }}
@@ -812,7 +856,7 @@ export function AppShell() {
             <Alert
               type="warning"
               showIcon
-              message={`系统维护中：${maintenance.reason || "后台任务维护"}`}
+              title={`系统维护中：${maintenance.reason || "后台任务维护"}`}
               description={`已暂停 ${maintenance.pause_tasks.length} 项后台任务，${maintenance.ends_at ? `预计 ${new Date(maintenance.ends_at).toLocaleString("zh-CN", { hour12: false })} 自动恢复` : "由管理员手动恢复"}。页面浏览和正在执行的任务不受影响。`}
               action={(user?.role === "admin" || user?.role === "super_admin") ? <Button size="small" onClick={() => navigate("/tasks")}>查看设置</Button> : undefined}
               style={{ marginBottom: 16 }}
@@ -820,12 +864,55 @@ export function AppShell() {
           ) : null}
           {contextTabs ? (
             <div className="ops-context-tabs">
-              <Tabs
-                activeKey={location.pathname}
-                items={contextTabs.map((item) => ({ key: item.key, label: item.label }))}
-                onChange={navigate}
-                size="small"
-              />
+              {current?.id === "promotions" ? (
+                <nav className="ops-promotion-nav" aria-label="推广管理工作区">
+                  <div className="ops-promotion-nav__primary">
+                    {contextTabs.filter((item) => PROMOTION_PRIMARY_KEYS.has(item.key)).map((item) => {
+                      const active = isPromotionPathActive(location.pathname, item.key);
+                      return (
+                        <Button
+                          key={item.key}
+                          type="text"
+                          className={active ? "ops-promotion-nav__item is-active" : "ops-promotion-nav__item"}
+                          aria-current={active ? "page" : undefined}
+                          onClick={() => navigate(item.key)}
+                        >
+                          {PROMOTION_SHORT_LABELS[item.key] ?? item.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                  <Dropdown
+                    trigger={["click"]}
+                    placement="bottomRight"
+                    menu={{
+                      items: contextTabs
+                        .filter((item) => !PROMOTION_PRIMARY_KEYS.has(item.key))
+                        .map((item) => ({ key: item.key, label: item.label })),
+                      selectedKeys: contextTabs
+                        .filter((item) => !PROMOTION_PRIMARY_KEYS.has(item.key) && isPromotionPathActive(location.pathname, item.key))
+                        .map((item) => item.key),
+                      onClick: ({ key }) => navigate(key),
+                    }}
+                  >
+                    <Button
+                      type="text"
+                      icon={<MoreOutlined />}
+                      className={contextTabs.some((item) => !PROMOTION_PRIMARY_KEYS.has(item.key) && isPromotionPathActive(location.pathname, item.key)) ? "ops-promotion-nav__more is-active" : "ops-promotion-nav__more"}
+                      aria-label="更多推广管理页面"
+                    >
+                      更多
+                    </Button>
+                  </Dropdown>
+                </nav>
+              ) : (
+                <Tabs
+                  activeKey={location.pathname}
+                  items={contextTabs.map((item) => ({ key: item.key, label: item.label }))}
+                  onChange={navigate}
+                  size="small"
+                />
+              )}
             </div>
           ) : null}
           {announcements.length > 0 && (
@@ -833,12 +920,12 @@ export function AppShell() {
               type="info"
               showIcon
               closable
-              message={announcements[0].title}
+              title={announcements[0].title}
               description={announcements[0].content || undefined}
               style={{ marginBottom: 16 }}
             />
           )}
-          <div className="ops-fade-in">
+          <div className={`ops-fade-in ops-shell-surface ops-shell-surface--${surfaceKind} ops-route-${current?.id ?? "dashboard"}`}>
             <ErrorBoundary>
               <Outlet />
             </ErrorBoundary>

@@ -1,4 +1,4 @@
-import { BarChartOutlined, FullscreenOutlined, FundOutlined, HistoryOutlined, MoneyCollectOutlined, ReloadOutlined, RiseOutlined, SearchOutlined, ShoppingOutlined, SyncOutlined, TeamOutlined, WarningOutlined } from "@ant-design/icons";
+import { FullscreenOutlined, HistoryOutlined, ReloadOutlined, SearchOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, Col, Dropdown, Empty, Row, Space, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -7,8 +7,8 @@ import { useNavigate } from "react-router-dom";
 import http, { getApiErrorMessage } from "../lib/api";
 import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
-import { PageHeader } from "../components/ui/page-header";
 import { LoadingBlock } from "../components/ui/page-state";
+import { DecisionBand, MetricRail, WorkspacePage, WorkspaceToolbar } from "../components/ui/workspace-template";
 import { StoreScopeSelect, useSyncStores } from "../components/analytics/analytics-ui";
 import type { AnalyticsSummary } from "../types";
 
@@ -72,22 +72,35 @@ export function AnalyticsOverviewPage() {
     }
   };
 
+  const salesChange = today?.kpi.compare.sales;
+  const decisionTitle = today
+    ? salesChange == null
+      ? `今日已成交 ¥${today.kpi.sales.toLocaleString()}，继续关注实时经营变化`
+      : `今日销售额较昨日同时段${salesChange >= 0 ? "上涨" : "下降"} ${Math.abs(salesChange)}%`
+    : "同步今日数据，建立实时经营判断";
+  const decisionDescription = today
+    ? `当前 ${today.kpi.visitors.toLocaleString()} 位访客，转化率 ${today.kpi.conversion_rate}%，真实 ROI ${today.promo.real_roi?.toFixed(2) ?? "暂无"}，退款率 ${today.refund.rate}%。`
+    : "汇总成交、流量、推广、退款与商品异动，快速确认今天最需要关注的经营环节。";
+
   return (
-    <div className="ops-overview-page">
-      <PageHeader
-        icon={<BarChartOutlined />}
-        eyebrow="数据洞察"
-        title="今日总览"
-        extra={
-          <div className="ops-overview-controls">
-            <Text className="ops-overview-updated" type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
-            <span className="ops-overview-store"><StoreScopeSelect value={storeId} onChange={setStoreId} /></span>
-            <Button className="ops-overview-action" icon={<FullscreenOutlined />} onClick={() => navigate("/board")}>
-              大屏模式
-            </Button>
-            <Button className="ops-overview-action" icon={<ReloadOutlined />} onClick={load}>
-              刷新
-            </Button>
+    <WorkspacePage kind="analysis" className="ops-overview-page">
+      <DecisionBand
+        ariaLabel="今日经营结论"
+        eyebrow="数据洞察 · 今日经营判断"
+        title={decisionTitle}
+        description={decisionDescription}
+        action={<Button type="primary" icon={<FullscreenOutlined />} onClick={() => navigate("/board")}>进入大屏</Button>}
+      />
+
+      <WorkspaceToolbar>
+        <StoreScopeSelect value={storeId} onChange={setStoreId} />
+        <Text className="ops-filter-bar__meta" type="secondary">
+          最近更新 {lastUpdated || "—"}
+          {summary?.last_sync ? ` · 最近同步 ${dayjs(summary.last_sync).format("YYYY-MM-DD HH:mm:ss")} · ${summary.store_count} 家店铺` : ""}
+        </Text>
+        <Button icon={<ReloadOutlined />} onClick={load}>
+          刷新
+        </Button>
             <Dropdown
               menu={{
                 items: [
@@ -98,22 +111,14 @@ export function AnalyticsOverviewPage() {
                 onClick: ({ key }) => syncHistory(Number(key)),
               }}
             >
-              <Button className="ops-overview-action" icon={<HistoryOutlined />} loading={syncingHistory}>
+              <Button icon={<HistoryOutlined />} loading={syncingHistory}>
                 补历史数据
               </Button>
             </Dropdown>
-            <Button className="ops-overview-action ops-overview-action--primary" type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
-              同步店铺数据
-            </Button>
-          </div>
-        }
-      />
-
-      {summary?.last_sync && (
-        <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
-          最近同步：{dayjs(summary.last_sync).format("YYYY-MM-DD HH:mm:ss")} · 已配置 {summary.store_count} 家店铺
-        </Text>
-      )}
+        <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>
+          同步店铺数据
+        </Button>
+      </WorkspaceToolbar>
 
       {loading && !summary ? (
         <LoadingBlock />
@@ -121,48 +126,24 @@ export function AnalyticsOverviewPage() {
         <>
           {today ? (
             <>
-              <Row className="ops-overview-kpis" gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                {[
-                  { label: "今日销售额", value: `¥${today.kpi.sales.toLocaleString()}`, cmp: today.kpi.compare.sales, cmpText: "较昨日同时段", color: "var(--ops-accent)", icon: <BarChartOutlined /> },
-                  { label: "今日买家数", value: (today.kpi.buyers ?? today.funnel.buyers).toLocaleString(), cmp: null, cmpText: "支付买家数（实时）", color: "var(--ops-success)", icon: <ShoppingOutlined /> },
-                  { label: "今日访客", value: today.kpi.visitors.toLocaleString(), cmp: today.kpi.compare.visitors, cmpText: "较昨日同时段", color: "var(--ops-cat-2)", icon: <TeamOutlined /> },
-                  { label: "今日转化率", value: `${today.kpi.conversion_rate}%`, cmp: null, cmpText: `客单价 ¥${today.kpi.avg_order_value}`, color: "var(--ops-warn)", icon: <RiseOutlined /> },
-                  { label: "今日真实ROI", value: today.promo.real_roi != null ? today.promo.real_roi.toFixed(2) : "—", cmp: null, cmpText: today.promo.yesterday_real_roi != null ? `昨日同时段 ${today.promo.yesterday_real_roi.toFixed(2)}` : "昨日无推广数据", color: "var(--ops-success)", icon: <FundOutlined /> },
-                  { label: "今日退款", value: `¥${today.refund.amount.toLocaleString()}`, cmp: today.refund.cycle, cmpText: `较昨日同时段 · 退款率 ${today.refund.rate}%`, color: "var(--ops-danger)", icon: <WarningOutlined /> },
-                  { label: "今日净支付金额", value: `¥${(today.kpi.sales - today.refund.amount).toLocaleString()}`, cmp: null, cmpText: `总成交 ¥${today.kpi.sales.toLocaleString()} − 退款 ¥${today.refund.amount.toLocaleString()}`, color: "var(--ops-cat-4)", icon: <MoneyCollectOutlined /> },
-                  { label: "今日客单价", value: `¥${today.kpi.avg_order_value.toLocaleString()}`, cmp: null, cmpText: "销售额 ÷ 买家数", color: "var(--ops-accent)", icon: <MoneyCollectOutlined /> },
-                ].map((card) => (
-                  <Col xs={12} sm={6} key={card.label}>
-                    <Card
-                      className="ops-overview-kpi-card"
-                      variant="borderless"
-                      style={{
-                        boxShadow: "var(--ops-shadow-sm)",
-                        borderRadius: "var(--ops-radius-lg)",
-                        borderLeft: `3px solid ${card.color}`,
-                        background: "var(--ops-card-bg)",
-                      }}
-                    >
-                      <Space size={6} style={{ color: card.color }}>
-                        {card.icon}
-                        <Text type="secondary" style={{ fontSize: 12 }}>{card.label}</Text>
-                      </Space>
-                      <div className="ops-overview-kpi-value" style={{ fontSize: 26, fontWeight: 700, marginTop: 4, letterSpacing: -0.5 }}>{card.value}</div>
-                      {card.cmp !== null && card.cmp !== undefined ? (
-                        <Tag style={{ marginTop: 6, fontSize: 12 }} color={(card.cmp ?? 0) >= 0 ? "red" : "green"}>
-                          {(card.cmp ?? 0) >= 0 ? "▲" : "▼"} {Math.abs(card.cmp ?? 0)}% · {card.cmpText}
-                        </Tag>
-                      ) : (
-                        <Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: "block" }}>{card.cmpText}</Text>
-                      )}
-                    </Card>
-                  </Col>
-                ))}
-              </Row>
+              <MetricRail
+                columns={4}
+                items={[
+                  { label: "今日销售额", value: `¥${today.kpi.sales.toLocaleString()}`, hint: today.kpi.compare.sales == null ? "暂无昨日对比" : `较昨日同时段 ${today.kpi.compare.sales >= 0 ? "+" : ""}${today.kpi.compare.sales}%` },
+                  { label: "今日买家数", value: (today.kpi.buyers ?? today.funnel.buyers).toLocaleString(), hint: "支付买家数（实时）" },
+                  { label: "今日访客", value: today.kpi.visitors.toLocaleString(), hint: today.kpi.compare.visitors == null ? "暂无昨日对比" : `较昨日同时段 ${today.kpi.compare.visitors >= 0 ? "+" : ""}${today.kpi.compare.visitors}%` },
+                  { label: "今日转化率", value: `${today.kpi.conversion_rate}%`, hint: `客单价 ¥${today.kpi.avg_order_value.toLocaleString()}` },
+                  { label: "今日真实 ROI", value: today.promo.real_roi?.toFixed(2) ?? "—", hint: today.promo.yesterday_real_roi != null ? `昨日同时段 ${today.promo.yesterday_real_roi.toFixed(2)}` : "昨日无推广数据" },
+                  { label: "今日退款", value: `¥${today.refund.amount.toLocaleString()}`, hint: `较昨日同时段 ${today.refund.cycle == null ? "—" : `${today.refund.cycle >= 0 ? "+" : ""}${today.refund.cycle}%`} · 退款率 ${today.refund.rate}%`, tone: "var(--ops-danger)" },
+                  { label: "今日净支付金额", value: `¥${(today.kpi.sales - today.refund.amount).toLocaleString()}`, hint: "成交金额扣除退款" },
+                  { label: "今日客单价", value: `¥${today.kpi.avg_order_value.toLocaleString()}`, hint: "销售额 ÷ 买家数" },
+                ]}
+                style={{ marginBottom: 16 }}
+              />
 
               <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col xs={24} lg={12}>
-                  <Card variant="borderless" title="今日推广" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
+                  <Card variant="borderless" title="今日推广" style={{ height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     <Row gutter={[12, 12]}>
                       <Col span={8}>
                         <div style={{ background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius)", padding: "10px 12px" }}>
@@ -201,7 +182,7 @@ export function AnalyticsOverviewPage() {
                   </Card>
                 </Col>
                 <Col xs={24} lg={12}>
-                  <Card variant="borderless" title="今日转化漏斗" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
+                  <Card variant="borderless" title="今日转化漏斗" style={{ height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     {[
                       { label: "访客", value: today.funnel.visitors, rate: null as number | null, color: "var(--ops-accent)" },
                       { label: "收藏", value: today.funnel.collect, rate: today.funnel.collect_rate, color: "var(--ops-cat-2)" },
@@ -211,7 +192,7 @@ export function AnalyticsOverviewPage() {
                       <div key={step.label} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
                         <Text style={{ width: 64, fontSize: 13 }}>{step.label}</Text>
                         <div style={{ flex: 1, height: 22, background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius-xs)", position: "relative", overflow: "hidden" }}>
-                          <div style={{ width: `${idx === 0 ? 100 : Math.max((step.value / Math.max(today.funnel.visitors, 1)) * 100, 6)}%`, height: "100%", background: `linear-gradient(90deg, ${step.color}, color-mix(in srgb, ${step.color} 55%, transparent))`, borderRadius: "var(--ops-radius-xs)" }} />
+                          <div style={{ width: `${idx === 0 ? 100 : Math.max((step.value / Math.max(today.funnel.visitors, 1)) * 100, 6)}%`, height: "100%", background: step.color, borderRadius: "var(--ops-radius-xs)" }} />
                         </div>
                         <Text strong style={{ width: 116, textAlign: "right", fontSize: 13 }}>{step.value.toLocaleString()}{step.rate !== null ? ` (${step.rate}%)` : ""}</Text>
                       </div>
@@ -223,7 +204,7 @@ export function AnalyticsOverviewPage() {
 
               <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col xs={24} md={12}>
-                  <Card variant="borderless" title="今日流量结构" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
+                  <Card variant="borderless" title="今日流量结构" style={{ height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     {today.flow.has_data ? (
                       <>
                         <Space size={8}>
@@ -232,7 +213,7 @@ export function AnalyticsOverviewPage() {
                         </Space>
                         <Text type="secondary" style={{ display: "block", marginTop: 4 }}>搜索引导（{today.flow.search_uv.toLocaleString()} 访客）{today.flow.data_date ? ` · ${today.flow.data_date} 数据` : ""}</Text>
                         <div style={{ marginTop: 10, height: 10, background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius-xs)", overflow: "hidden" }}>
-                          <div style={{ width: `${today.flow.search_share}%`, height: "100%", background: "linear-gradient(90deg,var(--ops-accent),var(--ops-accent-light))", borderRadius: "var(--ops-radius-xs)" }} />
+                          <div style={{ width: `${today.flow.search_share}%`, height: "100%", background: "var(--ops-accent)", borderRadius: "var(--ops-radius-xs)" }} />
                         </div>
                                                 <Text style={{ fontSize: 13, marginTop: 6, display: "block" }}>其他渠道 {today.flow.other_share}%</Text>
                         {today.flow.sources.length > 0 && (
@@ -242,7 +223,7 @@ export function AnalyticsOverviewPage() {
                               <div key={s.rank} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                                 <Text style={{ width: 56, fontSize: 12, flexShrink: 0 }} ellipsis>{s.source}</Text>
                                 <div style={{ flex: 1, height: 10, background: "var(--ops-card-bg-2)", borderRadius: "var(--ops-radius-xs)", overflow: "hidden" }}>
-                                  <div style={{ width: `${Math.min((s.uv / Math.max(today.flow.sources[0]?.uv ?? 1, 1)) * 100, 100)}%`, height: "100%", background: "linear-gradient(90deg,var(--ops-accent),var(--ops-accent-light))", borderRadius: "var(--ops-radius-xs)" }} />
+                                  <div style={{ width: `${Math.min((s.uv / Math.max(today.flow.sources[0]?.uv ?? 1, 1)) * 100, 100)}%`, height: "100%", background: "var(--ops-accent)", borderRadius: "var(--ops-radius-xs)" }} />
                                 </div>
                                 <Text style={{ width: 60, fontSize: 12, textAlign: "right" }}>{s.uv.toLocaleString()}</Text>
                               </div>
@@ -251,12 +232,14 @@ export function AnalyticsOverviewPage() {
                         )}
                       </>
                     ) : (
-                      <Empty description="实时档暂无搜索引导数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                      <Empty description="实时档暂无搜索引导数据" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+                        <Button icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>同步店铺数据</Button>
+                      </Empty>
                     )}
                   </Card>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Card variant="borderless" title="今日说明" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
+                  <Card variant="borderless" title="今日说明" style={{ height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.9 }}>
                       今日数据截至当前小时，较昨日同时段对比；KPI 来自店铺分时表，漏斗/爆款基于商品实时榜，流量/退款来自生意参谋实时接口（流量看板 / 首页-数据概括-完结时间），每 3 分钟自动刷新。
                     </Text>
@@ -266,7 +249,7 @@ export function AnalyticsOverviewPage() {
 
               <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col xs={24} md={12}>
-                  <Card variant="borderless" title="今日爆款（较昨日同时段上涨）" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
+                  <Card variant="borderless" title="今日爆款（较昨日同时段上涨）" style={{ height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     {today.movers.risers.length === 0 ? (
                       <Empty description="暂无" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     ) : (
@@ -284,7 +267,7 @@ export function AnalyticsOverviewPage() {
                   </Card>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Card variant="borderless" title="今日暴跌（较昨日同时段下跌）" style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
+                  <Card variant="borderless" title="今日暴跌（较昨日同时段下跌）" style={{ height: "100%", borderRadius: "var(--ops-radius-lg)" }}>
                     {today.movers.fallers.length === 0 ? (
                       <Empty description="暂无" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     ) : (
@@ -303,14 +286,22 @@ export function AnalyticsOverviewPage() {
                 </Col>
               </Row>
             </>
-          ) : null}
+          ) : (
+            <Card variant="borderless">
+              <Empty description="今日实时数据暂未生成">
+                <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>同步店铺数据</Button>
+              </Empty>
+            </Card>
+          )}
 
         </>
       ) : (
         <Card variant="borderless">
-          <Empty description="还没有数据，点击右上角「同步店铺数据」抓取生意参谋数据" />
+          <Empty description="还没有经营数据">
+            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncAll}>同步店铺数据</Button>
+          </Empty>
         </Card>
       )}
-    </div>
+    </WorkspacePage>
   );
 }

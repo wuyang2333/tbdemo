@@ -28,7 +28,7 @@ const SUGGESTIONS = [
 function bubbleStyle(role: "user" | "assistant") {
   if (role === "user") {
     return {
-      maxWidth: "76%",
+      maxWidth: "100%",
       padding: "11px 15px",
       borderRadius: "var(--ops-radius-lg)",
       borderTopRightRadius: 4,
@@ -41,7 +41,7 @@ function bubbleStyle(role: "user" | "assistant") {
     };
   }
   return {
-    maxWidth: "82%",
+    maxWidth: "100%",
     padding: "12px 56px 12px 16px",
     borderRadius: "var(--ops-radius-lg)",
     borderTopLeftRadius: 4,
@@ -141,13 +141,15 @@ export function AiPage() {
         icon={<RobotOutlined />}
         eyebrow="AI 运营助手"
         title="AI 助手"
+        description="围绕店铺数据提问、生成运营文案，并通过追问持续完善结果。"
+        stackActions
         extra={
-          <Space>
+          <Space wrap>
             {models.length > 0 && (
               <Select
                 value={modelId}
                 onChange={setModelId}
-                style={{ minWidth: 180 }}
+                style={{ width: 180, maxWidth: "100%" }}
                 placeholder="选择模型"
                 options={models.map((m) => ({
                   value: m.id,
@@ -180,24 +182,8 @@ export function AiPage() {
         <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px" }}>
           {messages.length === 0 ? (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100%", padding: "24px 0" }}>
-              <div
-                style={{
-                  width: 72,
-                  height: 72,
-                  borderRadius: "var(--ops-radius-lg)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 34,
-                  color: "var(--ops-accent)",
-                  background: "var(--ops-accent-soft)",
-                  marginBottom: 18,
-                }}
-              >
-                <RobotOutlined />
-              </div>
               <Text strong style={{ fontSize: 20, letterSpacing: -0.01 }}>
-                我是你的 AI 运营助手
+                从一个运营问题开始
               </Text>
               <Text type="secondary" style={{ marginTop: 6, fontSize: 14 }}>
                 可以问数据、写文案、给运营建议
@@ -243,7 +229,7 @@ export function AiPage() {
                       <RobotOutlined />
                     </div>
                   )}
-                  <div style={{ position: "relative", maxWidth: "82%" }}>
+                  <div style={{ position: "relative", maxWidth: "min(82%, 760px)" }}>
                     <div style={bubbleStyle(m.role)}>
                       {isUser ? m.content : <Markdown text={m.content} />}
                     </div>
@@ -357,7 +343,7 @@ export function AiPage() {
               onClick={() => send()}
             />
           </div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
               AI 回复可能有误，重要经营决策请以生意参谋为准
             </Text>
@@ -381,7 +367,7 @@ export function AiPage() {
               }
             }}
           />
-          <Space>
+          <Space wrap>
             <Button
               type="primary"
               disabled={!copyName.trim()}

@@ -1190,10 +1190,25 @@ def set_adgroups_status(biz_code: str, units: list[dict[str, Any]], status: str,
 
 def update_campaign_budget(biz_code: str, campaigns: list[dict[str, Any]],
                            cookies: dict[str, str]) -> dict[str, Any]:
-    """批量更新计划预算。campaigns 至少包含 campaignId 和 dayBudget。"""
+    """批量更新计划预算。
+
+    万相台要求每项同时携带 dmcType（normal=日预算，unlimited=不限预算）。
+    为兼容旧调用，缺失时按 dayBudget 是否大于 0 兜底。
+    """
     if not campaigns:
         raise ValueError("至少需要一个计划预算")
-    body = {"bizCode": biz_code, "budgetList": campaigns, "csrfId": ensure_csrf(cookies)}
+    normalized: list[dict[str, Any]] = []
+    for item in campaigns:
+        row = dict(item)
+        budget_type = str(row.get("dmcType") or "").strip().lower()
+        if budget_type not in {"normal", "unlimited"}:
+            try:
+                budget_type = "unlimited" if float(row.get("dayBudget") or 0) <= 0 else "normal"
+            except (TypeError, ValueError):
+                budget_type = "normal"
+        row["dmcType"] = budget_type
+        normalized.append(row)
+    body = {"bizCode": biz_code, "budgetList": normalized, "csrfId": ensure_csrf(cookies)}
     return _api_call(f"/campaign/budget/batchUpdate.json?bizCode={biz_code}",
                      body, method="POST", cookies=cookies)
 

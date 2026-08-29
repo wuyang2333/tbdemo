@@ -21,12 +21,13 @@ import {
   TagsOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Alert, Card, Col, Row, Space, Steps, Tag, Typography } from "antd";
+import { Button, Card, Space, Tag, Typography } from "antd";
 import type { ReactNode } from "react";
 
 import { PageHeader } from "../components/ui/page-header";
+import { DecisionBand, MetricRail, WorkspacePage, WorkspaceToolbar } from "../components/ui/workspace-template";
 
-const { Paragraph, Text, Title } = Typography;
+const { Text } = Typography;
 
 type WorkspaceSection = {
   workspace: string;
@@ -324,88 +325,85 @@ const SECTIONS: Record<string, WorkspaceSection> = {
 
 export function StrategyWorkspacePage({ sectionId }: { sectionId: string }) {
   const section = SECTIONS[sectionId] ?? SECTIONS.opportunities;
+  const firstCapability = section.capabilities[0] || "核心业务流程";
+  const firstOutput = section.outputs[0] || "业务结论";
+  const nextAction = `先确认「${firstCapability}」的数据口径，再接入真实数据并产出${firstOutput}。`;
 
   return (
-    <div>
+    <WorkspacePage kind="management">
       <PageHeader
         icon={section.icon}
         eyebrow={section.workspace}
         title={section.title}
         description={section.description}
-        extra={<Tag color="blue">框架已搭建</Tag>}
+        extra={<Tag color="blue">工作区框架</Tag>}
       />
 
-      <Alert
-        type="info"
-        showIcon
-        title="当前为功能框架版本"
-        description="页面入口、信息结构和后续建设范围已经就绪；真实数据接入、计算模型和业务动作将在后续迭代中逐步补充。"
-        style={{ marginBottom: 16 }}
+      <DecisionBand
+        ariaLabel={`${section.title}当前结论`}
+        eyebrow="当前结论 · 下一步"
+        title={section.objective}
+        description={nextAction}
+        action={<Button type="primary" href="#workspace-build-list">查看建设清单</Button>}
       />
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <Card variant="borderless" title="这个页面将解决什么问题" style={{ height: "100%" }}>
-            <Title level={4} style={{ marginTop: 0 }}>{section.objective}</Title>
-            <Paragraph type="secondary" style={{ marginBottom: 0, lineHeight: "24px" }}>
-              后续功能将围绕数据输入、业务判断、运营动作和结果验证四个环节展开，确保页面不只展示信息，还能推动实际经营决策。
-            </Paragraph>
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card variant="borderless" title="建设状态" style={{ height: "100%" }}>
-            <Steps
-              size="small"
-              direction="vertical"
-              current={0}
-              items={[
-                { title: "页面与导航框架", description: "已完成" },
-                { title: "数据源与指标口径", description: "待确认" },
-                { title: "核心业务流程", description: "待开发" },
-                { title: "自动化与智能建议", description: "后续迭代" },
-              ]}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <WorkspaceToolbar tone="action">
+        <Text strong>当前动作</Text>
+        <Tag color="blue">确认数据口径</Tag>
+        <Text type="secondary">之后依次完成真实数据接入、核心流程和结果验证；当前不会生成虚构业务结论。</Text>
+        <Text className="ops-filter-bar__meta">页面与导航已就绪</Text>
+      </WorkspaceToolbar>
 
-      <Card variant="borderless" title="核心能力规划" style={{ marginTop: 16 }}>
-        <Row gutter={[12, 12]}>
+      <MetricRail
+        columns={4}
+        items={[
+          { label: "建设进度", value: "1 / 4", hint: "页面框架已完成" },
+          { label: "核心能力", value: section.capabilities.length, hint: "待按价值顺序接入" },
+          { label: "数据输入", value: section.inputs.length, hint: "需确认来源与口径" },
+          { label: "业务产出", value: section.outputs.length, hint: "需进入验证闭环" },
+        ]}
+      />
+
+      <Card id="workspace-build-list" variant="borderless" title="工作区建设清单" extra={<Text type="secondary">按顺序推进，避免先做展示后补逻辑</Text>}>
+        <div className="ops-build-list">
           {section.capabilities.map((capability, index) => (
-            <Col xs={24} sm={12} xl={6} key={capability}>
-              <div
-                style={{
-                  height: "100%",
-                  padding: 16,
-                  border: "1px solid var(--ops-border)",
-                  borderRadius: "var(--ops-radius)",
-                  background: "var(--ops-panel-2)",
-                }}
-              >
-                <Text type="secondary" style={{ fontSize: 12 }}>能力 {index + 1}</Text>
-                <div style={{ marginTop: 6, fontWeight: 600 }}>{capability}</div>
+            <div
+              key={capability}
+              className="ops-build-list__row"
+              style={{ borderBottom: index === section.capabilities.length - 1 ? 0 : "1px solid var(--ops-border)" }}
+            >
+              <Text type="secondary" style={{ fontVariantNumeric: "tabular-nums" }}>{String(index + 1).padStart(2, "0")}</Text>
+              <div>
+                <Text strong style={{ display: "block" }}>{capability}</Text>
+                <Text type="secondary">状态：{index === 0 ? "下一步确认" : "等待前置能力"}</Text>
               </div>
-            </Col>
+              <div>
+                <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>需要的事实</Text>
+                <Space size={[6, 6]} wrap>
+                  {section.inputs.slice(index, index + 2).map((item) => <Tag key={item}>{item}</Tag>)}
+                </Space>
+              </div>
+              <div>
+                <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>形成的结果</Text>
+                <Text>{section.outputs[index] || section.outputs[section.outputs.length - 1]}</Text>
+              </div>
+            </div>
           ))}
-        </Row>
+        </div>
       </Card>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        <Col xs={24} lg={12}>
-          <Card variant="borderless" title="计划接入的数据">
-            <Space size={[8, 8]} wrap>
-              {section.inputs.map((item) => <Tag key={item}>{item}</Tag>)}
-            </Space>
-          </Card>
-        </Col>
-        <Col xs={24} lg={12}>
-          <Card variant="borderless" title="计划形成的产出">
-            <Space size={[8, 8]} wrap>
-              {section.outputs.map((item) => <Tag color="purple" key={item}>{item}</Tag>)}
-            </Space>
-          </Card>
-        </Col>
-      </Row>
-    </div>
+      <Card variant="borderless" title="数据与产出口径">
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+          <div>
+            <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>计划接入的数据</Text>
+            <Space size={[8, 8]} wrap>{section.inputs.map((item) => <Tag key={item}>{item}</Tag>)}</Space>
+          </div>
+          <div style={{ borderTop: "1px solid var(--ops-border)", paddingTop: 12 }}>
+            <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>计划形成的产出</Text>
+            <Space size={[8, 8]} wrap>{section.outputs.map((item) => <Tag color="blue" key={item}>{item}</Tag>)}</Space>
+          </div>
+        </Space>
+      </Card>
+    </WorkspacePage>
   );
 }

@@ -1,6 +1,8 @@
 ﻿import { Spin } from "antd";
 import { Suspense, lazy } from "react";
 import type { ReactNode } from "react";
+import { Alert, Button, Space } from "antd";
+import { useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { AppShell } from "../components/layout/app-shell";
@@ -28,9 +30,10 @@ const MonitoringPage = lazy(() => import("../pages/monitoring-page").then((m) =>
 const ProductsPage = lazy(() => import("../pages/products-page").then((m) => ({ default: m.ProductsPage })));
 const ProfilePage = lazy(() => import("../pages/profile-page").then((m) => ({ default: m.ProfilePage })));
 const PromotionsPlansPage = lazy(() => import("../pages/promotions-plans-page").then((m) => ({ default: m.PromotionsPlansPage })));
+const PromotionsPlanDetailPage = lazy(() => import("../pages/promotions-plan-detail-page").then((m) => ({ default: m.PromotionsPlanDetailPage })));
 const PromotionsOverviewPage = lazy(() => import("../pages/promotions-overview-page").then((m) => ({ default: m.PromotionsOverviewPage })));
 const PromotionsWorkflowPage = lazy(() => import("../pages/promotions-workflow-page").then((m) => ({ default: m.PromotionsWorkflowPage })));
-const PromotionsCollaborationPage = lazy(() => import("../pages/promotions-collaboration-page").then((m) => ({ default: m.PromotionsCollaborationPage })));
+const PromotionsExtensionsPage = lazy(() => import("../pages/promotions-extensions-page").then((m) => ({ default: m.PromotionsExtensionsPage })));
 const PromotionsReviewPage = lazy(() => import("../pages/promotions-review-page").then((m) => ({ default: m.PromotionsReviewPage })));
 const PromotionsCockpitPage = lazy(() => import("../pages/promotions-cockpit-page").then((m) => ({ default: m.PromotionsCockpitPage })));
 const PromotionsDiagnosticsPage = lazy(() => import("../pages/promotions-diagnostics-page").then((m) => ({ default: m.PromotionsDiagnosticsPage })));
@@ -42,9 +45,36 @@ const TeamPage = lazy(() => import("../pages/team-page").then((m) => ({ default:
 const TasksPage = lazy(() => import("../pages/tasks-page").then((m) => ({ default: m.TasksPage })));
 
 function PageFallback() {
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setTimedOut(true), 15000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  if (timedOut) {
+    return (
+      <div style={{ minHeight: "60vh", display: "grid", placeItems: "center", padding: 24 }}>
+        <Alert
+          type="warning"
+          showIcon
+          message="页面加载时间较长"
+          description="后端服务或网络响应较慢，页面还没有完成加载。可以重试，或先返回上一页。"
+          action={
+            <Space>
+              <Button size="small" onClick={() => window.history.back()}>返回上一页</Button>
+              <Button size="small" type="primary" onClick={() => window.location.reload()}>重新加载</Button>
+            </Space>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
-    <div style={{ minHeight: "60vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+    <div aria-busy="true" aria-live="polite" style={{ minHeight: "60vh", display: "flex", flexDirection: "column", gap: 12, alignItems: "center", justifyContent: "center" }}>
       <Spin size="large" />
+      <span style={{ color: "var(--ops-text-3)", fontSize: 13 }}>正在打开页面…</span>
     </div>
   );
 }
@@ -155,12 +185,14 @@ export function AppRouter() {
           <Route path="/promotions/overview" element={<RequireModule id="promotions"><PromotionsOverviewPage /></RequireModule>} />
           <Route path="/promotions/data" element={<Navigate to="/promotions/overview" replace />} />
           <Route path="/promotions/plans" element={<RequireModule id="promotions"><PromotionsPlansPage /></RequireModule>} />
+          <Route path="/promotions/plans/:planId" element={<RequireModule id="promotions"><PromotionsPlanDetailPage /></RequireModule>} />
           <Route path="/promotions/budget" element={<Navigate to="/promotions/overview" replace />} />
           <Route path="/promotions/decisions" element={<RequireModule id="promotions"><PromotionsWorkflowPage section="decision" /></RequireModule>} />
           <Route path="/promotions/validation" element={<RequireModule id="promotions"><PromotionsWorkflowPage section="validation" /></RequireModule>} />
           <Route path="/promotions/strategies" element={<RequireModule id="promotions"><PromotionsWorkflowPage section="strategies" /></RequireModule>} />
-          <Route path="/promotions/collaboration" element={<RequireModule id="promotions"><PromotionsCollaborationPage /></RequireModule>} />
+          <Route path="/promotions/collaboration" element={<Navigate to="/promotions/plans" replace />} />
           <Route path="/promotions/review" element={<RequireModule id="promotions"><PromotionsReviewPage /></RequireModule>} />
+          <Route path="/promotions/extensions" element={<RequireModule id="promotions"><PromotionsExtensionsPage /></RequireModule>} />
           <Route path="/promotions/assets" element={<RequireModule id="promotions"><StrategyWorkspacePage sectionId="promotion-assets" /></RequireModule>} />
           <Route path="/promotions/targets" element={<RequireModule id="promotions"><StrategyWorkspacePage sectionId="promotion-targets" /></RequireModule>} />
           <Route path="/promotions/experiments" element={<RequireModule id="promotions"><StrategyWorkspacePage sectionId="promotion-experiments" /></RequireModule>} />

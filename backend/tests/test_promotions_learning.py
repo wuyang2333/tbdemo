@@ -61,3 +61,24 @@ def test_learning_validates_parameters():
         learn_strategy_weights([], [], min_samples=0)
     with pytest.raises(ValueError, match="decay_days"):
         learn_strategy_weights([], [], decay_days=0)
+
+
+def test_learning_explains_and_downweights_interference_low_confidence_and_sparse_windows():
+    clean = learn_strategy_weights(
+        [],
+        [{"strategy_id": 1, "status": "success", "confidence": "high", "baseline_days": 3, "after_days": 3, "verified_at": "2026-08-27T00:00:00Z"}],
+        now=NOW,
+        min_samples=1,
+    )["strategy_weights"][0]
+    noisy = learn_strategy_weights(
+        [],
+        [{"strategy_id": 2, "status": "success", "confidence": "low", "interference_notes": "大促", "baseline_days": 1, "after_days": 1, "verified_at": "2026-08-27T00:00:00Z"}],
+        now=NOW,
+        min_samples=1,
+    )["strategy_weights"][0]
+
+    assert noisy["weight"] < clean["weight"]
+    assert noisy["interfered_count"] == 1
+    assert noisy["low_confidence_count"] == 1
+    assert noisy["sparse_window_count"] == 1
+    assert "这些证据已降权" in noisy["explanation"]

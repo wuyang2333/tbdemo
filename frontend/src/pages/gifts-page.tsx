@@ -32,6 +32,7 @@ import http, { getApiErrorMessage } from "../lib/api";
 import { PageFooter } from "../components/ui/page-footer";
 import { ColumnSettings, type ColDef } from "../components/ui/column-settings";
 import { PageHeader } from "../components/ui/page-header";
+import { MetricRail, WorkspaceToolbar } from "../components/ui/workspace-template";
 import type { Gift, GiftRemarkStatus, GiftReviewStatus, GiftSettleStatus, Store } from "../types";
 
 const { Text } = Typography;
@@ -973,10 +974,9 @@ export function GiftsPage() {
         }
       />
 
-      {tencentStatus?.enabled ? <Alert type={tencentStatus.last_error ? "warning" : "success"} showIcon message={tencentStatus.last_error || "腾讯文档自动同步已启用"} description={tencentStatus.last_sync_at ? `最近同步：${dayjs(tencentStatus.last_sync_at).format("YYYY-MM-DD HH:mm:ss")}` : "等待首次同步"} style={{ marginBottom: 16 }} /> : null}
+      {tencentStatus?.enabled ? <Alert type={tencentStatus.last_error ? "warning" : "success"} showIcon title={tencentStatus.last_error || "腾讯文档自动同步已启用"} description={tencentStatus.last_sync_at ? `最近同步：${dayjs(tencentStatus.last_sync_at).format("YYYY-MM-DD HH:mm:ss")}` : "等待首次同步"} style={{ marginBottom: 16 }} /> : null}
 
-      <Card variant="borderless" style={{ marginBottom: 16 }} styles={{ body: { padding: "12px 20px" } }}>
-        <Space size={12} wrap>
+      <WorkspaceToolbar>
           <Input
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
@@ -1058,47 +1058,14 @@ export function GiftsPage() {
               setColOrder(next.order);
             }}
           />
-        </Space>
-      </Card>
+      </WorkspaceToolbar>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={8}>
-          <Card variant="borderless" styles={{ body: { padding: "16px 20px" } }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>礼品单总数</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2 }}>{total}</div>
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card
-            variant="borderless"
-            onClick={() => setReviewFilter((current) => (current === "none" ? undefined : "none"))}
-            style={{
-              cursor: "pointer",
-              borderColor: reviewFilter === "none" ? "var(--ops-accent)" : undefined,
-              boxShadow: reviewFilter === "none" ? "0 0 0 1px var(--ops-accent)" : undefined,
-            }}
-            styles={{ body: { padding: "16px 20px" } }}
-          >
-            <Text type="secondary" style={{ fontSize: 12 }}>未评论{reviewFilter === "none" ? "（筛选中）" : ""}</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-warn)" }}>{unreviewed}</div>
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card
-            variant="borderless"
-            onClick={() => setSettleFilter((current) => (current === "unsettled" ? undefined : "unsettled"))}
-            style={{
-              cursor: "pointer",
-              borderColor: settleFilter === "unsettled" ? "var(--ops-accent)" : undefined,
-              boxShadow: settleFilter === "unsettled" ? "0 0 0 1px var(--ops-accent)" : undefined,
-            }}
-            styles={{ body: { padding: "16px 20px" } }}
-          >
-            <Text type="secondary" style={{ fontSize: 12 }}>未结款{settleFilter === "unsettled" ? "（筛选中）" : ""}</Text>
-            <div style={{ fontSize: 26, fontWeight: 700, marginTop: 2, color: "var(--ops-accent)" }}>{unsettled}</div>
-          </Card>
-        </Col>
-      </Row>
+      <MetricRail columns={4} items={[
+        { label: "礼品单总数", value: total, hint: "当前筛选范围" },
+        { label: "未评论", value: unreviewed, hint: reviewFilter === "none" ? "当前正在筛选" : "点击下方状态筛选", tone: "var(--ops-warn)" },
+        { label: "未结款", value: unsettled, hint: settleFilter === "unsettled" ? "当前正在筛选" : "需要继续跟进", tone: "var(--ops-accent)" },
+        { label: "当前状态", value: selectedKeys.length ? `已选 ${selectedKeys.length} 单` : "待处理", hint: selectedKeys.length ? "可执行批量操作" : "从列表选择订单" },
+      ]} />
 
       <Card variant="borderless">
         {selectedKeys.length > 0 && (

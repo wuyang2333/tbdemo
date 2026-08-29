@@ -1,11 +1,11 @@
-import { ReadOutlined } from "@ant-design/icons";
-import { Card, Col, Empty, Row, Spin, Tag, Typography, message } from "antd";
+import { Empty, Spin, Table, Tag, Typography, message } from "antd";
+import type { TableColumnsType } from "antd";
 import { useEffect, useState } from "react";
 
-import { PageHeader } from "../components/ui/page-header";
+import { DecisionBand, MetricRail, WorkspacePage } from "../components/ui/workspace-template";
 import http, { getApiErrorMessage } from "../lib/api";
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 type GlossaryItem = {
   metric: string;
@@ -43,61 +43,52 @@ export function AnalyticsGlossaryPage() {
     };
   }, []);
 
+  const items = groups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.group })));
+  const columns: TableColumnsType<GlossaryItem & { group: string }> = [
+    { title: "指标", dataIndex: "metric", key: "metric", width: 180, fixed: "left", render: (value: string) => <Text strong>{value}</Text> },
+    { title: "业务分组", dataIndex: "group", key: "group", width: 130, render: (value: string) => <Tag>{value}</Tag> },
+    { title: "数据来源", dataIndex: "source", key: "source", width: 180 },
+    { title: "时间粒度", dataIndex: "granularity", key: "granularity", width: 110, render: (value: string) => <Tag color="blue">{value}</Tag> },
+    { title: "存储位置", dataIndex: "table", key: "table", width: 180, render: (value: string) => <Text code>{value}</Text> },
+    { title: "刷新频率", dataIndex: "refresh", key: "refresh", width: 120 },
+    { title: "口径说明", dataIndex: "note", key: "note", ellipsis: true },
+  ];
+
   return (
-    <div>
-      <PageHeader icon={<ReadOutlined />} eyebrow="数据洞察" title="数据口径说明" />
-      <Paragraph type="secondary" style={{ marginTop: 0 }}>
-        统一说明每个指标的数据来源、时间口径、存储位置与刷新频率，方便核对数据是否对得上。
-      </Paragraph>
+    <WorkspacePage kind="analysis">
+      <DecisionBand
+        eyebrow="数据洞察 · 指标口径"
+        title="先对齐指标定义，再判断经营变化"
+        description="集中核对数据来源、时间粒度、存储位置与刷新频率，避免同名指标产生不同解释。"
+        ariaLabel="数据指标口径说明"
+      />
+
+      <MetricRail
+        columns={4}
+        items={[
+          { label: "业务分组", value: groups.length, hint: "按分析场景归类" },
+          { label: "指标总数", value: items.length, hint: "当前已登记口径" },
+          { label: "数据来源", value: new Set(items.map((item) => item.source)).size, hint: "去重后的来源数" },
+          { label: "刷新策略", value: new Set(items.map((item) => item.refresh)).size, hint: "不同更新频率" },
+        ]}
+      />
 
       {loading ? (
         <div style={{ padding: 48, textAlign: "center" }}>
           <Spin />
         </div>
       ) : groups.length === 0 ? (
-        <Empty description="暂无数据" />
+        <Empty description="暂无口径数据，请先检查数据源或稍后刷新" />
       ) : (
-        <Row gutter={[16, 16]}>
-          {groups.map((g) => (
-            <Col xs={24} lg={12} key={g.group}>
-              <Card
-                variant="borderless"
-                title={g.group}
-                style={{ boxShadow: "var(--ops-shadow-sm)", height: "100%", borderRadius: "var(--ops-radius-lg)" }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {g.items.map((it, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        border: "1px solid var(--ops-border, #e5e7eb)",
-                        borderRadius: "var(--ops-radius)",
-                        padding: "12px 14px",
-                        background: "var(--ops-card-bg-2, #fafafa)",
-                      }}
-                    >
-                      <Text strong style={{ fontSize: 14, display: "block", marginBottom: 6 }}>
-                        {it.metric}
-                      </Text>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px", fontSize: 13 }}>
-                        <Text type="secondary">来源：{it.source}</Text>
-                        <span>
-                          <Tag color="blue">{it.granularity}</Tag>
-                        </span>
-                        <Text type="secondary">存储：{it.table}</Text>
-                        <Text type="secondary">刷新：{it.refresh}</Text>
-                      </div>
-                      <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 6 }}>
-                        {it.note}
-                      </Text>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            </Col>
-          ))}
-        </Row>
+        <Table
+          rowKey={(record) => `${record.group}-${record.metric}`}
+          columns={columns}
+          dataSource={items}
+          pagination={false}
+          size="small"
+          scroll={{ x: 1050 }}
+        />
       )}
-    </div>
+    </WorkspacePage>
   );
 }

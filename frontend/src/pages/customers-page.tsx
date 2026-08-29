@@ -5,11 +5,11 @@ import {
   CommentOutlined,
   CopyOutlined,
   FileSearchOutlined,
+  MoreOutlined,
   ReloadOutlined,
   RobotOutlined,
-  WarningOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Popconfirm, Progress, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography, Upload, message } from "antd";
+import { Alert, Button, Card, Col, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, List, Modal, Popconfirm, Progress, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography, Upload, message } from "antd";
 import type { TableColumnsType, UploadProps } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -19,6 +19,7 @@ import http, { getApiErrorMessage } from "../lib/api";
 import { useStores } from "../lib/store";
 import { PageHeader } from "../components/ui/page-header";
 import { LoadingBlock } from "../components/ui/page-state";
+import { MetricRail, WorkspaceToolbar } from "../components/ui/workspace-template";
 
 const { Text, Paragraph } = Typography;
 
@@ -580,24 +581,30 @@ export function CustomersPage() {
         eyebrow="评价管理"
         title="评论分析"
         description="识别评价情绪、归纳商品问题、跟进差评处理"
-        stackActions
-        extra={<Space wrap><Select value={storeId} onChange={(value) => { setStoreId(value); setPage(1); }} allowClear placeholder="全部店铺" style={{ width: 150 }} options={stores.map((store) => ({ value: store.id, label: store.name }))} /><Select value={days} onChange={(value) => { setDays(value); setPage(1); }} options={[{ value: 7, label: "近 7 天" }, { value: 30, label: "近 30 天" }, { value: 90, label: "近 90 天" }]} style={{ width: 110 }} /><Button icon={<ReloadOutlined />} onClick={load}>刷新</Button><Button onClick={syncReviews} loading={syncing}>自动同步评论</Button><Button icon={<RobotOutlined />} onClick={reviewAmbiguousWithAi} loading={aiReviewLoading}>AI 复核{summary?.needs_review_count ? ` (${summary.needs_review_count})` : ""}</Button><Button icon={<RobotOutlined />} onClick={createAiSummary} loading={aiLoading}>AI 总结</Button><Button onClick={openInsights}>分析中心</Button><Button onClick={() => void openTerms()}>自定义词库</Button><Button onClick={() => void openKnowledge()}>问题知识库</Button><Button onClick={() => setAskOpen(true)}>评论问答</Button><Button onClick={() => editTemplate()}>回复模板</Button><Upload {...uploadProps}><Button type="primary" icon={<CloudUploadOutlined />} loading={importing}>导入 CSV</Button></Upload></Space>}
+        extra={<Space wrap><Button onClick={syncReviews} loading={syncing}>同步评论</Button><Button icon={<RobotOutlined />} onClick={reviewAmbiguousWithAi} loading={aiReviewLoading}>AI 复核{summary?.needs_review_count ? ` (${summary.needs_review_count})` : ""}</Button><Upload {...uploadProps}><Button type="primary" icon={<CloudUploadOutlined />} loading={importing}>导入 CSV</Button></Upload><Dropdown trigger={["click"]} menu={{ items: [{ key: "summary", label: "AI 总结", onClick: createAiSummary }, { key: "insights", label: "分析中心", onClick: openInsights }, { key: "ask", label: "评论问答", onClick: () => setAskOpen(true) }, { type: "divider" }, { key: "terms", label: "自定义词库", onClick: () => void openTerms() }, { key: "knowledge", label: "问题知识库", onClick: () => void openKnowledge() }, { key: "template", label: "回复模板", onClick: () => editTemplate() }] }}><Button icon={<MoreOutlined />} aria-label="更多评价工具" loading={aiLoading}>更多</Button></Dropdown></Space>}
       />
 
-      <Alert type={syncNotice ? "warning" : "info"} showIcon message={syncNotice || "每小时自动增量同步"} description="系统从千牛评价管理读取评论正文；新差评会自动生成回复草稿并等待人工审核，不会自动发布。差评预警可通过 PushPlus/Webhook 推送。" style={{ marginBottom: 16 }} />
+      <WorkspaceToolbar>
+        <Select value={storeId} onChange={(value) => { setStoreId(value); setPage(1); }} allowClear placeholder="全部店铺" style={{ width: 170 }} options={stores.map((store) => ({ value: store.id, label: store.name }))} />
+        <Select value={days} onChange={(value) => { setDays(value); setPage(1); }} options={[{ value: 7, label: "近 7 天" }, { value: 30, label: "近 30 天" }, { value: 90, label: "近 90 天" }]} style={{ width: 120 }} />
+        <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        <Text className="ops-filter-bar__meta">先处理待办评价，再进入趋势和知识分析</Text>
+      </WorkspaceToolbar>
 
-      {trendAlerts.length ? <Alert type="error" showIcon message={`${trendAlerts.length} 个评论趋势异常`} description={<List size="small" dataSource={trendAlerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={`${alert.store_name || "店铺"} · ${alert.level === "critical" ? "严重" : "预警"}`} description={alert.message} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
+      <Alert type={syncNotice ? "warning" : "info"} showIcon title={syncNotice || "每小时自动增量同步"} description="系统从千牛评价管理读取评论正文；新差评会自动生成回复草稿并等待人工审核，不会自动发布。差评预警可通过 PushPlus/Webhook 推送。" style={{ marginBottom: 16 }} />
+
+      {trendAlerts.length ? <Alert type="error" showIcon title={`${trendAlerts.length} 个评论趋势异常`} description={<List size="small" dataSource={trendAlerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={`${alert.store_name || "店铺"} · ${alert.level === "critical" ? "严重" : "预警"}`} description={alert.message} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
 
       {loading && !summary ? <LoadingBlock /> : summary ? <>
-        {summary.needs_review_count > 0 ? <Alert type="warning" showIcon message={`${summary.needs_review_count} 条评论情绪不明确`} description="这些评论存在正负冲突、隐含表达或没有明显情绪词，可点击“AI 复核”批量判断，也可在详情中人工确认。" style={{ marginBottom: 16 }} /> : null}
-        {alerts.length ? <Alert type="warning" showIcon message={`有 ${alerts.length} 条评论预警`} description={<List size="small" dataSource={alerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateAlert(alert, "acknowledged")}>已知悉</Button>]}><List.Item.Meta title={alert.title} description={`${alert.message} · ${alert.item_title || "未关联商品"}`} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
+        {summary.needs_review_count > 0 ? <Alert type="warning" showIcon title={`${summary.needs_review_count} 条评论情绪不明确`} description="这些评论存在正负冲突、隐含表达或没有明显情绪词，可点击“AI 复核”批量判断，也可在详情中人工确认。" style={{ marginBottom: 16 }} /> : null}
+        {alerts.length ? <Alert type="warning" showIcon title={`有 ${alerts.length} 条评论预警`} description={<List size="small" dataSource={alerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateAlert(alert, "acknowledged")}>已知悉</Button>]}><List.Item.Meta title={alert.title} description={`${alert.message} · ${alert.item_title || "未关联商品"}`} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
         {productSummary.length ? <Card variant="borderless" title="商品维度分析" style={{ marginBottom: 16 }}><Table<ProductSummary> size="small" rowKey="item_id" pagination={{ pageSize: 5 }} dataSource={productSummary.slice(0, 20)} columns={[{ title: "商品", dataIndex: "item_title", ellipsis: true }, { title: "评论数", dataIndex: "total", width: 80 }, { title: "差评数", dataIndex: "negative", width: 80 }, { title: "差评率", dataIndex: "negative_rate", width: 90, render: (value: number) => `${value}%` }]} /></Card> : null}
-        <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-          <Col xs={12} sm={6}><Card variant="borderless"><Statistic title="评论总数" value={summary.total} prefix={<CommentOutlined />} /></Card></Col>
-          <Col xs={12} sm={6}><Card variant="borderless"><Statistic title="好评率" value={summary.positive_rate} precision={1} suffix="%" valueStyle={{ color: "var(--ops-success)" }} /></Card></Col>
-          <Col xs={12} sm={6}><Card variant="borderless"><Statistic title="差评率" value={summary.negative_rate} precision={1} suffix="%" valueStyle={{ color: summary.negative_rate > 5 ? "var(--ops-danger)" : "var(--ops-warn)" }} /></Card></Col>
-          <Col xs={12} sm={6}><Card variant="borderless"><Statistic title="待处理重点" value={summary.pending_count} prefix={<WarningOutlined />} valueStyle={{ color: summary.pending_count ? "var(--ops-danger)" : "var(--ops-success)" }} /></Card></Col>
-        </Row>
+        <MetricRail columns={4} items={[
+          { label: "评论总数", value: summary.total, hint: `近 ${days} 天` },
+          { label: "好评率", value: `${summary.positive_rate.toFixed(1)}%`, hint: "正向评价占比", tone: "var(--ops-success)" },
+          { label: "差评率", value: `${summary.negative_rate.toFixed(1)}%`, hint: "需要持续观察", tone: summary.negative_rate > 5 ? "var(--ops-danger)" : "var(--ops-warn)" },
+          { label: "待处理重点", value: summary.pending_count, hint: "优先跟进", tone: summary.pending_count ? "var(--ops-danger)" : "var(--ops-success)" },
+        ]} />
         <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
           <Col xs={24} lg={15}><Card variant="borderless" title={`问题维度（近 ${days} 天）`}><Space wrap>{summary.top_aspects.length ? summary.top_aspects.map((item) => <Tag key={item.aspect} color={item.count >= 5 ? "red" : "gold"}>{item.aspect} {item.count}</Tag>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无问题标签" />}</Space></Card></Col>
           <Col xs={24} lg={9}><Card variant="borderless" title="评价结构"><Space direction="vertical" style={{ width: "100%" }}><div><Text>好评</Text><Progress percent={summary.total ? summary.positive / summary.total * 100 : 0} strokeColor="var(--ops-success)" format={(value) => `${value?.toFixed(1)}%`} /></div><div><Text>中评</Text><Progress percent={summary.total ? summary.neutral / summary.total * 100 : 0} strokeColor="var(--ops-warn)" format={(value) => `${value?.toFixed(1)}%`} /></div><div><Text>差评</Text><Progress percent={summary.total ? summary.negative / summary.total * 100 : 0} strokeColor="var(--ops-danger)" format={(value) => `${value?.toFixed(1)}%`} /></div></Space></Card></Col>

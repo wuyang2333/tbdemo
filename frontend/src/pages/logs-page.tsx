@@ -1,5 +1,5 @@
 import { HistoryOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Button, Card, Select, Space, Table, Tag, message } from "antd";
+import { Button, Card, Empty, Select, Space, Table, Tag, message } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -89,13 +89,15 @@ export function LogsPage() {
         icon={<HistoryOutlined />}
         eyebrow="审计中心"
         title="操作日志"
+        description="按模块追溯关键操作、操作人和执行详情。"
+        stackActions
         extra={
-          <Space>
+          <Space wrap>
             <Select
               value={module}
               onChange={setModule}
               options={MODULE_OPTIONS}
-              style={{ width: 160 }}
+              style={{ width: 160, maxWidth: "100%" }}
             />
             <Button icon={<ReloadOutlined />} onClick={load}>
               刷新
@@ -112,6 +114,13 @@ export function LogsPage() {
           dataSource={items}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100], showTotal: (count) => `共 ${count} 条` }}
           scroll={{ x: 900 }}
+          locale={{
+            emptyText: (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={module ? "当前模块暂无操作记录" : "暂无操作记录"}>
+                <Button onClick={module ? () => setModule("") : load}>{module ? "查看全部模块" : "刷新"}</Button>
+              </Empty>
+            ),
+          }}
         />
       </Card>
     </div>

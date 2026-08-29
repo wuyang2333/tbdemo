@@ -26,6 +26,53 @@ DEFAULT_ALERT_CONFIG = {
         "min_visitors": 50,
     },
     "plan": {"budget_over": 1.0, "budget_warn": 0.8, "roi_low": 1.0, "roi_drop_ratio": 0.6},
+    "diagnostics": {
+        "channels": {
+            "whole_site": True,
+            "search": True,
+            "audience": True,
+            "content": True,
+            "other": True,
+        },
+        "rules": {
+            "data_stale": {"enabled": True, "priority": "p1"},
+            "budget_over": {"enabled": True, "priority": "p0"},
+            "budget_near": {"enabled": True, "priority": "p2"},
+            "spend_without_sales": {"enabled": True, "priority": "p1"},
+            "roi_drop": {"enabled": True, "priority": "p1"},
+            "roi_low": {"enabled": True, "priority": "p1"},
+            "delivery_stopped": {"enabled": True, "priority": "p1"},
+            "no_spend": {"enabled": True, "priority": "p2"},
+            "delivery_slow": {"enabled": True, "priority": "p2"},
+            "low_spend": {"enabled": True, "priority": "p3"},
+            "high_roi_low_spend": {"enabled": True, "priority": "p2"},
+            "spend_too_fast": {"enabled": True, "priority": "p2"},
+        },
+        "thresholds": {
+            "spend_without_sales_min_spend": 50.0,
+            "roi_drop_min_spend": 20.0,
+            "roi_drop_high_drop_pct": 50.0,
+            "roi_drop_high_spend": 100.0,
+            "roi_low_min_spend": 50.0,
+            "roi_low_high_spend": 200.0,
+            "delivery_stopped_min_yesterday_spend": 50.0,
+            "delivery_slow_min_yesterday_spend": 50.0,
+        },
+        "priority_thresholds": {
+            "data_stale": {"p0": {"stale_hours": 72}, "p1": {"stale_hours": 24}, "p2": {"stale_hours": 12}},
+            "budget_over": {"p0": {"budget_utilization_pct": 120}, "p1": {"budget_utilization_pct": 100}, "p2": {"budget_utilization_pct": 90}},
+            "budget_near": {"p0": {"budget_utilization_pct": 110}, "p1": {"budget_utilization_pct": 100}, "p2": {"budget_utilization_pct": 80}},
+            "spend_without_sales": {"p0": {"spend": 300}, "p1": {"spend": 100}, "p2": {"spend": 50}},
+            "roi_drop": {"p0": {"drop_pct": 60, "spend": 300}, "p1": {"drop_pct": 40, "spend": 100}, "p2": {"drop_pct": 20, "spend": 50}},
+            "roi_low": {"p0": {"spend": 500}, "p1": {"spend": 200}, "p2": {"spend": 50}},
+            "delivery_stopped": {"p0": {"elapsed_pct": 75, "yesterday_spend": 300}, "p1": {"elapsed_pct": 55, "yesterday_spend": 100}, "p2": {"elapsed_pct": 40, "yesterday_spend": 50}},
+            "no_spend": {"p0": {"elapsed_pct": 80}, "p1": {"elapsed_pct": 65}, "p2": {"elapsed_pct": 40}},
+            "delivery_slow": {"p0": {"pace_gap_pct": 70}, "p1": {"pace_gap_pct": 50}, "p2": {"pace_gap_pct": 30}},
+            "low_spend": {"p2": {"pace_gap_pct": 50}, "p3": {"pace_gap_pct": 25}},
+            "high_roi_low_spend": {"p1": {"pace_gap_pct": 70}, "p2": {"pace_gap_pct": 40}, "p3": {"pace_gap_pct": 20}},
+            "spend_too_fast": {"p0": {"pace_gap_pct": 70}, "p1": {"pace_gap_pct": 40}, "p2": {"pace_gap_pct": 15}},
+        },
+    },
     "rules": [],
 }
 
@@ -63,7 +110,7 @@ def get_alert_config(db) -> dict:
     try:
         data = json.loads(row["value"])
         for group, fields in base.items():
-            if group == "rules":
+            if group in {"rules", "diagnostics"}:
                 continue
             src = data.get(group) or {}
             for k in fields:
@@ -71,6 +118,43 @@ def get_alert_config(db) -> dict:
                     fields[k] = float(src[k])
         if isinstance(data.get("rules"), list):
             base["rules"] = [_norm_rule(r) for r in data["rules"]]
+        diag = data.get("diagnostics") or {}
+        if isinstance(diag, dict):
+            src_channels = diag.get("channels") or {}
+            if isinstance(src_channels, dict):
+                for channel, default in base["diagnostics"]["channels"].items():
+                    if channel in src_channels and isinstance(src_channels[channel], bool):
+                        base["diagnostics"]["channels"][channel] = src_channels[channel]
+            src_rules = diag.get("rules") or {}
+            if isinstance(src_rules, dict):
+                for code, defaults in base["diagnostics"]["rules"].items():
+                    src = src_rules.get(code)
+                    if isinstance(src, dict):
+                        defaults["enabled"] = bool(src.get("enabled", defaults["enabled"]))
+                        priority = str(src.get("priority") or defaults["priority"]).lower()
+                        defaults["priority"] = priority if priority in {"p0", "p1", "p2", "p3"} else defaults["priority"]
+                        if "priority_mode" in src:
+                            mode = str(src.get("priority_mode") or "dynamic").lower()
+                            defaults["priority_mode"] = mode if mode in {"dynamic", "fixed"} else "dynamic"
+            src_thresholds = diag.get("thresholds") or {}
+            if isinstance(src_thresholds, dict):
+                for key, default in base["diagnostics"]["thresholds"].items():
+                    value = src_thresholds.get(key)
+                    if isinstance(value, (int, float)):
+                        base["diagnostics"]["thresholds"][key] = float(value)
+            src_priority_thresholds = diag.get("priority_thresholds") or {}
+            if isinstance(src_priority_thresholds, dict):
+                for code, defaults in base["diagnostics"]["priority_thresholds"].items():
+                    incoming = src_priority_thresholds.get(code)
+                    if not isinstance(incoming, dict):
+                        continue
+                    for priority, clauses in incoming.items():
+                        if priority not in {"p0", "p1", "p2", "p3"} or not isinstance(clauses, dict):
+                            continue
+                        defaults.setdefault(priority, {})
+                        for metric, value in clauses.items():
+                            if isinstance(value, (int, float)):
+                                defaults[priority][metric] = float(value)
     except (ValueError, TypeError):
         pass
     return base
@@ -88,6 +172,7 @@ class AlertConfigIn(BaseModel):
     hour: dict | None = None
     product: dict | None = None
     plan: dict | None = None
+    diagnostics: dict | None = None
     rules: list | None = None
 
 
@@ -118,6 +203,43 @@ def set_config(
         for k, v in body.plan.items():
             if k in cur["plan"]:
                 cur["plan"][k] = _clamp(v, 0.01, 10)
+    if body.diagnostics is not None and isinstance(body.diagnostics, dict):
+        incoming = body.diagnostics
+        incoming_channels = incoming.get("channels") or {}
+        if isinstance(incoming_channels, dict):
+            for channel in cur["diagnostics"]["channels"]:
+                if channel in incoming_channels and isinstance(incoming_channels[channel], bool):
+                    cur["diagnostics"]["channels"][channel] = incoming_channels[channel]
+        incoming_rules = incoming.get("rules") or {}
+        if isinstance(incoming_rules, dict):
+            for code, defaults in cur["diagnostics"]["rules"].items():
+                src = incoming_rules.get(code)
+                if isinstance(src, dict):
+                    defaults["enabled"] = bool(src.get("enabled", defaults["enabled"]))
+                    priority = str(src.get("priority") or defaults["priority"]).lower()
+                    if priority in {"p0", "p1", "p2", "p3"}:
+                        defaults["priority"] = priority
+                    if "priority_mode" in src:
+                        mode = str(src.get("priority_mode") or "dynamic").lower()
+                        if mode in {"dynamic", "fixed"}:
+                            defaults["priority_mode"] = mode
+        incoming_thresholds = incoming.get("thresholds") or {}
+        if isinstance(incoming_thresholds, dict):
+            for key in cur["diagnostics"]["thresholds"]:
+                if key in incoming_thresholds:
+                    cur["diagnostics"]["thresholds"][key] = _clamp(incoming_thresholds[key], 0.1, 100000)
+        incoming_priority_thresholds = incoming.get("priority_thresholds") or {}
+        if isinstance(incoming_priority_thresholds, dict):
+            for code, defaults in cur["diagnostics"]["priority_thresholds"].items():
+                incoming_rule = incoming_priority_thresholds.get(code)
+                if not isinstance(incoming_rule, dict):
+                    continue
+                for priority, clauses in incoming_rule.items():
+                    if priority not in {"p0", "p1", "p2", "p3"} or not isinstance(clauses, dict):
+                        continue
+                    defaults.setdefault(priority, {})
+                    for metric, value in clauses.items():
+                        defaults[priority][metric] = _clamp(value, 0, 100000)
     if body.rules is not None:
         cur["rules"] = [r for r in (_norm_rule(x) for x in body.rules) if r]
     db.execute(

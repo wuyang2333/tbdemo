@@ -64,6 +64,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN sub_account_quota INTEGER NOT NULL DEFAULT 2")
     if "store_quota" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN store_quota INTEGER NOT NULL DEFAULT 3")
+    # 万相台预算写入需要同时携带预算类型（dmcType）。老库没有该字段时，
+    # 现有有金额的计划按日预算处理；后续同步会用平台返回值覆盖。
+    try:
+        promo_cols = {row[1] for row in conn.execute("PRAGMA table_info(promo_plans)")}
+        if promo_cols and "budget_type" not in promo_cols:
+            conn.execute("ALTER TABLE promo_plans ADD COLUMN budget_type TEXT NOT NULL DEFAULT 'normal'")
+            conn.execute(
+                "UPDATE promo_plans SET budget_type = CASE WHEN COALESCE(day_budget, 0) <= 0 THEN 'unlimited' ELSE 'normal' END "
+                "WHERE TRIM(COALESCE(budget_type, '')) = '' OR (budget_type = 'normal' AND COALESCE(day_budget, 0) <= 0)"
+            )
+    except sqlite3.OperationalError:
+        pass
     try:
         tcols = {row[1] for row in conn.execute("PRAGMA table_info(tokens)")}
         if "expires_at" not in tcols:
@@ -98,6 +110,30 @@ def _migrate(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             active INTEGER NOT NULL DEFAULT 1
         )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS promo_ai_diagnoses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            diagnostic_id TEXT NOT NULL,
+            plan_id INTEGER NOT NULL,
+            store_id INTEGER NOT NULL,
+            channel TEXT NOT NULL DEFAULT '',
+            rule_code TEXT NOT NULL DEFAULT '',
+            data_fingerprint TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(user_id, diagnostic_id, data_fingerprint)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_promo_ai_diagnoses_lookup
+        ON promo_ai_diagnoses(user_id, diagnostic_id, updated_at DESC)
         """
     )
     conn.commit()
@@ -199,7 +235,14 @@ def _migrate_promo_action_executed_at(conn: sqlite3.Connection) -> None:
                 rollback_condition TEXT NOT NULL DEFAULT '',
                 decision_record_id INTEGER,
                 decision_tier TEXT NOT NULL DEFAULT '',
-                change_pct REAL
+                change_pct REAL,
+                platform_status TEXT NOT NULL DEFAULT 'not_submitted',
+                platform_submitted_at TEXT,
+                platform_checked_at TEXT,
+                platform_check_note TEXT NOT NULL DEFAULT '',
+                lifecycle_status TEXT NOT NULL DEFAULT 'active',
+                lifecycle_reason TEXT NOT NULL DEFAULT '',
+                lifecycle_updated_at TEXT
             )
             """
         )
@@ -338,6 +381,13 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
             ("decision_record_id", "INTEGER"),
             ("decision_tier", "TEXT NOT NULL DEFAULT ''"),
             ("change_pct", "REAL"),
+            ("platform_status", "TEXT NOT NULL DEFAULT 'not_submitted'"),
+            ("platform_submitted_at", "TEXT"),
+            ("platform_checked_at", "TEXT"),
+            ("platform_check_note", "TEXT NOT NULL DEFAULT ''"),
+            ("lifecycle_status", "TEXT NOT NULL DEFAULT 'active'"),
+            ("lifecycle_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("lifecycle_updated_at", "TEXT"),
         ):
             if name not in action_cols:
                 conn.execute(f"ALTER TABLE promo_action_records ADD COLUMN {name} {definition}")
@@ -362,6 +412,8 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
             scene TEXT NOT NULL DEFAULT '',
             min_roi REAL,
             max_roi REAL,
+            source_type TEXT NOT NULL DEFAULT 'verified',
+            verification_status TEXT NOT NULL DEFAULT 'verified',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -405,7 +457,14 @@ def _migrate_gifts(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_promo_decisions_action ON promo_decision_records(action_record_id)")
     try:
         strategy_cols = {row[1] for row in conn.execute("PRAGMA table_info(promo_strategies)")}
-        for name, definition in (("outcome", "TEXT NOT NULL DEFAULT 'success'"), ("scene", "TEXT NOT NULL DEFAULT ''"), ("min_roi", "REAL"), ("max_roi", "REAL")):
+        for name, definition in (
+            ("outcome", "TEXT NOT NULL DEFAULT 'success'"),
+            ("scene", "TEXT NOT NULL DEFAULT ''"),
+            ("min_roi", "REAL"),
+            ("max_roi", "REAL"),
+            ("source_type", "TEXT NOT NULL DEFAULT 'verified'"),
+            ("verification_status", "TEXT NOT NULL DEFAULT 'verified'"),
+        ):
             if name not in strategy_cols:
                 conn.execute(f"ALTER TABLE promo_strategies ADD COLUMN {name} {definition}")
     except sqlite3.OperationalError:
@@ -1154,7 +1213,14 @@ def init_db() -> None:
             rollback_condition TEXT NOT NULL DEFAULT '',
             decision_record_id INTEGER,
             decision_tier TEXT NOT NULL DEFAULT '',
-            change_pct REAL
+            change_pct REAL,
+            platform_status TEXT NOT NULL DEFAULT 'not_submitted',
+            platform_submitted_at TEXT,
+            platform_checked_at TEXT,
+            platform_check_note TEXT NOT NULL DEFAULT '',
+            lifecycle_status TEXT NOT NULL DEFAULT 'active',
+            lifecycle_reason TEXT NOT NULL DEFAULT '',
+            lifecycle_updated_at TEXT
             )
             """
         )
@@ -1343,6 +1409,7 @@ def init_db() -> None:
             ("prev_sales", "REAL NOT NULL DEFAULT 0"),
             ("prev_roi", "REAL NOT NULL DEFAULT 0"),
             ("prev_clicks", "INTEGER NOT NULL DEFAULT 0"),
+            ("prev_scope", "TEXT NOT NULL DEFAULT 'unknown'"),
             ("alipay_dir", "REAL NOT NULL DEFAULT 0"),
             ("alipay_indir", "REAL NOT NULL DEFAULT 0"),
             ("retained_sales", "REAL NOT NULL DEFAULT 0"),
@@ -1415,6 +1482,7 @@ def init_db() -> None:
                 campaign_id TEXT NOT NULL,
                 plan_name TEXT NOT NULL DEFAULT '',
                 day_budget REAL NOT NULL DEFAULT 0,
+                budget_type TEXT NOT NULL DEFAULT 'normal',
                 bid_type TEXT NOT NULL DEFAULT '',
                 bid_value REAL NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT '',

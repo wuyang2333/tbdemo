@@ -1,12 +1,12 @@
-import { BarChartOutlined, CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Space, Spin, Statistic, Switch, Tag, Typography, message } from "antd";
+import { CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Spin, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useDailyRefreshAt } from "../lib/use-daily-refresh";
-import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect } from "../components/analytics/analytics-ui";
+import { DecisionBand, MetricRail, WorkspacePage, WorkspaceToolbar } from "../components/ui/workspace-template";
 import type { AnalyticsReport } from "../types";
 import { buildReportHtml } from "../lib/report-html";
 import { HourlyPushButton } from "../components/ui/hourly-push";
@@ -239,7 +239,7 @@ export function AnalyticsReportPage() {
   };
 
   const topCard = (title: string, items: { item_id: string; item_title: string; image?: string; sales: number; orders: number }[]) => (
-    <Card variant="borderless" title={title} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+    <Card variant="borderless" title={title}>
       {items.length === 0 ? (
         <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 16 }} />
       ) : (
@@ -276,70 +276,83 @@ export function AnalyticsReportPage() {
     );
 
 
+  const reportDecisionTitle = data
+    ? `${dayLabel}销售额 ${fmt(data.today.sales)}，较前一日 ${pct(data.today.sales, data.yesterday.sales)}`
+    : "选择经营日期，生成可回看、可复用的经营日报";
+  const reportDecisionDescription = data
+    ? `访客 ${fmtInt(data.today.visitors)}，转化率 ${data.today.conversion_rate.toFixed(2)}%，真实 ROI ${realRoi.toFixed(2)}，净支付 ${fmt(data.today.sales - data.refund_amount)}。`
+    : "统一查看成交、流量、推广、退款和商品表现，并沉淀 AI 分析与行动建议。";
+
   return (
-    <div>
-      <PageHeader
-        icon={<BarChartOutlined />}
-        eyebrow="数据洞察"
-        title="经营日报"
-        extra={
-          <Space wrap>
-            <DatePicker
-              allowClear
-              placeholder="选择日期回看"
-              value={date ? dayjs(date) : null}
-              disabledDate={(d) => !d || d.isAfter(dayjs().subtract(1, "day"), "day")}
-              onChange={(d) => {
-                const next = d ? d.format("YYYY-MM-DD") : null;
-                if (analysisLoading) {
-                  Modal.confirm({
-                    title: "切换日期",
-                    content: "当前正在生成该日期的 AI 分析，确定要切换日期吗？（正在生成的结果仍会保存）",
-                    okText: "确定切换",
-                    cancelText: "取消",
-                    onOk: () => setDate(next),
-                  });
-                } else {
-                  setDate(next);
-                }
-              }}
-            />
-            
-            <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
-            <StoreScopeSelect value={storeId} onChange={setStoreId} />
-            <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
-            <Button icon={<SettingOutlined />} onClick={openPush}>推送设置</Button>
-            <HourlyPushButton scope="report" />
-            <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
-            <Button icon={<DownloadOutlined />} onClick={exportPdf}>导出 PDF</Button>
-            <Button icon={<SyncOutlined />} loading={syncing} onClick={syncDaily}>同步数据</Button>
-            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-          </Space>
-        }
+    <WorkspacePage kind="analysis">
+      <DecisionBand
+        ariaLabel="经营日报结论"
+        eyebrow={`数据洞察 · ${data?.date ?? date ?? "经营日报"}`}
+        title={reportDecisionTitle}
+        description={reportDecisionDescription}
+        action={<Button type="primary" icon={<RobotOutlined />} onClick={() => runAnalysis(true)} disabled={!data} loading={analysisLoading}>{currentAnalysis ? "重新生成分析" : "生成 AI 分析"}</Button>}
       />
+
+      <WorkspaceToolbar>
+        <DatePicker
+          allowClear
+          placeholder="选择日期回看"
+          value={date ? dayjs(date) : null}
+          disabledDate={(d) => !d || d.isAfter(dayjs().subtract(1, "day"), "day")}
+          onChange={(d) => {
+            const next = d ? d.format("YYYY-MM-DD") : null;
+            if (analysisLoading) {
+              Modal.confirm({
+                title: "切换日期",
+                content: "当前正在生成该日期的 AI 分析，确定要切换日期吗？（正在生成的结果仍会保存）",
+                okText: "确定切换",
+                cancelText: "取消",
+                onOk: () => setDate(next),
+              });
+            } else {
+              setDate(next);
+            }
+          }}
+        />
+        <StoreScopeSelect value={storeId} onChange={setStoreId} />
+        <Text className="ops-filter-bar__meta" type="secondary">最近更新 {lastUpdated || "—"}</Text>
+        <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
+        <Button icon={<SettingOutlined />} onClick={openPush}>推送设置</Button>
+        <HourlyPushButton scope="report" />
+        <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
+        <Button icon={<DownloadOutlined />} onClick={exportPdf} disabled={!data}>导出 PDF</Button>
+        <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncDaily}>同步数据</Button>
+      </WorkspaceToolbar>
 
       {loading && !data ? (
         <div style={{ textAlign: "center", padding: 60 }}><Spin /></div>
       ) : !data ? (
-        <Card variant="borderless"><Empty description="暂无数据，先同步店铺与推广数据" /></Card>
+        <Card variant="borderless">
+          <Empty description="暂无该日期的经营数据">
+            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncDaily}>同步店铺与推广数据</Button>
+          </Empty>
+        </Card>
       ) : (
         <>
-
-
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}销售额`} value={data.today.sales} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.sales, data.yesterday.sales)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}买家数`} value={data.today.buyers} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.buyers, data.yesterday.buyers)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}访客`} value={data.today.visitors} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.visitors, data.yesterday.visitors)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}转化率`} value={data.today.conversion_rate} precision={2} suffix="%" styles={{ content: {  color: "var(--ops-accent)"  } }} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}真实ROI`} value={realRoi} precision={2} suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(realRoi, prevRealRoi)}</Text>} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}退款`} value={data.refund_amount} precision={2} prefix="¥" styles={{ content: {  color: "var(--ops-danger)"  } }} /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}净支付金额`} value={data.today.sales - data.refund_amount} precision={2} prefix="¥" /></Card></Col>
-            <Col xs={12} sm={6}><Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}><Statistic title={`${dayLabel}客单价`} value={data.today.avg_order_value} precision={2} prefix="¥" suffix={<Text type="secondary" style={{ fontSize: 12 }}>{pct(data.today.avg_order_value, data.yesterday.avg_order_value)}</Text>} /></Card></Col>
-          </Row>
+          <MetricRail
+            columns={4}
+            items={[
+              { label: `${dayLabel}销售额`, value: fmt(data.today.sales), hint: `较前一日 ${pct(data.today.sales, data.yesterday.sales)}` },
+              { label: `${dayLabel}买家数`, value: fmtInt(data.today.buyers), hint: `较前一日 ${pct(data.today.buyers, data.yesterday.buyers)}` },
+              { label: `${dayLabel}访客`, value: fmtInt(data.today.visitors), hint: `较前一日 ${pct(data.today.visitors, data.yesterday.visitors)}` },
+              { label: `${dayLabel}转化率`, value: `${data.today.conversion_rate.toFixed(2)}%`, hint: "支付买家 / 访客" },
+              { label: `${dayLabel}真实 ROI`, value: realRoi.toFixed(2), hint: `较前一日 ${pct(realRoi, prevRealRoi)}` },
+              { label: `${dayLabel}退款`, value: fmt(data.refund_amount), hint: "退款金额", tone: "var(--ops-danger)" },
+              { label: `${dayLabel}净支付金额`, value: fmt(data.today.sales - data.refund_amount), hint: "销售额扣除退款" },
+              { label: `${dayLabel}客单价`, value: fmt(data.today.avg_order_value), hint: `较前一日 ${pct(data.today.avg_order_value, data.yesterday.avg_order_value)}` },
+            ]}
+            style={{ marginBottom: 16 }}
+          />
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col xs={24} md={12}>
-              <Card variant="borderless" title={`推广（${dayLabel}）`} style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+              <Card variant="borderless" title={`推广（${dayLabel}）`}>
                 <Descriptions size="small" column={3}
                   items={[
                     { key: "s", label: "花费", children: fmt(data.promo_today.spend) },
@@ -351,7 +364,7 @@ export function AnalyticsReportPage() {
               </Card>
             </Col>
             <Col xs={24} md={12}>
-              <Card variant="borderless" title="前一日推广" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+              <Card variant="borderless" title="前一日推广">
                 <Descriptions size="small" column={3}
                   items={[
                     { key: "s", label: "花费", children: fmt(data.promo_yesterday.spend) },
@@ -370,14 +383,14 @@ export function AnalyticsReportPage() {
           </Row>
 
 
-          <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+          <Card variant="borderless">
             <Text style={{ whiteSpace: "pre-line" }}>{buildText()}</Text>
           </Card>
 
           <Card
             variant="borderless"
             title="AI 经营分析"
-            style={{ boxShadow: "var(--ops-shadow-sm)", marginTop: 16 }}
+            style={{ marginTop: 16 }}
             extra={
               !analysisLoading ? (
                 <Button type="primary" icon={<RobotOutlined />} onClick={() => runAnalysis(true)}>{currentAnalysis ? "重新生成" : "生成分析"}</Button>
@@ -468,6 +481,6 @@ export function AnalyticsReportPage() {
         </div>
       </Modal>
 
-    </div>
+    </WorkspacePage>
   );
 }

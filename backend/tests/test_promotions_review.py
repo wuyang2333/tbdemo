@@ -53,6 +53,7 @@ def test_review_dashboard_uses_verified_decision_metrics(client, admin_token):
     payload = response.json()
     assert payload["summary"] == {
         "decision_count": 1,
+        "insufficient_count": 0,
         "adoption_rate": 100.0,
         "execution_rate": 100.0,
         "verification_rate": 100.0,
@@ -63,8 +64,13 @@ def test_review_dashboard_uses_verified_decision_metrics(client, admin_token):
     }
     assert payload["funnels"][-1]["count"] == 1
     assert payload["scenes"][0]["name"] == "关键词推广"
+    assert payload["channels"][0]["key"] == "search"
+    assert payload["channels"][0]["name"] == "搜索推广"
     assert payload["actions"][0]["name"] == "调整关键词出价"
     assert payload["tiers"][1]["verified_count"] == 1
+    assert payload["quality_summary"]["verified"] == 1
+    assert payload["quality_summary"]["reliable"] == 0
+    assert payload["quality_summary"]["reproducible"] == 0
 
 
 def test_review_dashboard_rejects_unknown_window(client, admin_token):

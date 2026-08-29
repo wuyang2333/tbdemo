@@ -223,6 +223,9 @@ def _parse_campaigns(payload: dict, key: str, name: str) -> list[dict]:
                 "campaign_id": str(c.get("campaignId") or ""),
                 "plan_name": c.get("campaignName") or "",
                 "day_budget": round(_num(c.get("dayBudget")), 2),
+                # 万相台预算接口要求同时提交预算类型。当前接口返回字段名为
+                # dmcType：normal 表示日预算，unlimited 表示不限预算。
+                "budget_type": str(c.get("dmcType") or "").strip().lower(),
                 "bid_type": c.get("bidType") or c.get("constraintType") or "",
                 "bid_value": round(_num(c.get("constraintValue")), 2),
                 "status": "在投" if c.get("onlineStatus") == 1 else "暂停",
@@ -332,38 +335,40 @@ def fetch_realtime(store: dict) -> list[dict]:
         item["sales"] = round(sales, 2)
         out.append(item)
     return out
-def fetch_plan_realtime(store: dict) -> list[dict]:
-    """拉取今天各推广场景的计划实时数据（按计划维度，逐场景，含货品全站/内容营销）。
-
-    与万相台页面同口径：unifyType=last_click_by_effect_time + 全天汇总，
-    返回 总成交(站内)/直接/间接/留存成交/退款/净实际投产比。
-    """
+def fetch_plan_realtime(store: dict, target_date: str | None = None, through_hour: int | None = None) -> list[dict]:
+    """拉取计划维度数据；可按历史日期截至指定小时汇总，用于同一时段环比。"""
     today = date.today().isoformat()
+    target_date = target_date or today
+    # report-realtime 接口也支持历史日期，能返回留存 ROI。
+    is_realtime = True
     fields = ["campaignId", "roi", "retainedRoi", "charge", "adPv", "click", "ctr", "cvr", "ecpc", "ecpm",
               "alipayInshopAmt", "alipayInshopNum", "alipayDirAmt", "alipayDirNum", "alipayIndirAmt", "alipayIndirNum",
               "cartInshopNum", "cartDirNum", "cartIndirNum",
               "refundDirAmt", "refundDirNum", "refundIndirAmt", "refundIndirNum",
               "retainedAlipayInshopAmt", "retainedAlipayInshopNum"]
     merged: dict[str, dict] = {}
-    for _key, biz, _name in SCENES:
+    # 历史计划小时明细统一走 universalBP；按场景地址查询会漏掉货品全站。
+    requests = [("all", "universalBP", "全量")] if through_hour is not None else SCENES
+    for _key, biz, _name in requests:
         page = 1
         while True:
             body = {
-                "mx_bizCode": "onebpSite",
-                "bizCode": "onebpSite",
+                "mx_bizCode": "universalBP" if through_hour is not None else "onebpSite",
+                "bizCode": "universalBP" if through_hour is not None else "onebpSite",
                 "tab": "campaign",
-                "startTime": today,
-                "endTime": today,
+                "startTime": target_date,
+                "endTime": target_date,
                 "byPage": True,
                 "pageSize": 100,
                 "pageNo": page,
+                "offset": (page - 1) * 100,
                 "computeType": "sum",
                 "effectEqual": "15",
-                "fromRealTime": True,
-                "queryDomains": ["campaign"],
+                "fromRealTime": is_realtime,
+                "queryDomains": ["campaign", "date"] if through_hour is not None else ["campaign"],
                 "queryFieldIn": fields,
                 "sourceList": ["scene", "campaign_list"],
-                "splitType": "sum",
+                "splitType": "hour" if through_hour is not None else "sum",
                 "unifyType": "last_click_by_effect_time",
             }
             body_json = json.dumps(body, ensure_ascii=False)
@@ -379,6 +384,12 @@ def fetch_plan_realtime(store: dict) -> list[dict]:
                 cid = str(r.get("campaignId") or "")
                 if not cid:
                     continue
+                if through_hour is not None:
+                    stamp = str(r.get("thedate") or r.get("date") or r.get("hour") or "")
+                    time_text = stamp.replace("T", " ").split()[-1] if stamp else ""
+                    hour_text = time_text[:2] if len(time_text) >= 2 and time_text[:2].isdigit() else ""
+                    if not hour_text or int(hour_text) > through_hour:
+                        continue
                 got += 1
                 item = merged.setdefault(cid, {"campaign_id": cid})
                 for _f in fields:
@@ -389,7 +400,7 @@ def fetch_plan_realtime(store: dict) -> list[dict]:
                         item[_f] = max(item.get(_f, 0.0), _v)
                     else:
                         item[_f] = item.get(_f, 0.0) + _v
-            if got < 100 or not rows:
+            if len(rows) < 100 or not rows:
                 break
             page += 1
     out: list[dict] = []
@@ -400,8 +411,12 @@ def fetch_plan_realtime(store: dict) -> list[dict]:
         item["alipay_indir"] = round(item.get("alipayIndirAmt") or 0, 2)
         item["retained_sales"] = round(item.get("retainedAlipayInshopAmt") or 0, 2)
         item["refund_amt"] = round((item.get("refundDirAmt") or 0) + (item.get("refundIndirAmt") or 0), 2)
-        item["roi"] = round(item.get("roi") or 0, 2)
-        item["retained_roi"] = round(item.get("retainedRoi") or 0, 2)
+        item["roi"] = round(item["sales"] / item["spend"], 2) if item["spend"] else 0.0
+        item["retained_roi"] = (
+            round(item["retained_sales"] / item["spend"], 2)
+            if item["spend"] and item["retained_sales"]
+            else round(item.get("retainedRoi") or 0, 2)
+        )
         item["clicks"] = int(item.get("click") or 0)
         out.append(item)
     return out

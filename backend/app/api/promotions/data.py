@@ -60,8 +60,33 @@ from ._common import (
     _build_plan_prompt,
     _enrich_promo_strategies,
 )
+from .channel import CHANNEL_NAMES, channel_for_scene, channel_matches, with_channel
+from .health import build_dataset_metadata, record_sync_result
 
 router = APIRouter()
+
+
+def _plan_execution_guard(db, user: dict, plan) -> dict:
+    """高风险平台写入守卫：关键实时指标缺失或计划同步过期时禁止执行。"""
+    stat = db.execute(
+        "SELECT updated_at FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ? AND mode = 'realtime'",
+        (plan["store_id"], plan["campaign_id"]),
+    ).fetchone()
+    metadata = build_dataset_metadata(db, "plans", user, int(plan["store_id"]))
+    if not stat:
+        return {"can_execute": False, "block_reason": "缺少该计划的实时指标，请先同步推广计划后再执行。", "data_metadata": metadata}
+    if metadata["freshness"] != "fresh":
+        return {"can_execute": False, "block_reason": "推广计划数据已过期，请先同步最新数据后再执行。", "data_metadata": metadata}
+    if metadata["completeness"] != "complete":
+        return {"can_execute": False, "block_reason": "推广计划关键数据不完整，请完成同步后再执行。", "data_metadata": metadata}
+    return {"can_execute": True, "block_reason": "", "data_metadata": metadata}
+
+
+def _require_plan_execution_guard(db, user: dict, plan) -> dict:
+    guard = _plan_execution_guard(db, user, plan)
+    if not guard["can_execute"]:
+        raise HTTPException(status_code=409, detail=guard["block_reason"])
+    return guard
 
 
 class PromoActionRecordIn(BaseModel):
@@ -79,6 +104,11 @@ class PromoActionRecordIn(BaseModel):
     decision_tier: str = ""
     decision_field: str = ""
     change_pct: float | None = None
+
+
+class PromoActionPlatformStatusIn(BaseModel):
+    status: str
+    note: str = Field(default="", max_length=500)
 
 
 class PromoDecisionFeedbackIn(BaseModel):
@@ -107,6 +137,11 @@ class PromoActionReviewIn(BaseModel):
     manual_conclusion: str | None = None
 
 
+class PromoActionLifecycleIn(BaseModel):
+    action: str
+    reason: str = Field(default="", max_length=500)
+
+
 class PromoStrategyUpdateIn(BaseModel):
     name: str | None = None
     conditions: str | None = None
@@ -114,6 +149,17 @@ class PromoStrategyUpdateIn(BaseModel):
     scene: str | None = None
     min_roi: float | None = None
     max_roi: float | None = None
+
+
+class PromoStrategyCreateIn(BaseModel):
+    store_id: int
+    name: str = Field(min_length=1, max_length=100)
+    action_type: str = Field(min_length=1, max_length=100)
+    conditions: str = Field(min_length=1, max_length=1000)
+    evidence: str = Field(min_length=1, max_length=1000)
+    scene: str = Field(default="", max_length=100)
+    min_roi: float | None = Field(default=None, ge=0)
+    max_roi: float | None = Field(default=None, ge=0)
 
 
 def _action_record_row(db, record_id: int, user: dict):
@@ -244,6 +290,7 @@ def _verification_focuses(items: list[dict]) -> list[dict]:
 @router.get("/action-records")
 def list_action_records(
     status: str = "",
+    lifecycle: str = "active",
     store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
@@ -251,6 +298,11 @@ def list_action_records(
     scope_frag, scope_params = _scope_filter(store_id, user)
     query = "SELECT * FROM promo_action_records WHERE 1=1" + scope_frag
     params = list(scope_params)
+    if lifecycle not in ("active", "voided", "archived", "all"):
+        raise HTTPException(status_code=422, detail="无效的记录范围")
+    if lifecycle != "all":
+        query += " AND COALESCE(lifecycle_status, 'active') = ?"
+        params.append(lifecycle)
     if status:
         query += " AND status = ?"
         params.append(status)
@@ -278,7 +330,7 @@ def action_record_summary(
 ) -> dict:
     scope_frag, scope_params = _scope_filter(store_id, user)
     rows = db.execute(
-        "SELECT * FROM promo_action_records WHERE 1=1" + scope_frag + " ORDER BY id DESC LIMIT 1000",
+        "SELECT * FROM promo_action_records WHERE COALESCE(lifecycle_status, 'active') = 'active'" + scope_frag + " ORDER BY id DESC LIMIT 1000",
         scope_params,
     ).fetchall()
     items: list[dict] = []
@@ -348,7 +400,7 @@ def save_decision_feedback(
     decision_id = body.decision_id.strip()
     if not decision_id:
         raise HTTPException(status_code=400, detail="决策批次 ID 不能为空")
-    if body.feedback_status not in ("adopted", "modified", "rejected"):
+    if body.feedback_status not in ("adopted", "modified", "rejected", "insufficient"):
         raise HTTPException(status_code=400, detail="决策反馈状态无效")
     if body.recommended_tier not in ("conservative", "balanced", "aggressive") or body.selected_tier not in ("conservative", "balanced", "aggressive"):
         raise HTTPException(status_code=400, detail="决策方案档位无效")
@@ -368,7 +420,7 @@ def save_decision_feedback(
         if not strategy:
             raise HTTPException(status_code=400, detail="关联策略不存在或已停用")
     now = _now()
-    workflow_status = "rejected" if body.feedback_status == "rejected" else "selected"
+    workflow_status = "rejected" if body.feedback_status == "rejected" else "deferred" if body.feedback_status == "insufficient" else "selected"
     db.execute(
         "INSERT INTO promo_decision_records "
         "(decision_id, user_id, username, store_id, plan_id, strategy_id, recommended_tier, selected_tier, feedback_status, workflow_status, ai_field, ai_change_pct, final_field, final_change_pct, ai_success_criteria, final_success_criteria, ai_observation_hours, final_observation_hours, rollback_condition, feedback_reason, feedback_note, created_at, updated_at) "
@@ -435,6 +487,7 @@ def list_decision_records(
         })
 
     rejected_items = [item for item in items if item.get("feedback_status") == "rejected"]
+    insufficient_items = [item for item in items if item.get("feedback_status") == "insufficient"]
     modified_items = [item for item in items if item.get("feedback_status") == "modified"]
     reason_counts: dict[str, int] = {}
     for item in rejected_items:
@@ -489,19 +542,23 @@ def list_decision_records(
         scene_success = sum(1 for item in scene_conclusive if item.get("result_status") == "success")
         scene_modified = sum(1 for item in scene_items if item.get("feedback_status") == "modified")
         scene_rejected = sum(1 for item in scene_items if item.get("feedback_status") == "rejected")
+        scene_insufficient = sum(1 for item in scene_items if item.get("feedback_status") == "insufficient")
+        scene_decidable = len(scene_items) - scene_insufficient
         scenes.append({
             "scene_name": scene_name,
             "total": len(scene_items),
             "adopted": sum(1 for item in scene_items if item.get("feedback_status") == "adopted"),
             "modified": scene_modified,
             "rejected": scene_rejected,
-            "manual_intervention_rate": round((scene_modified + scene_rejected) / len(scene_items) * 100, 1),
+            "insufficient": scene_insufficient,
+            "manual_intervention_rate": round((scene_modified + scene_rejected) / scene_decidable * 100, 1) if scene_decidable else 0.0,
             "verified": len(scene_verified),
             "success_rate": round(scene_success / len(scene_conclusive) * 100, 1) if scene_conclusive else 0.0,
         })
     scenes.sort(key=lambda item: (-item["total"], -item["manual_intervention_rate"], item["scene_name"]))
 
     manual_intervention = len(modified_items) + len(rejected_items)
+    decidable_count = len(items) - len(insufficient_items)
     return {
         "items": items,
         "summary": {
@@ -509,14 +566,16 @@ def list_decision_records(
             "adopted": sum(1 for item in items if item.get("feedback_status") == "adopted"),
             "modified": sum(1 for item in items if item.get("feedback_status") == "modified"),
             "rejected": sum(1 for item in items if item.get("feedback_status") == "rejected"),
+            "insufficient": len(insufficient_items),
             "executed": sum(1 for item in items if item.get("workflow_status") in ("executed", "verified")),
             "verified": sum(1 for item in items if item.get("workflow_status") == "verified"),
         },
         "tiers": tiers,
         "attribution": {
             "summary": {
-                "manual_intervention": manual_intervention,
-                "manual_intervention_rate": round(manual_intervention / len(items) * 100, 1) if items else 0.0,
+            "manual_intervention": manual_intervention,
+                "manual_intervention_rate": round(manual_intervention / decidable_count * 100, 1) if decidable_count else 0.0,
+            "insufficient": len(insufficient_items),
                 "tier_changed": direction_counts["more_conservative"] + direction_counts["more_aggressive"],
                 "same_tier_adjustment": direction_counts["same_tier_adjustment"],
                 "reason_coverage": round(sum(1 for item in rejected_items if (item.get("feedback_reason") or "").strip()) / len(rejected_items) * 100, 1) if rejected_items else 0.0,
@@ -559,6 +618,53 @@ def update_action_record_review(
     return {"ok": True, "item": _action_record_row(db, record_id, user)}
 
 
+@router.put("/action-records/{record_id}/lifecycle")
+def update_action_record_lifecycle(
+    record_id: int,
+    body: PromoActionLifecycleIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """作废、归档或恢复动作记录；保留原始业务状态和审计链路。"""
+    row = _action_record_row(db, record_id, user)
+    if not row:
+        raise HTTPException(status_code=404, detail="调整记录不存在")
+    action = body.action.strip()
+    reason = body.reason.strip()
+    current = row.get("lifecycle_status") or "active"
+    completed_statuses = {"success", "partial", "failed", "insufficient"}
+    if action == "void":
+        if current != "active":
+            raise HTTPException(status_code=409, detail="只有有效记录可以作废")
+        if row["status"] not in ("planned", "observing"):
+            raise HTTPException(status_code=409, detail="已形成验证结论的记录请使用归档")
+        if not reason:
+            raise HTTPException(status_code=422, detail="请填写取消或终止原因")
+        target = "voided"
+        log_action = "作废推广动作"
+    elif action == "archive":
+        if current != "active":
+            raise HTTPException(status_code=409, detail="只有有效记录可以归档")
+        if row["status"] not in completed_statuses:
+            raise HTTPException(status_code=409, detail="只有已完成验证的记录可以归档")
+        target = "archived"
+        log_action = "归档推广动作"
+    elif action == "restore":
+        if current == "active":
+            raise HTTPException(status_code=409, detail="该记录已经是有效状态")
+        target = "active"
+        log_action = "恢复推广动作"
+    else:
+        raise HTTPException(status_code=422, detail="无效的生命周期操作")
+    now = _now()
+    db.execute(
+        "UPDATE promo_action_records SET lifecycle_status = ?, lifecycle_reason = ?, lifecycle_updated_at = ? WHERE id = ?",
+        (target, reason if action != "restore" else "", now, record_id),
+    )
+    _log(db, user, log_action, row.get("plan_name") or f"计划 {row['plan_id']}", f"action_record_id={record_id}；{reason}")
+    return {"ok": True, "item": _action_record_row(db, record_id, user)}
+
+
 @router.get("/strategies")
 def list_promo_strategies(
     store_id: int | None = None,
@@ -569,6 +675,44 @@ def list_promo_strategies(
     rows = db.execute("SELECT * FROM promo_strategies WHERE 1=1" + scope_frag + " ORDER BY updated_at DESC LIMIT 200", scope_params).fetchall()
     items, groups = _enrich_promo_strategies(db, rows)
     return {"items": items, "groups": groups}
+
+
+@router.post("/strategies")
+def create_manual_promo_strategy(
+    body: PromoStrategyCreateIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """新增人工经验；待真实执行验证前不计入历史证据。"""
+    visible = visible_store_ids(user)
+    if visible is not None and body.store_id not in visible:
+        raise HTTPException(status_code=404, detail="店铺不存在或无权访问")
+    store = db.execute("SELECT id, name FROM stores WHERE id = ?", (body.store_id,)).fetchone()
+    if not store:
+        raise HTTPException(status_code=404, detail="店铺不存在或无权访问")
+    name = body.name.strip()
+    action_type = body.action_type.strip()
+    conditions = body.conditions.strip()
+    evidence = body.evidence.strip()
+    if not all((name, action_type, conditions, evidence)):
+        raise HTTPException(status_code=400, detail="请完整填写经验名称、推荐动作、适用条件和经验依据")
+    if body.min_roi is not None and body.max_roi is not None and body.min_roi > body.max_roi:
+        raise HTTPException(status_code=400, detail="ROI 下限不能高于上限")
+    now = _now()
+    cur = db.execute(
+        "INSERT INTO promo_strategies "
+        "(user_id, store_id, source_action_id, name, action_type, conditions, evidence, use_count, success_count, status, outcome, scene, min_roi, max_roi, source_type, verification_status, created_at, updated_at) "
+        "VALUES (?, ?, NULL, ?, ?, ?, ?, 0, 0, 'active', 'pending', ?, ?, ?, 'manual', 'pending', ?, ?)",
+        (
+            user["id"], body.store_id, name, action_type, conditions, evidence,
+            body.scene.strip(), body.min_roi, body.max_roi, now, now,
+        ),
+    )
+    strategy_id = int(cur.lastrowid)
+    row = db.execute("SELECT * FROM promo_strategies WHERE id = ?", (strategy_id,)).fetchone()
+    items, _ = _enrich_promo_strategies(db, [row] if row else [])
+    _log(db, user, "添加人工推广经验", name, f"strategy_id={strategy_id}；状态=待验证")
+    return {"ok": True, "id": strategy_id, "item": items[0] if items else dict(row)}
 
 
 @router.put("/strategies/{strategy_id}")
@@ -643,7 +787,7 @@ def create_action_record(
             "SELECT * FROM promo_decision_records WHERE id = ? AND plan_id = ? AND store_id = ?",
             (body.decision_record_id, plan["id"], plan["store_id"]),
         ).fetchone()
-        if not decision_record or decision_record["workflow_status"] == "rejected":
+        if not decision_record or decision_record["workflow_status"] in ("rejected", "deferred"):
             raise HTTPException(status_code=400, detail="关联的 AI 决策记录无效")
     now = _now()
     cur = db.execute(
@@ -685,19 +829,9 @@ def create_action_record(
             "UPDATE promo_decision_records SET feedback_status = ?, workflow_status = 'planned', action_record_id = ?, selected_tier = ?, final_field = ?, final_change_pct = ?, final_success_criteria = ?, final_observation_hours = ?, rollback_condition = ?, updated_at = ? WHERE id = ?",
             (feedback_status, record_id, body.decision_tier.strip(), body.decision_field.strip(), body.change_pct, json.dumps(body.success_criteria, ensure_ascii=False), observation_hours, body.rollback_condition.strip(), now, decision_record["id"]),
         )
-    from .collaboration import create_collaboration_task_for_action
-
-    collaboration_task_id = create_collaboration_task_for_action(
-        db,
-        user,
-        dict(plan),
-        record_id,
-        decision_record_id=body.decision_record_id,
-        title=f"执行：{body.action_type.strip()}",
-        description=body.description.strip() or body.expected.strip(),
-    )
     _log(db, user, "记录调整动作", plan["plan_name"], f"action_record_id={record_id}；{body.action_type.strip()}")
-    return {"ok": True, "id": record_id, "collaboration_task_id": collaboration_task_id}
+    # 单人运营主链路不再自动创建协同任务；保留字段避免破坏旧客户端。
+    return {"ok": True, "id": record_id, "collaboration_task_id": None}
 
 
 @router.post("/action-records/{record_id}/mark-executed")
@@ -722,17 +856,51 @@ def mark_action_record_executed(
     due_at = _parse_action_time(executed_at) + timedelta(hours=int(row["observation_hours"] or 48))
     quality = f"动作前日报 {baseline.get('days', 0)} 天"
     db.execute(
-        "UPDATE promo_action_records SET status = 'observing', before_spend = ?, before_sales = ?, before_roi = ?, baseline_start = ?, baseline_end = ?, observation_due_at = ?, data_quality = ?, baseline_days = ?, executed_at = ? WHERE id = ?",
-        (baseline["spend"], baseline["sales"], baseline["roi"], baseline_start.isoformat(), baseline_end.isoformat(), due_at.isoformat(timespec="seconds"), quality, baseline.get("days", 0), executed_at, record_id),
+        "UPDATE promo_action_records SET status = 'observing', before_spend = ?, before_sales = ?, before_roi = ?, baseline_start = ?, baseline_end = ?, observation_due_at = ?, data_quality = ?, baseline_days = ?, executed_at = ?, platform_status = CASE WHEN platform_status = 'not_submitted' THEN 'submitted' ELSE platform_status END, platform_submitted_at = COALESCE(platform_submitted_at, ?) WHERE id = ?",
+        (baseline["spend"], baseline["sales"], baseline["roi"], baseline_start.isoformat(), baseline_end.isoformat(), due_at.isoformat(timespec="seconds"), quality, baseline.get("days", 0), executed_at, executed_at, record_id),
     )
     if row.get("decision_record_id"):
         db.execute("UPDATE promo_decision_records SET workflow_status = 'executed', updated_at = ? WHERE id = ?", (executed_at, row["decision_record_id"]))
-    db.execute(
-        "UPDATE promo_collaboration_tasks SET execution_status = 'observing', updated_at = ? WHERE action_record_id = ?",
-        (executed_at, record_id),
-    )
     _log(db, user, "确认执行调整动作", row["plan_name"], f"action_record_id={record_id}")
     return {"ok": True, "status": "observing"}
+
+
+@router.post("/action-records/{record_id}/platform-status")
+def update_action_platform_status(
+    record_id: int,
+    body: PromoActionPlatformStatusIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """记录平台执行回查结果；只更新本地档案，不再次写入万相台。"""
+    labels = {
+        "submitted": "已提交平台",
+        "effective": "平台已生效",
+        "failed": "回查失败",
+        "manual_confirmed": "人工确认生效",
+    }
+    if body.status not in labels:
+        raise HTTPException(status_code=422, detail="无效的平台回查状态")
+    row = _action_record_row(db, record_id, user)
+    if not row:
+        raise HTTPException(status_code=404, detail="调整记录不存在")
+    if row["status"] == "planned":
+        raise HTTPException(status_code=409, detail="请先确认动作已经执行，再记录平台回查结果")
+    now = _now()
+    submitted_at = row.get("platform_submitted_at") or (now if body.status == "submitted" else row.get("executed_at") or now)
+    db.execute(
+        "UPDATE promo_action_records SET platform_status = ?, platform_submitted_at = ?, platform_checked_at = ?, platform_check_note = ? WHERE id = ?",
+        (body.status, submitted_at, now, body.note.strip(), record_id),
+    )
+    _log(db, user, "平台执行回查", row["plan_name"], f"action_record_id={record_id}；{labels[body.status]}；{body.note.strip()}")
+    return {
+        "ok": True,
+        "status": body.status,
+        "label": labels[body.status],
+        "platform_submitted_at": submitted_at,
+        "platform_checked_at": now,
+        "note": body.note.strip(),
+    }
 
 
 @router.post("/action-records/{record_id}/verify")
@@ -815,11 +983,20 @@ def verify_action_record(
             "UPDATE promo_decision_records SET workflow_status = 'verified', result_status = ?, result_summary = ?, updated_at = ? WHERE id = ?",
             (status, result, verified_at, row["decision_record_id"]),
         )
-    db.execute(
-        "UPDATE promo_collaboration_tasks SET execution_status = ?, rollback_reason = ?, updated_at = ? WHERE action_record_id = ?",
-        ("needs_rollback" if status == "failed" else "completed", result if status == "failed" else "", verified_at, record_id),
-    )
-    if status == "success":
+    upgraded_manual_strategy = False
+    if row.get("strategy_id") and status in ("success", "partial", "failed"):
+        manual_strategy = db.execute(
+            "SELECT * FROM promo_strategies WHERE id = ? AND store_id = ? AND source_type = 'manual' AND verification_status = 'pending'",
+            (row["strategy_id"], row["store_id"]),
+        ).fetchone()
+        if manual_strategy:
+            verified_evidence = f"{manual_strategy['evidence']}；系统验证：ROI {before_roi:.2f} → {after_roi:.2f}，观察日报 {after['days']} 天，{result}"
+            db.execute(
+                "UPDATE promo_strategies SET source_action_id = ?, evidence = ?, success_count = ?, outcome = ?, verification_status = 'verified', updated_at = ? WHERE id = ?",
+                (record_id, verified_evidence, 1 if status == "success" else 0, status, verified_at, manual_strategy["id"]),
+            )
+            upgraded_manual_strategy = True
+    if status == "success" and not upgraded_manual_strategy:
         strategy_name = f"{row['action_type']}（已验证）"
         evidence = f"ROI {before_roi:.2f} → {after_roi:.2f}；观察日报 {after['days']} 天；{result}"
         min_roi = max(0, round(before_roi - 0.5, 2))
@@ -830,7 +1007,7 @@ def verify_action_record(
             "WHERE NOT EXISTS (SELECT 1 FROM promo_strategies WHERE source_action_id = ?)",
             (user["id"], row["store_id"], record_id, strategy_name, row["action_type"], row["expected"] or "适用于相似计划和相同经营目标", evidence, verified_at, verified_at, row.get("scene_name") or "", min_roi, max_roi, record_id),
         )
-    elif status in ("failed", "partial"):
+    elif status in ("failed", "partial") and not upgraded_manual_strategy:
         strategy_name = f"{row['action_type']}（{('失败' if status == 'failed' else '部分有效')}经验）"
         evidence = f"ROI {before_roi:.2f} → {after_roi:.2f}；观察日报 {after['days']} 天；{result}"
         min_roi = max(0, round(before_roi - 0.5, 2))
@@ -881,12 +1058,15 @@ def test_promo(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - 单店失败不能中断其他店铺同步
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
     return {"results": results}
 
 @router.get("/data")
 def promo_data(
     mode: str = "realtime",
     scene: str = "",
+    channel: str = "",
     start: str = "",
     end: str = "",
     store_id: int | None = None,
@@ -958,6 +1138,27 @@ def promo_data(
                 out.append({"type": "warn", "message": f"「{s['scene_name']}」ROI {s['roi']:.2f} 偏低（低于 2）"})
         return out
 
+    def _channel_groups(scenes: list[dict]) -> list[dict]:
+        grouped: dict[str, dict] = {}
+        for scene_item in scenes:
+            channel_key = scene_item["channel"]
+            item = grouped.setdefault(
+                channel_key,
+                {
+                    "channel": channel_key,
+                    "channel_name": CHANNEL_NAMES[channel_key],
+                    "impressions": 0,
+                    "clicks": 0,
+                    "spend": 0.0,
+                    "sales": 0.0,
+                    "orders": 0,
+                    "add_cart": 0,
+                },
+            )
+            for field in ("impressions", "clicks", "spend", "sales", "orders", "add_cart"):
+                item[field] += scene_item.get(field) or 0
+        return sorted((_finalize(item) for item in grouped.values()), key=lambda item: item["spend"], reverse=True)
+
     if mode == "realtime":
         cur_hour = datetime.now().strftime("%H:00")
         rows = db.execute(
@@ -968,6 +1169,10 @@ def promo_data(
         scene_map: dict[str, dict] = {}
         hour_map: dict[str, dict] = {}
         for r in rows:
+            if scene and r["scene"] != scene:
+                continue
+            if not channel_matches(channel, r["scene"], r["scene_name"]):
+                continue
             for f in ("impressions", "clicks", "spend", "sales", "orders"):
                 summary[f] += r[f] or 0
             key = r["scene"]
@@ -981,7 +1186,7 @@ def promo_data(
             hrow = hour_map.setdefault(h, {"label": h, "impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "roi": 0.0})
             for f in ("impressions", "clicks", "spend", "sales", "orders"):
                 hrow[f] += r[f] or 0
-        scenes = sorted((_finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
+        scenes = sorted((with_channel(_finalize(v)) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
         trend = []
         for h in sorted(hour_map.keys()):
             row = hour_map[h]
@@ -999,19 +1204,31 @@ def promo_data(
         ).fetchall()
         y_sum = {"spend": 0.0, "sales": 0.0}
         for r in yest_rows:
+            if scene and r["scene"] != scene:
+                continue
+            if not channel_matches(channel, r["scene"], r["scene_name"]):
+                continue
             y_sum["spend"] += r["spend"] or 0
             y_sum["sales"] += r["sales"] or 0
         store_sales = _store_sales(cur_hour=cur_hour)
         summary = _final_summary(summary, store_sales)
+        realtime_points = len({(r["store_id"], r["hour"]) for r in rows if (not scene or r["scene"] == scene) and channel_matches(channel, r["scene"], r["scene_name"])})
+        metadata_store_count = max(bound_store_count, len({r["store_id"] for r in rows}))
+        elapsed_hours = datetime.now().hour + 1
+        data_metadata = build_dataset_metadata(db, "realtime", user, store_id, expected_points=metadata_store_count * elapsed_hours, actual_points=realtime_points)
         return {
             "mode": mode,
             "summary": summary,
             "compare": {"spend": _pct(summary["spend"], y_sum["spend"]), "sales": _pct(summary["sales"], y_sum["sales"])},
             "scenes": scenes,
+            "channels": _channel_groups(scenes),
             "alerts": _alerts(scenes),
             "trend": trend,
             "trend_unit": "hour",
-            "last_sync": _last_sync(db),
+            "business_data_at": data_metadata["business_data_at"],
+            "last_sync_at": data_metadata["last_sync_at"],
+            "last_sync": data_metadata["last_sync_at"] or _last_sync(db),
+            "data_metadata": data_metadata,
             "bound_stores": bound_store_count,
         }
 
@@ -1033,6 +1250,8 @@ def promo_data(
     date_map = {}
     totals = {"impressions": 0, "clicks": 0, "spend": 0.0, "sales": 0.0, "orders": 0, "add_cart": 0}
     for r in rows:
+        if not channel_matches(channel, r["scene"], r["scene_name"]):
+            continue
         key = r["scene"]
         item = scene_map.setdefault(
             key,
@@ -1046,7 +1265,7 @@ def promo_data(
         for f in ("impressions", "clicks", "spend", "sales", "orders"):
             drow[f] += r[f] or 0
 
-    scenes = sorted((_finalize(v) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
+    scenes = sorted((with_channel(_finalize(v)) for v in scene_map.values()), key=lambda x: x["spend"], reverse=True)
     span = (end_d - start_d).days + 1
     trend = []
     for i in range(span - 1, -1, -1):
@@ -1074,20 +1293,37 @@ def promo_data(
             [prev_start.isoformat(), prev_end.isoformat()] + scope_params,
         ).fetchall()
         for r in prev_rows:
+            if scene and r["scene"] != scene:
+                continue
+            if not channel_matches(channel, r["scene"], r["scene_name"]):
+                continue
             prev_totals["spend"] += r["spend"] or 0
             prev_totals["sales"] += r["sales"] or 0
 
     store_sales = _store_sales()
     summary = _final_summary(totals, store_sales)
+    metadata_store_count = max(bound_store_count, len({r["store_id"] for r in rows}))
+    data_metadata = build_dataset_metadata(
+        db,
+        "daily",
+        user,
+        store_id,
+        expected_points=metadata_store_count * span,
+        actual_points=len({(r["store_id"], r["data_date"]) for r in rows if channel_matches(channel, r["scene"], r["scene_name"])}),
+    )
     return {
         "mode": mode,
         "summary": summary,
         "compare": {"spend": _pct(summary["spend"], prev_totals["spend"]), "sales": _pct(summary["sales"], prev_totals["sales"])},
         "scenes": scenes,
+        "channels": _channel_groups(scenes),
         "alerts": _alerts(scenes),
         "trend": trend,
         "trend_unit": "day",
-        "last_sync": _last_sync(db),
+        "business_data_at": data_metadata["business_data_at"],
+        "last_sync_at": data_metadata["last_sync_at"],
+        "last_sync": data_metadata["last_sync_at"] or _last_sync(db),
+        "data_metadata": data_metadata,
         "bound_stores": bound_store_count,
     }
 
@@ -1148,17 +1384,27 @@ def sync_promo(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    db.execute(
-        "INSERT INTO meta (key, value) VALUES ('promo_last_sync', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (_now(),),
+        except Exception as exc:  # noqa: BLE001 - 单店失败不能中断其他店铺同步
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
+    sync_state = record_sync_result(
+        db,
+        "realtime" if mode == "realtime" else "daily",
+        {"results": results, "total": len(results), "ok": sum(1 for result in results if result["ok"])},
+        source="alimama_scene_realtime" if mode == "realtime" else "alimama_scene_daily",
     )
+    if sync_state["status"] in {"success", "partial"}:
+        db.execute(
+            "INSERT INTO meta (key, value) VALUES ('promo_last_sync', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (sync_state["last_attempt_at"],),
+        )
     _log(db, user, "同步万相台数据", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "sync": sync_state}
 
 @router.get("/plans")
 def list_plans(
     scene: str = "",
+    channel: str = "",
     mode: str = "realtime",
     store_id: int | None = None,
     user: dict = Depends(get_current_user),
@@ -1166,10 +1412,15 @@ def list_plans(
 ) -> dict:
     mode = _mode(mode)
     query = (
-        "SELECT p.*, COALESCE(s.spend, 0) AS stat_spend, COALESCE(s.sales, 0) AS stat_sales, "
+        "SELECT p.*, "
+        "(SELECT pi.item_id FROM promo_plan_items pi WHERE pi.store_id = p.store_id AND pi.campaign_id = p.campaign_id ORDER BY pi.updated_at DESC LIMIT 1) AS linked_item_id, "
+        "(SELECT pi.item_title FROM promo_plan_items pi WHERE pi.store_id = p.store_id AND pi.campaign_id = p.campaign_id ORDER BY pi.updated_at DESC LIMIT 1) AS linked_item_title, "
+        "(SELECT pi.image FROM promo_plan_items pi WHERE pi.store_id = p.store_id AND pi.campaign_id = p.campaign_id ORDER BY pi.updated_at DESC LIMIT 1) AS linked_item_image, "
+        "COALESCE(s.spend, 0) AS stat_spend, COALESCE(s.sales, 0) AS stat_sales, "
         "COALESCE(s.roi, 0) AS stat_roi, COALESCE(s.clicks, 0) AS stat_clicks, "
         "COALESCE(s.prev_spend, 0) AS prev_spend, COALESCE(s.prev_sales, 0) AS prev_sales, "
         "COALESCE(s.prev_roi, 0) AS prev_roi, COALESCE(s.prev_clicks, 0) AS prev_clicks, "
+        "COALESCE(s.prev_scope, 'unknown') AS prev_scope, "
         "COALESCE(s.alipay_dir, 0) AS stat_alipay_dir, COALESCE(s.alipay_indir, 0) AS stat_alipay_indir, "
         "COALESCE(s.retained_sales, 0) AS stat_retained_sales, COALESCE(s.retained_roi, 0) AS stat_retained_roi, "
         "COALESCE(s.refund_amt, 0) AS stat_refund_amt, COALESCE(s.extra_json, '') AS stat_extra "
@@ -1198,13 +1449,15 @@ def list_plans(
     query += " ORDER BY CASE p.status WHEN '在投' THEN 0 ELSE 1 END, stat_spend DESC, p.id ASC"
     rows = db.execute(query, params).fetchall()
     items = []
-    def _cycle(cur, prev):
-        if prev:
+    def _cycle(cur, prev, scope="unknown"):
+        if prev and (mode != "realtime" or scope == "same_hour"):
             return round((cur - prev) / prev * 100, 2)
         return None
 
     for r in rows:
         d = dict(r)
+        if not channel_matches(channel, d.get("scene"), d.get("scene_name")):
+            continue
         d["spend"] = d.pop("stat_spend", 0) or 0
         d["sales"] = d.pop("stat_sales", 0) or 0
         d["roi"] = d.pop("stat_roi", 0) or 0
@@ -1214,6 +1467,9 @@ def list_plans(
         d["retained_sales"] = d.pop("stat_retained_sales", 0) or 0
         d["retained_roi"] = d.pop("stat_retained_roi", 0) or 0
         d["refund_amt"] = d.pop("stat_refund_amt", 0) or 0
+        d["item_id"] = d.pop("linked_item_id", "") or ""
+        d["item_title"] = d.pop("linked_item_title", "") or ""
+        d["item_image"] = d.pop("linked_item_image", "") or ""
         _extra = d.pop("stat_extra", "") or ""
         try:
             d["extra"] = json.loads(_extra) if _extra else {}
@@ -1225,12 +1481,25 @@ def list_plans(
         d["prev_sales"] = d.pop("prev_sales", 0) or 0
         d["prev_roi"] = d.pop("prev_roi", 0) or 0
         d["prev_clicks"] = d.pop("prev_clicks", 0) or 0
-        d["spend_cycle"] = _cycle(d["spend"], d["prev_spend"])
-        d["sales_cycle"] = _cycle(d["sales"], d["prev_sales"])
-        d["roi_cycle"] = _cycle(d["roi"], d["prev_roi"])
+        d["prev_scope"] = d.pop("prev_scope", "unknown") or "unknown"
+        d["spend_cycle"] = _cycle(d["spend"], d["prev_spend"], d["prev_scope"])
+        d["sales_cycle"] = _cycle(d["sales"], d["prev_sales"], d["prev_scope"])
+        d["roi_cycle"] = _cycle(d["roi"], d["prev_roi"], d["prev_scope"])
         d["mode"] = mode
-        items.append(d)
-    return {"items": items, "mode": mode}
+        items.append(with_channel(d))
+    compare_labels = {"realtime": "昨日同时段", "yesterday": "前日全天", "7d": "前7天"}
+    compare_notes = {
+        "realtime": "仅在计划级昨日同时段数据可用时计算；否则显示—",
+        "yesterday": "当前与前日均为完整自然日",
+        "7d": "当前与对比均为连续7天汇总",
+    }
+    return {
+        "items": items,
+        "mode": mode,
+        "compare_label": compare_labels.get(mode, "上期"),
+        "compare_note": compare_notes.get(mode, "按上期数据比较"),
+        "data_metadata": build_dataset_metadata(db, "plans", user, store_id, expected_points=len(items), actual_points=sum(1 for item in items if item.get("updated_at"))),
+    }
 
 @router.post("/sync-plans")
 def sync_plans(
@@ -1259,7 +1528,9 @@ def sync_plans(
             if mode == "realtime":
                 stats_list = fetch_plan_realtime(store)
                 _pd = today - timedelta(days=1)
-                prev_list = fetch_plan_reports(store, _pd.isoformat(), _pd.isoformat())
+                # 当前值是今天累计，历史基准取昨日截至同一小时，避免把今天部分时段与昨日全天比较。
+                current_hour = datetime.now().astimezone().hour
+                prev_list = fetch_plan_realtime(store, _pd.isoformat(), through_hour=current_hour)
             elif mode == "yesterday":
                 d = today - timedelta(days=1)
                 stats_list = fetch_plan_reports(store, d.isoformat(), d.isoformat())
@@ -1281,11 +1552,11 @@ def sync_plans(
                 pass
             for p in snapshots:
                 db.execute(
-                    "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, bid_type, bid_value, status, gmt_create, spend, sales, roi, clicks, note, tag, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, '', '', ?) "
+                    "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, budget_type, bid_type, bid_value, status, gmt_create, spend, sales, roi, clicks, note, tag, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, '', '', ?) "
                     "ON CONFLICT(store_id, campaign_id) DO UPDATE SET "
                     "scene = excluded.scene, scene_name = excluded.scene_name, plan_name = excluded.plan_name, "
-                    "day_budget = excluded.day_budget, bid_type = excluded.bid_type, bid_value = excluded.bid_value, "
+                    "day_budget = excluded.day_budget, budget_type = excluded.budget_type, bid_type = excluded.bid_type, bid_value = excluded.bid_value, "
                     "status = excluded.status, gmt_create = excluded.gmt_create, updated_at = excluded.updated_at",
                     (
                         store["id"],
@@ -1294,6 +1565,7 @@ def sync_plans(
                         p["campaign_id"],
                         p["plan_name"],
                         p["day_budget"],
+                        p.get("budget_type") or ("unlimited" if not p["day_budget"] else "normal"),
                         p["bid_type"],
                         p["bid_value"],
                         p["status"],
@@ -1306,12 +1578,13 @@ def sync_plans(
                     _pv = prev_map.get(p["campaign_id"]) or {}
                     _extra_json = json.dumps({k: v for k, v in st.items() if k != "campaign_id"}, ensure_ascii=False)
                     db.execute(
-                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, prev_spend, prev_sales, prev_roi, prev_clicks, alipay_dir, alipay_indir, retained_sales, retained_roi, refund_amt, extra_json, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, prev_spend, prev_sales, prev_roi, prev_clicks, prev_scope, alipay_dir, alipay_indir, retained_sales, retained_roi, refund_amt, extra_json, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                         "ON CONFLICT(store_id, campaign_id, mode) DO UPDATE SET "
                         "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
                         "clicks = excluded.clicks, prev_spend = excluded.prev_spend, prev_sales = excluded.prev_sales, "
                         "prev_roi = excluded.prev_roi, prev_clicks = excluded.prev_clicks, "
+                        "prev_scope = excluded.prev_scope, "
                         "alipay_dir = excluded.alipay_dir, alipay_indir = excluded.alipay_indir, "
                         "retained_sales = excluded.retained_sales, retained_roi = excluded.retained_roi, "
                         "refund_amt = excluded.refund_amt, extra_json = excluded.extra_json, updated_at = excluded.updated_at",
@@ -1325,8 +1598,9 @@ def sync_plans(
                             st["clicks"],
                             _pv.get("spend") or 0,
                             _pv.get("sales") or 0,
-                            _pv.get("roi") or 0,
+                            (_pv.get("retained_roi") if mode == "realtime" else _pv.get("roi")) or 0,
                             _pv.get("clicks") or 0,
+                            "same_hour" if mode == "realtime" and _pv else ("full_day" if mode != "realtime" else "unknown"),
                             st.get("alipay_dir") or 0,
                             st.get("alipay_indir") or 0,
                             st.get("retained_sales") or 0,
@@ -1341,12 +1615,21 @@ def sync_plans(
             )
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - 单店失败不能中断其他店铺同步
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
     _log(db, user, "同步推广计划", "", f"模式={mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+    sync_state = record_sync_result(
+        db,
+        f"plans_{mode}",
+        {"results": results, "total": len(results), "ok": sum(1 for result in results if result["ok"])},
+        source="alimama_campaign_report",
+    )
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "sync": sync_state}
 
 @router.post("/sync-items")
 def sync_items(
     mode: str = "realtime",
+    store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -1378,7 +1661,15 @@ def sync_items(
         db_mode = str(days)
     now = _now()
     results = []
-    for store in _all_stores(db):
+    visible = visible_store_ids(user)
+    stores = _all_stores(db)
+    if visible is not None:
+        stores = [store for store in stores if store["id"] in visible]
+    if store_id is not None:
+        stores = [store for store in stores if store["id"] == store_id]
+        if not stores:
+            raise HTTPException(status_code=403, detail="没有访问该店铺的权限")
+    for store in stores:
         if not has_profile(store["id"]):
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
             continue
@@ -1415,8 +1706,16 @@ def sync_items(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(rows), "source": source})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001 - 单店失败不能中断其他店铺同步
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
     _log(db, user, "同步商品推广数据", "", f"模式={db_mode} 成功 {sum(1 for r in results if r['ok'])} / {len(results)} 家")
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "mode": db_mode}
+    sync_state = record_sync_result(
+        db,
+        f"items_{db_mode}",
+        {"results": results, "total": len(results), "ok": sum(1 for result in results if result["ok"])},
+        source="alimama_item_or_plan_attribution",
+    )
+    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "mode": db_mode, "sync": sync_state}
 
 @router.post("/sync-hourly")
 def sync_promo_hourly(
@@ -1763,6 +2062,9 @@ def set_plan_status(
         raise HTTPException(status_code=400, detail="该店铺未绑定万相台登录，无法操作")
     if row["scene"] not in ("wholesite", "keyword", "crowd"):
         raise HTTPException(status_code=400, detail="该计划场景暂不支持暂停/开启（内容营销除外）")
+    guard = _plan_execution_guard(db, user, row)
+    if body.execute and not guard["can_execute"]:
+        raise HTTPException(status_code=409, detail=guard["block_reason"])
     store = dict(store)
     target = "暂停" if body.status == "pause" else "开启"
     label = f"{row['plan_name']}（{row['campaign_id']}）"
@@ -1777,7 +2079,7 @@ def set_plan_status(
             raise HTTPException(status_code=400, detail="未找到该计划的投放单元，无法操作（可能已暂停或数据未同步）")
         if not body.execute:
             _log(db, user, "计划操作(预检)", label, f"plan_id={plan_id}；{target}，命中 {count} 个单元（未执行）")
-            return {"ok": True, "execute": False, "count": count, "units": pre.get("units", [])}
+            return {"ok": True, "execute": False, "count": count, "units": pre.get("units", []), **guard}
         resp = _run_json(
             store,
             ["plan-status", "--campaign", str(row["campaign_id"]), "--scene", row["scene"], "--status", body.status, "--execute", "--raw"],
@@ -1804,7 +2106,7 @@ def set_plan_status(
         ),
     )
     _log(db, user, "计划操作", label, f"plan_id={plan_id}；{target}（万相台已执行，命中 {count} 个单元）")
-    return {"ok": True, "execute": True, "count": count, "response": str(resp)[:300]}
+    return {"ok": True, "execute": True, "count": count, "response": str(resp)[:300], "can_execute": True, "block_reason": ""}
 
 @router.post("/plans/batch-status")
 def set_plans_status_batch(
@@ -1859,14 +2161,18 @@ def preview_plans_adjust_batch(
     results = []
     for plan_id in plan_ids:
         row = db.execute(
-            "SELECT id, plan_name, status, day_budget, bid_value FROM promo_plans WHERE id = ?" + scope_frag,
+            "SELECT id, store_id, campaign_id, plan_name, status, day_budget, bid_value FROM promo_plans WHERE id = ?" + scope_frag,
             [plan_id] + scope_params,
         ).fetchone()
         if not row:
             results.append({"plan_id": plan_id, "ok": False, "error": "推广计划不存在或无权访问"})
             continue
         old_value = float(row[body.field] or 0)
-        new_value = round(max(0, old_value * (1 + body.change_pct / 100)), 2)
+        new_value = (
+            round(body.target_value, 2)
+            if body.target_value is not None and len(plan_ids) == 1
+            else round(max(0, old_value * (1 + body.change_pct / 100)), 2)
+        )
         risks = []
         if old_value <= 0:
             risks.append("当前值为 0，百分比调整不会产生有效值")
@@ -1874,6 +2180,7 @@ def preview_plans_adjust_batch(
             risks.append("调整幅度较大，建议先小范围观察")
         if row["status"] != "在投":
             risks.append("计划当前未投放，调整后不会立即产生花费")
+        guard = _plan_execution_guard(db, user, row)
         results.append({
             "plan_id": plan_id,
             "plan_name": row["plan_name"] or "未命名计划",
@@ -1882,6 +2189,8 @@ def preview_plans_adjust_batch(
             "old_value": round(old_value, 2),
             "new_value": new_value,
             "risks": risks,
+            "can_execute": guard["can_execute"],
+            "block_reason": guard["block_reason"],
         })
     _log(db, user, "批量调整预览", "推广计划", f"plan_ids={','.join(str(plan_id) for plan_id in plan_ids)}；字段={body.field}，幅度={body.change_pct}% ，计划数={len(plan_ids)}")
     return {
@@ -1911,6 +2220,16 @@ def _write_campaign_field(store: dict, row, field: str, value: float) -> dict:
     campaign = {"campaignId": row["campaign_id"]}
     if field == "day_budget":
         campaign["dayBudget"] = round(value, 2)
+        # batchUpdate 接口不会根据金额自动推断模式，缺少 dmcType 会返回
+        # INVALID_PARAMETER「计划预算类型只能为日预算或不限预算」。
+        # 优先使用同步保存的平台类型；老数据没有该列时按当前金额兜底。
+        try:
+            budget_type = str(row["budget_type"] or "").strip().lower()
+        except (KeyError, IndexError):
+            budget_type = ""
+        if budget_type not in {"normal", "unlimited"}:
+            budget_type = "unlimited" if round(value, 2) <= 0 else "normal"
+        campaign["dmcType"] = budget_type
         path = f"/campaign/budget/batchUpdate.json?bizCode={biz_code}"
         body = {"bizCode": biz_code, "budgetList": [campaign]}
     elif field == "bid_value":
@@ -1937,8 +2256,11 @@ def adjust_plan(
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
     old_value = float(row[body.field] or 0)
+    guard = _plan_execution_guard(db, user, row)
     if not body.execute:
-        return {"ok": True, "execute": False, "plan_id": plan_id, "field": body.field, "old_value": old_value, "new_value": round(body.value, 2)}
+        return {"ok": True, "execute": False, "plan_id": plan_id, "field": body.field, "old_value": old_value, "new_value": round(body.value, 2), **guard}
+    if not guard["can_execute"]:
+        raise HTTPException(status_code=409, detail=guard["block_reason"])
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
     if not store or not has_profile(store["id"]):
         raise HTTPException(status_code=400, detail="该店铺未绑定万相台登录，无法操作")
@@ -1946,9 +2268,58 @@ def adjust_plan(
         response = _write_campaign_field(dict(store), row, body.field, body.value)
     except AlimamaError as exc:
         raise HTTPException(status_code=502, detail=f"万相台操作失败：{exc}") from exc
-    db.execute(f"UPDATE promo_plans SET {body.field} = ?, updated_at = ? WHERE id = ?" + scope_frag, [round(body.value, 2), _now(), plan_id] + scope_params)
-    _log(db, user, "计划参数调整", row["plan_name"], f"plan_id={plan_id}；{body.field} {old_value} → {round(body.value, 2)}")
-    return {"ok": True, "execute": True, "plan_id": plan_id, "field": body.field, "old_value": old_value, "new_value": round(body.value, 2), "response": str(response)[:300]}
+    new_value = round(body.value, 2)
+    executed_at = _now()
+    due_at = (_parse_action_time(executed_at) + timedelta(hours=48)).isoformat(timespec="seconds")
+    field_label = "日预算" if body.field == "day_budget" else "出价"
+    increasing = new_value > old_value
+    action_type = (
+        ("增加预算/放量" if increasing else "降低预算/止损")
+        if body.field == "day_budget"
+        else ("提高出价" if increasing else "降低出价/控成本")
+    )
+    expected = "成交增长且 ROI 保持稳定" if increasing else "ROI 改善并减少无效花费"
+    rollback_condition = (
+        f"调整后 ROI 较当前下降超过 15% 时，将{field_label}恢复至 {old_value:g}"
+        if increasing
+        else f"成交明显下降且 ROI 未改善时，将{field_label}恢复至 {old_value:g}"
+    )
+    success_criteria = (
+        {"target_roi_min": max(1, round(float(row["roi"] or 0) * 0.85, 2)), "sales_change_pct_min": 5}
+        if increasing
+        else {"roi_change_min": 0.1, "spend_change_pct_max": -5}
+    )
+    change_pct = round((new_value - old_value) / old_value * 100, 2) if old_value else None
+    db.execute(
+        f"UPDATE promo_plans SET {body.field} = ?, updated_at = ? WHERE id = ?" + scope_frag,
+        [new_value, executed_at, plan_id] + scope_params,
+    )
+    action_cur = db.execute(
+        "INSERT INTO promo_action_records "
+        "(user_id, username, store_id, plan_id, action_type, description, before_value, after_value, before_spend, before_sales, before_roi, expected, observation_hours, status, executed_at, observation_due_at, data_quality, created_at, success_criteria, rollback_condition, change_pct, platform_status, platform_submitted_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 48, 'observing', ?, ?, ?, ?, ?, ?, ?, 'submitted', ?)",
+        (
+            user["id"], user["username"], row["store_id"], row["id"], action_type,
+            f"万相台{field_label}从 {old_value:g} 调整为 {new_value:g}", old_value, new_value,
+            float(row["spend"] or 0), float(row["sales"] or 0), float(row["roi"] or 0), expected,
+            executed_at, due_at, "计划操作前快照", executed_at,
+            json.dumps(success_criteria, ensure_ascii=False), rollback_condition, change_pct, executed_at,
+        ),
+    )
+    _log(db, user, "计划参数调整", row["plan_name"], f"plan_id={plan_id}；{body.field} {old_value} → {new_value}")
+    return {
+        "ok": True,
+        "execute": True,
+        "plan_id": plan_id,
+        "field": body.field,
+        "old_value": old_value,
+        "new_value": new_value,
+        "action_id": action_cur.lastrowid,
+        "observation_hours": 48,
+        "response": str(response)[:300],
+        "can_execute": True,
+        "block_reason": "",
+    }
 
 
 @router.post("/plans/batch-adjust")
@@ -1972,15 +2343,22 @@ def adjust_plans_batch(
             if not row:
                 raise HTTPException(status_code=404, detail="推广计划不存在或无权访问")
             old_value = float(row[body.field] or 0)
-            new_value = round(max(0, old_value * (1 + body.change_pct / 100)), 2)
+            new_value = (
+                round(body.target_value, 2)
+                if body.target_value is not None and len(dict.fromkeys(body.plan_ids)) == 1
+                else round(max(0, old_value * (1 + body.change_pct / 100)), 2)
+            )
+            guard = _plan_execution_guard(db, user, row)
             if body.execute:
+                if not guard["can_execute"]:
+                    raise HTTPException(status_code=409, detail=guard["block_reason"])
                 store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
                 if not store or not has_profile(store["id"]):
                     raise HTTPException(status_code=400, detail="店铺未绑定万相台登录")
                 _write_campaign_field(dict(store), row, body.field, new_value)
                 db.execute(f"UPDATE promo_plans SET {body.field} = ?, updated_at = ? WHERE id = ?" + scope_frag, [new_value, _now(), plan_id] + scope_params)
                 _log(db, user, "批量计划参数调整", row["plan_name"], f"plan_id={plan_id}；{body.field} {old_value} → {new_value}")
-            results.append({"plan_id": plan_id, "plan_name": row["plan_name"], "ok": True, "old_value": old_value, "new_value": new_value})
+            results.append({"plan_id": plan_id, "plan_name": row["plan_name"], "ok": True, "old_value": old_value, "new_value": new_value, "can_execute": guard["can_execute"], "block_reason": guard["block_reason"]})
         except HTTPException as exc:
             results.append({"plan_id": plan_id, "ok": False, "error": str(exc.detail)})
         except AlimamaError as exc:

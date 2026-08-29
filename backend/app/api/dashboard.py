@@ -14,8 +14,8 @@ from backend.app.core.sycm import has_profile
 router = APIRouter()
 
 
-ALLOWED_WIDGETS = {"actions", "kpis", "stores", "shortcuts", "system", "notice", "tasks", "changelog"}
-DEFAULT_WIDGETS = ["actions", "kpis", "shortcuts", "system", "notice", "tasks", "changelog"]
+ALLOWED_WIDGETS = {"actions", "kpis", "stores"}
+DEFAULT_WIDGETS = ["actions", "kpis"]
 
 
 class DashboardConfigIn(BaseModel):

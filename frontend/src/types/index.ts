@@ -241,11 +241,14 @@ export type PromoData = {
   mode: "realtime" | "yesterday" | "7d" | "range";
   summary: PromoSceneAgg;
   scenes: PromoSceneAgg[];
+  channels?: Array<PromoSceneAgg & { channel: string; channel_name: string }>;
   alerts: { type: string; message: string }[];
   compare: { spend: number | null; sales: number | null };
   trend: PromoTrendPoint[];
   trend_unit: "hour" | "day";
   bound_stores: number;
+  business_data_at?: string | null;
+  last_sync_at?: string | null;
   last_sync: string | null;
 };
 
@@ -254,8 +257,13 @@ export type PromoPlan = {
   store_id: number;
   scene: string;
   scene_name: string;
+  channel?: string;
+  channel_name?: string;
   campaign_id: string;
   plan_name: string;
+  item_id?: string;
+  item_title?: string;
+  item_image?: string;
   day_budget: number;
   bid_type: string;
   bid_value: number;
@@ -272,6 +280,10 @@ export type PromoPlan = {
   prev_sales?: number;
   prev_roi?: number;
   prev_clicks?: number;
+  prev_scope?: string;
+  decision_status?: "needs_decision" | "observe" | "insufficient";
+  decision_status_label?: string;
+  decision_reason?: string;
   alipay_dir?: number;
   alipay_indir?: number;
   retained_sales?: number;

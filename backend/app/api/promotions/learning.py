@@ -17,7 +17,7 @@ DEFAULT_MIN_SAMPLES = 3
 DEFAULT_DECAY_DAYS = 180
 
 _OUTCOME_WEIGHTS = {"success": 1.25, "partial": 0.85, "failed": 0.45}
-_CONFIDENCE_WEIGHTS = {"high": 1.0, "medium": 0.7, "low": 0.35}
+_CONFIDENCE_WEIGHTS = {"high": 1.0, "medium": 0.7, "low": 0.25}
 _FEEDBACK_WEIGHTS = {"adopted": 1.1, "modified": 0.75, "rejected": 0.15}
 
 
@@ -119,8 +119,17 @@ def learn_strategy_weights(
             continue
         confidence = str(record.get("confidence") or "low").lower()
         confidence_weight = _CONFIDENCE_WEIGHTS.get(confidence, _CONFIDENCE_WEIGHTS["low"])
-        if (record.get("interference_notes") or "").strip():
-            confidence_weight *= 0.65
+        interfered = bool((record.get("interference_notes") or "").strip())
+        if interfered:
+            confidence_weight *= 0.5
+        baseline_days = record.get("baseline_days")
+        after_days = record.get("after_days")
+        sparse_window = (
+            (baseline_days is not None and int(baseline_days or 0) < 2)
+            or (after_days is not None and int(after_days or 0) < 2)
+        )
+        if sparse_window:
+            confidence_weight *= 0.6
         manual_conclusion = str(record.get("manual_conclusion") or "").strip().lower()
         outcome_weight = _OUTCOME_WEIGHTS[outcome]
         if manual_conclusion in {"failed", "失败", "无效"}:
@@ -128,15 +137,17 @@ def learn_strategy_weights(
         elif manual_conclusion in {"success", "成功", "有效"}:
             outcome_weight = max(outcome_weight, _OUTCOME_WEIGHTS["success"])
         recency = _recency_weight(record.get("verified_at") or record.get("executed_at") or record.get("created_at"), reference_time, decay_days)
+        quality_adjusted_outcome = 1.0 + (outcome_weight - 1.0) * confidence_weight
         grouped[strategy_id].append(
             {
                 "kind": "verified_result",
-                "value": outcome_weight,
+                "value": quality_adjusted_outcome,
                 "weight": confidence_weight * recency,
                 "outcome": outcome,
                 "confidence": confidence,
                 "recency": recency,
-                "interfered": bool((record.get("interference_notes") or "").strip()),
+                "interfered": interfered,
+                "sparse_window": sparse_window,
             }
         )
 
@@ -152,10 +163,14 @@ def learn_strategy_weights(
         successes = sum(item.get("outcome") == "success" for item in result_events)
         rejected = sum(item.get("feedback") == "rejected" for item in feedback_events)
         modified = sum(item.get("feedback") == "modified" for item in feedback_events)
+        interfered_count = sum(bool(item.get("interfered")) for item in result_events)
+        low_confidence_count = sum(item.get("confidence") == "low" for item in result_events)
+        sparse_window_count = sum(bool(item.get("sparse_window")) for item in result_events)
         explanation = (
             f"{sample_count} 条证据（{len(result_events)} 条已验证结果、{len(feedback_events)} 条人工反馈）；"
             f"结果成功 {successes} 条，人工拒绝 {rejected} 条、修改 {modified} 条；"
-            f"加权原始评分 {_round(raw_weight)}，样本保护系数 {_round(sample_protection)}。"
+            f"干扰样本 {interfered_count} 条、低可信 {low_confidence_count} 条、观察窗稀疏 {sparse_window_count} 条；"
+            f"这些证据已降权，加权原始评分 {_round(raw_weight)}，样本保护系数 {_round(sample_protection)}。"
         )
         strategy_weights.append(
             {
@@ -170,6 +185,9 @@ def learn_strategy_weights(
                 "success_count": successes,
                 "rejected_count": rejected,
                 "modified_count": modified,
+                "interfered_count": interfered_count,
+                "low_confidence_count": low_confidence_count,
+                "sparse_window_count": sparse_window_count,
                 "explanation": explanation,
             }
         )

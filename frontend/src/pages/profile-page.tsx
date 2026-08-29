@@ -1,5 +1,5 @@
 import { CameraOutlined, IdcardOutlined, LockOutlined, LogoutOutlined } from "@ant-design/icons";
-import { Alert, Avatar, Button, Card, Checkbox, Col, Form, Input, Popconfirm, Row, Space, Table, Tag, Typography, Upload, message } from "antd";
+import { Alert, Avatar, Button, Card, Checkbox, Col, Empty, Form, Input, Popconfirm, Row, Space, Table, Tag, Typography, Upload, message } from "antd";
 import type { UploadProps } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -259,7 +259,12 @@ export function ProfilePage() {
 
   return (
     <div>
-      <PageHeader icon={<IdcardOutlined />} eyebrow="个人资料" title="个人中心" />
+      <PageHeader
+        icon={<IdcardOutlined />}
+        eyebrow="个人资料"
+        title="个人中心"
+        description="维护个人资料、登录安全与首页看板偏好。"
+      />
 
       {expired ? (
         <Alert type="error" showIcon style={{ marginBottom: 16 }} message="账号已到期，请联系管理员续期" />
@@ -337,15 +342,16 @@ export function ProfilePage() {
 
         <Col xs={24} md={16}>
           <Card variant="borderless" title={<Text strong>修改花名</Text>} styles={{ body: { padding: "18px 20px" } }}>
-            <Form form={nicknameForm} layout="inline" onFinish={saveNickname} initialValues={{ nickname: user?.nickname }}>
+            <Form form={nicknameForm} layout="inline" onFinish={saveNickname} initialValues={{ nickname: user?.nickname }} style={{ maxWidth: 420 }}>
               <Form.Item
                 name="nickname"
+                style={{ flex: 1, minWidth: 200 }}
                 rules={[
                   { required: true, message: "请输入花名" },
                   { max: 20, message: "花名不能超过 20 个字符" },
                 ]}
               >
-                <Input placeholder="花名" style={{ width: 260 }} />
+                <Input placeholder="花名" style={{ width: "100%" }} />
               </Form.Item>
               <Form.Item>
                 <Button type="primary" htmlType="submit" loading={nicknameSaving}>
@@ -418,6 +424,14 @@ export function ProfilePage() {
               dataSource={sessions}
               pagination={{ pageSize: 8, showSizeChanger: true, pageSizeOptions: [8, 20, 50] }}
               columns={sessionColumns}
+              scroll={{ x: 680 }}
+              locale={{
+                emptyText: (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂未读取到登录会话">
+                    <Button onClick={loadSessions}>重新加载</Button>
+                  </Empty>
+                ),
+              }}
             />
           </Card>
 

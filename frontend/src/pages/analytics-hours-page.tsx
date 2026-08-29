@@ -1,4 +1,4 @@
-import { BarChartOutlined, ReloadOutlined, RobotOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
+import { ReloadOutlined, RobotOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Card, DatePicker, Drawer, Empty, Segmented, Space, Spin, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
@@ -6,8 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 import http, { getApiErrorMessage } from "../lib/api";
 import { showSyncFeedback } from "../lib/sync-feedback";
 import { useAutoRefresh } from "../lib/use-auto-refresh";
-import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect, fmtInt, fmtMoney } from "../components/analytics/analytics-ui";
+import { DecisionBand, MetricRail, WorkspacePage, WorkspaceToolbar } from "../components/ui/workspace-template";
 import { AlertSettingsModal } from "../components/ui/alert-settings-modal";
 import { useAlertConfig } from "../lib/use-alert-config";
 import { HourlyPushButton } from "../components/ui/hourly-push";
@@ -166,7 +166,6 @@ function HourChart({
             zIndex: 5,
             pointerEvents: "none",
             whiteSpace: "nowrap",
-            boxShadow: "var(--ops-shadow-sm)",
           }}
         >
           {tooltipFor(items[hover], hover)}
@@ -360,53 +359,46 @@ export function AnalyticsHoursPage() {
   }
 
   return (
-    <div>
-      <PageHeader
-        icon={<BarChartOutlined />}
-        eyebrow="数据洞察"
-        title="时段分析"
-        extra={
-          <Space wrap>
-            <StoreScopeSelect value={storeId} onChange={setStoreId} />
-            <Button icon={<RobotOutlined />} onClick={runAI}>
-              AI 时段解读
-            </Button>
-            <HourlyPushButton scope="hours" />
-            <Button icon={<ReloadOutlined />} onClick={() => load(storeId)}>
-              刷新
-            </Button>
-            <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncHourly}>
-              同步分时数据
-            </Button>
-          </Space>
+    <WorkspacePage kind="analysis">
+      <DecisionBand
+        eyebrow="数据洞察 · 时段分析"
+        title={data?.peak_hour && data.peak_sales > 0 ? `销售高峰在 ${data.peak_hour}，贡献 ${fmtMoney(data.peak_sales)}` : "识别高效时段，决定何时加推或收缩"}
+        description={`当前范围：${data?.label ?? "今日"} · 最近更新 ${lastUpdated || "—"}`}
+        action={
+          <Button type="primary" icon={<SyncOutlined />} loading={syncing} onClick={syncHourly}>
+            同步分时数据
+          </Button>
         }
+        ariaLabel="时段分析核心结论"
       />
 
-      <Space style={{ marginBottom: 12 }} wrap>
-        <Segmented
-          options={QUICK_OPTIONS}
-          value={range ? undefined : quick}
-          onChange={(v) => {
-            setRange(null);
-            setQuick(String(v));
-          }}
-        />
-        <DatePicker.RangePicker
-          presets={RANGE_PRESETS}
-          value={range ? [dayjs(range[0]), dayjs(range[1])] : null}
-          onChange={(dates) => {
-            if (dates && dates[0] && dates[1]) setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
-            else setRange(null);
-          }}
-          allowClear
-          placeholder={["开始日期", "结束日期"]}
-        />
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          当前范围：{data?.label ?? "今日"}
-          {data?.peak_hour && data.peak_sales > 0 ? ` · 销售高峰 ${data.peak_hour}（${fmtMoney(data.peak_sales)}）` : ""}
-        </Text>
-        <Text type="secondary" style={{ fontSize: 12 }}>最近更新 {lastUpdated || "—"}</Text>
-      </Space>
+      <WorkspaceToolbar>
+        <Space wrap>
+            <StoreScopeSelect value={storeId} onChange={setStoreId} />
+          <Segmented
+            options={QUICK_OPTIONS}
+            value={range ? undefined : quick}
+            onChange={(v) => {
+              setRange(null);
+              setQuick(String(v));
+            }}
+          />
+          <DatePicker.RangePicker
+            presets={RANGE_PRESETS}
+            value={range ? [dayjs(range[0]), dayjs(range[1])] : null}
+            onChange={(dates) => {
+              if (dates && dates[0] && dates[1]) setRange([dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")]);
+              else setRange(null);
+            }}
+            allowClear
+            placeholder={["开始日期", "结束日期"]}
+          />
+          <Segmented size="small" options={METRIC_OPTIONS} value={metric} onChange={(v) => setMetric(String(v) as MetricKey)} />
+          <Button icon={<RobotOutlined />} onClick={runAI}>AI 时段解读</Button>
+          <HourlyPushButton scope="hours" />
+          <Button icon={<ReloadOutlined />} onClick={() => load(storeId)}>刷新</Button>
+        </Space>
+      </WorkspaceToolbar>
 
       {loading && !data ? (
         <div style={{ textAlign: "center", padding: 60 }}>
@@ -418,8 +410,9 @@ export function AnalyticsHoursPage() {
         </Card>
       ) : (
         <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-            {[
+          <MetricRail
+            columns={6}
+            items={[
               { label: "访客", value: fmtInt(data.summary.visitors) },
               { label: "浏览量", value: fmtInt(data.summary.pv) },
               { label: "销售额", value: fmtMoney(data.summary.sales) },
@@ -427,29 +420,14 @@ export function AnalyticsHoursPage() {
               { label: "推广花费", value: fmtMoney(data.summary.promo_spend) },
               { label: "推广成交", value: fmtMoney(data.summary.promo_sales) },
               { label: "推广ROI", value: data.summary.promo_roi.toFixed(2) },
-            ].map((m) => (
-              <div
-                key={m.label}
-                style={{
-                  flex: "1 1 140px",
-                  minWidth: 130,
-                  padding: "10px 14px",
-                  borderRadius: "var(--ops-radius)",
-                  background: "var(--ops-card-bg-2)",
-                  border: "1px solid var(--ops-border)",
-                }}
-              >
-                <div style={{ fontSize: 12, color: "var(--ops-text-secondary)", marginBottom: 2 }}>{m.label}</div>
-                <div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{m.value}</div>
-              </div>
-            ))}
-          </div>
+            ]}
+          />
 
           {items.length > 0 && hourAlerts.length > 0 && (
             <Card
               variant="borderless"
               title="时段预警"
-              style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+              style={{ marginBottom: 16 }}
               extra={
                 <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
               }
@@ -470,7 +448,7 @@ export function AnalyticsHoursPage() {
             <Card
               variant="borderless"
               title="时段预警"
-              style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+              style={{ marginBottom: 16 }}
               extra={
                 <Button size="small" icon={<SettingOutlined />} onClick={() => setAlertCfgOpen(true)}>预警设置</Button>
               }
@@ -483,11 +461,10 @@ export function AnalyticsHoursPage() {
 
           <Card
             variant="borderless"
-            title={`24 小时 ${metricLabel}分布`}
-            style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+            title={`全部时段 · ${metricLabel} · ${data.label}`}
+            style={{ marginBottom: 16 }}
             extra={
               <Space wrap>
-                <Segmented size="small" options={METRIC_OPTIONS} value={metric} onChange={(v) => setMetric(String(v) as MetricKey)} />
                 <Switch checked={compare} onChange={setCompare} checkedChildren="对比上一周期" unCheckedChildren="不对比" />
               </Space>
             }
@@ -510,7 +487,7 @@ export function AnalyticsHoursPage() {
                     {compare && (
                       <div style={{ width: "40%", height: `${(prev / maxPrevMetric) * 100}%`, background: "var(--ops-text-3)", borderRadius: "4px 4px 0 0", minHeight: prev ? 2 : 0 }} />
                     )}
-                    <div style={{ width: "40%", height: `${(metricValue(it) / metricMax) * 100}%`, background: "linear-gradient(180deg, var(--ops-accent-light), var(--ops-accent))", borderRadius: "4px 4px 0 0", minHeight: metricValue(it) ? 2 : 0 }} />
+                    <div style={{ width: "40%", height: `${(metricValue(it) / metricMax) * 100}%`, background: "var(--ops-accent)", borderRadius: "4px 4px 0 0", minHeight: metricValue(it) ? 2 : 0 }} />
                   </>
                 );
               }}
@@ -538,8 +515,8 @@ export function AnalyticsHoursPage() {
 
           <Card
             variant="borderless"
-            title="24 小时 推广ROI（柱高=ROI）"
-            style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}
+            title={`推广时段 · ROI · ${data.label}`}
+            style={{ marginBottom: 16 }}
             extra={
               <Space wrap>
                 <Segmented size="small" options={sceneOptions} value={scene} onChange={(v) => setScene(String(v))} />
@@ -594,7 +571,7 @@ export function AnalyticsHoursPage() {
             </Space>
           </Card>
 
-          <Card variant="borderless" title="时段分组（凌晨/上午/下午/晚间/深夜）" style={{ boxShadow: "var(--ops-shadow-sm)", marginBottom: 16 }}>
+          <Card variant="borderless" title={`时段分组 · 经营贡献 · ${data.label}`} style={{ marginBottom: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
               {data.segments.map((seg) => (
                 <div key={seg.name} style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius)", padding: "10px 12px", background: "var(--ops-card-bg-2)" }}>
@@ -613,7 +590,7 @@ export function AnalyticsHoursPage() {
             </div>
           </Card>
 
-          <Card variant="borderless" title="分时明细（环比 = 较上一周期同时段）" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+          <Card variant="borderless" title={`逐小时 · 经营明细 · ${data.label}`}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(155px, 1fr))", gap: 8 }}>
               {items.map((p) => (
                 <div key={p.hour} style={{ border: "1px solid var(--ops-border)", borderRadius: "var(--ops-radius-sm)", padding: "8px 10px" }}>
@@ -723,6 +700,6 @@ export function AnalyticsHoursPage() {
           { group: "hour", key: "surge_pct", label: "异常暴涨阈值 %", hint: "销售额环比上涨超过该百分比标橙", min: 1, max: 500, step: 5 },
         ]}
       />
-    </div>
+    </WorkspacePage>
   );
 }

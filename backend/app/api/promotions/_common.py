@@ -86,7 +86,13 @@ def sync_promo_daily_all(db, days: int = 7) -> dict:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+        except Exception as exc:  # noqa: BLE001 - 后台同步按店铺隔离
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
+    result = {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+    from .health import record_sync_result
+
+    record_sync_result(db, "daily", result, source="alimama_scene_daily")
+    return result
 
 def _mode(value: str) -> str:
     return value if value in MODES else "realtime"
@@ -106,7 +112,7 @@ def _store_daily_rows(db, store_id: int, items: list[dict], now: str) -> int:
             "ON CONFLICT(store_id, scene, data_date) DO UPDATE SET "
             "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
             "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-            "orders = excluded.orders, add_cart = excluded.add_cart, conversion_rate = excluded.conversion_rate",
+            "orders = excluded.orders, add_cart = excluded.add_cart, conversion_rate = excluded.conversion_rate, created_at = excluded.created_at",
             (
                 store_id,
                 it["scene"],
@@ -142,7 +148,7 @@ def _store_realtime_rows(db, store_id: int, items: list[dict], now: str, data_da
             "ON CONFLICT(store_id, scene, data_date, hour) DO UPDATE SET "
             "impressions = excluded.impressions, clicks = excluded.clicks, ctr = excluded.ctr, "
             "spend = excluded.spend, sales = excluded.sales, roi = excluded.roi, "
-            "orders = excluded.orders, conversion_rate = excluded.conversion_rate",
+            "orders = excluded.orders, conversion_rate = excluded.conversion_rate, created_at = excluded.created_at",
             (
                 store_id,
                 it["scene"],
@@ -182,7 +188,13 @@ def sync_promo_realtime_all(db) -> dict:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+        except Exception as exc:  # noqa: BLE001 - 后台同步按店铺隔离
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
+    result = {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+    from .health import record_sync_result
+
+    record_sync_result(db, "realtime", result, source="alimama_scene_realtime")
+    return result
 
 def sync_promo_items_realtime_all(db) -> dict:
     """同步商品级实时推广数据到 promo_item_stats（后台定时与接口共用）。
@@ -222,10 +234,18 @@ def sync_promo_items_realtime_all(db) -> dict:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(rows)})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
-    return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+        except Exception as exc:  # noqa: BLE001 - 后台同步按店铺隔离
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
+    result = {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
+    from .health import record_sync_result
+
+    record_sync_result(db, "items_realtime", result, source="alimama_item_or_plan_attribution")
+    return result
 
 
 def _strategy_evidence_score(strategy: dict) -> int:
+    if strategy.get("verification_status") == "pending":
+        return 0
     confidence_points = {"high": 30, "medium": 20, "low": 8}.get(strategy.get("confidence") or "", 5)
     observed_days = int(strategy.get("baseline_days") or 0) + int(strategy.get("after_days") or 0)
     day_points = min(24, observed_days * 4)
@@ -251,7 +271,7 @@ def _enrich_promo_strategies(db, rows) -> tuple[list[dict], list[dict]]:
         source = None
         if item.get("source_action_id"):
             source = db.execute(
-                "SELECT confidence, baseline_days, after_days, after_spend, verified_at FROM promo_action_records WHERE id = ?",
+                "SELECT confidence, baseline_days, after_days, after_spend, verified_at FROM promo_action_records WHERE id = ? AND COALESCE(lifecycle_status, 'active') = 'active'",
                 (item["source_action_id"],),
             ).fetchone()
         if source:
@@ -262,6 +282,8 @@ def _enrich_promo_strategies(db, rows) -> tuple[list[dict], list[dict]]:
 
     grouped: dict[tuple[str, str], list[dict]] = {}
     for strategy in strategies:
+        if strategy.get("verification_status") == "pending":
+            continue
         key = (strategy.get("action_type") or "未标注动作", strategy.get("scene") or "不限场景")
         grouped.setdefault(key, []).append(strategy)
 
@@ -306,7 +328,7 @@ def _enrich_promo_strategies(db, rows) -> tuple[list[dict], list[dict]]:
     )
     return strategies, groups
 
-def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) -> dict:
+def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None, plan_id: int | None = None) -> dict:
     mode = _mode(mode)
     today = date_cls.today()
     visible = visible_store_ids(user)
@@ -314,6 +336,11 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
         selected = {store_id} if visible is None or store_id in visible else set()
     else:
         selected = visible
+    focus_scene = None
+    if plan_id is not None:
+        focus_row = db.execute("SELECT store_id, scene, scene_name FROM promo_plans WHERE id = ?", (int(plan_id),)).fetchone()
+        if focus_row:
+            focus_scene = focus_row["scene"] or focus_row["scene_name"]
     if selected is None:
         scope_frag = ""
         scope_params: list = []
@@ -349,15 +376,21 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
         spend = round(r["spend"] or 0, 2)
         sales = round(r["sales"] or 0, 2)
         scenes.append({"scene": r["scene"], "scene_name": r["scene_name"] or r["scene"], "spend": spend, "sales": sales, "roi": round(sales / spend, 2) if spend else 0.0})
+    if focus_scene is not None:
+        scenes = [scene for scene in scenes if scene.get("scene") == focus_scene or scene.get("scene_name") == focus_scene]
     if selected is None:
         plan_scope = ""
     elif not selected:
         plan_scope = " WHERE 1=0"
     else:
         plan_scope = " WHERE p.store_id IN (%s)" % ",".join(str(i) for i in sorted(selected))
+    if plan_id is not None:
+        plan_scope += (" AND" if plan_scope else " WHERE") + f" p.id = {int(plan_id)}"
     plans = db.execute(
         "SELECT p.id, p.store_id, p.scene, p.scene_name, p.campaign_id, p.plan_name, p.status, p.day_budget, p.bid_value, "
-        "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks "
+        "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks, "
+        "COALESCE(s.prev_spend,0) AS prev_spend, COALESCE(s.prev_sales,0) AS prev_sales, COALESCE(s.prev_roi,0) AS prev_roi, "
+        "COALESCE(s.prev_clicks,0) AS prev_clicks, COALESCE(s.prev_scope,'unknown') AS prev_scope, COALESCE(s.updated_at,'') AS stats_updated_at "
         "FROM promo_plans p LEFT JOIN promo_plan_stats s ON s.store_id = p.store_id AND s.campaign_id = p.campaign_id AND s.mode = ?"
         + plan_scope
         + " ORDER BY COALESCE(s.spend,0) DESC",
@@ -381,6 +414,25 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
                 "sales": sales,
                 "roi": round(sales / spend, 2) if spend else 0.0,
                 "clicks": int(r["clicks"] or 0),
+                "prev_spend": round(r["prev_spend"] or 0, 2),
+                "prev_sales": round(r["prev_sales"] or 0, 2),
+                "prev_roi": round(r["prev_roi"] or 0, 2),
+                "prev_clicks": int(r["prev_clicks"] or 0),
+                "prev_scope": r["prev_scope"] or "unknown",
+                "stats_updated_at": r["stats_updated_at"] or "",
+                "decision_status": (
+                    "insufficient" if spend <= 0 else "needs_decision" if (sales / spend if spend else 0.0) < 1 else "observe"
+                ),
+                "decision_status_label": (
+                    "证据不足" if spend <= 0 else "需要处理" if (sales / spend if spend else 0.0) < 1 else "正常观察"
+                ),
+                "decision_reason": (
+                    "当前没有有效花费样本，暂不形成调整建议"
+                    if spend <= 0
+                    else "当前 ROI 低于保本线，需要评估止损或收缩流量"
+                    if (sales / spend if spend else 0.0) < 1
+                    else "当前指标未发现需要立即调整的异常，保持现状并继续观察"
+                ),
             }
         )
     total_spend = sum(p["spend"] for p in plan_list)
@@ -399,7 +451,7 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
         strategy_scope = " AND store_id IN (%s)" % ",".join(str(i) for i in sorted(selected))
         strategy_params = []
     strategy_rows = db.execute(
-        "SELECT id, source_action_id, name, action_type, conditions, evidence, success_count, use_count, outcome, scene, min_roi, max_roi, updated_at "
+        "SELECT id, source_action_id, name, action_type, conditions, evidence, success_count, use_count, outcome, scene, min_roi, max_roi, source_type, verification_status, updated_at "
         "FROM promo_strategies WHERE status = 'active'" + strategy_scope + " ORDER BY updated_at DESC LIMIT 100",
         strategy_params,
     ).fetchall()
@@ -408,12 +460,14 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
 
     decision_learning_rows = db.execute(
         "SELECT strategy_id, feedback_status, created_at, updated_at FROM promo_decision_records "
-        "WHERE strategy_id IS NOT NULL" + strategy_scope + " ORDER BY updated_at DESC LIMIT 2000",
+        "WHERE strategy_id IS NOT NULL AND (action_record_id IS NULL OR action_record_id IN ("
+        "SELECT id FROM promo_action_records WHERE COALESCE(lifecycle_status, 'active') = 'active'))"
+        + strategy_scope + " ORDER BY updated_at DESC LIMIT 2000",
         strategy_params,
     ).fetchall()
     action_learning_rows = db.execute(
         "SELECT strategy_id, status, confidence, interference_notes, manual_conclusion, created_at, executed_at, verified_at "
-        "FROM promo_action_records WHERE strategy_id IS NOT NULL" + strategy_scope + " ORDER BY id DESC LIMIT 2000",
+        "FROM promo_action_records WHERE COALESCE(lifecycle_status, 'active') = 'active' AND strategy_id IS NOT NULL" + strategy_scope + " ORDER BY id DESC LIMIT 2000",
         strategy_params,
     ).fetchall()
     learning = learn_strategy_weights(decision_learning_rows, action_learning_rows)
@@ -455,6 +509,7 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
         del group["reasons"]
     return {
         "mode": mode,
+        "focus_plan_id": plan_id,
         "scenes": scenes,
         "plans": plan_list,
         "total_spend": round(total_spend, 2),
@@ -464,6 +519,9 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
         "low_count": len(low),
         "mid_count": len(mid),
         "high_count": len(high),
+        "decision_count": sum(1 for p in active if p.get("decision_status") == "needs_decision"),
+        "observe_count": sum(1 for p in active if p.get("decision_status") == "observe"),
+        "insufficient_count": sum(1 for p in active if p.get("decision_status") == "insufficient"),
         "strategies": strategies,
         "strategy_groups": strategy_groups,
         "learning": learning,
@@ -471,55 +529,115 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None) 
     }
 
 
-def _build_promo_drafts(data: dict) -> list[dict]:
-    """根据真实计划指标生成需要人工确认的三档执行草案。"""
+def _build_promo_drafts(data: dict, ai_decisions: dict[int, dict] | None = None) -> list[dict]:
+    """Build evidence-guarded single-variable drafts.
+
+    AI decides whether intervention is justified and identifies the likely
+    cause. Deterministic rules then validate data quality, allowed variables,
+    direction and maximum amplitude. This keeps model reasoning useful without
+    allowing free-form text to become a platform write.
+    """
+    ai_decisions = ai_decisions or {}
     drafts: list[dict] = []
-    active_plans = [plan for plan in data.get("plans", []) if plan.get("status") == "在投" and float(plan.get("spend") or 0) > 0]
-    low_plans = sorted((plan for plan in active_plans if float(plan.get("roi") or 0) < 1), key=lambda plan: float(plan.get("spend") or 0), reverse=True)[:4]
-    high_plans = sorted((plan for plan in active_plans if float(plan.get("roi") or 0) >= 2), key=lambda plan: float(plan.get("spend") or 0), reverse=True)[:4]
-    mid_plans = sorted((plan for plan in active_plans if 1 <= float(plan.get("roi") or 0) < 2), key=lambda plan: float(plan.get("spend") or 0), reverse=True)[:2]
-    selected_plans = low_plans + high_plans + mid_plans
+    focused_plan_id = int(data["focus_plan_id"]) if data.get("focus_plan_id") is not None else None
+    active_plans = [
+        plan for plan in data.get("plans", [])
+        if plan.get("status") == "在投"
+        and (float(plan.get("spend") or 0) > 0 or int(plan.get("id") or 0) == focused_plan_id)
+    ]
+    low_plans = sorted(
+        (plan for plan in active_plans if plan.get("decision_status") == "needs_decision"),
+        key=lambda plan: float(plan.get("spend") or 0),
+        reverse=True,
+    )[:4]
+    selected_plans = (
+        [plan for plan in active_plans if int(plan.get("id") or 0) == focused_plan_id]
+        if focused_plan_id is not None
+        else low_plans
+    )
     for plan in selected_plans:
         spend = float(plan.get("spend") or 0)
         roi = float(plan.get("roi") or 0)
-        if spend <= 0:
-            continue
-        if roi < 1:
-            priority, priority_label = "urgent", "优先止损"
-            field = "day_budget"
-            action_type = "降低预算/止损"
-            reason = f"当前 ROI {roi:.2f} 低于保本线，需要控制无效花费。"
-            risk = "预算下降可能同步减少成交规模，需要关注自然成交和库存"
-            option_configs = [
-                ("conservative", "稳健", -10, 72, "先小幅收缩花费，确认低效是否持续", {"roi_change_min": 0.05, "spend_change_pct_max": -3}),
-                ("balanced", "平衡", -20, 48, "明显降低无效花费并推动 ROI 回升", {"roi_change_min": 0.1, "spend_change_pct_max": -5}),
-                ("aggressive", "激进", -35, 48, "快速止损并重新评估计划投放价值", {"roi_change_min": 0.2, "spend_change_pct_max": -10}),
-            ]
-            rollback_condition = "日均成交下降超过 20%，且 ROI 未提升 0.1 时恢复原预算"
-        elif roi >= 2:
-            priority, priority_label = "growth", "增长机会"
-            field = "day_budget"
-            action_type = "增加预算/放量"
-            reason = f"当前 ROI {roi:.2f} 达到健康线，可以验证边际增量。"
-            risk = "边际流量可能变差，放量后需重点关注 ROI 和日均成交"
-            option_configs = [
-                ("conservative", "稳健", 10, 72, "小幅放量，优先保持当前 ROI", {"target_roi_min": max(1, round(roi * 0.9, 2)), "sales_change_pct_min": 3}),
-                ("balanced", "平衡", 15, 48, "扩大成交规模，同时控制 ROI 回落", {"target_roi_min": max(1, round(roi * 0.85, 2)), "sales_change_pct_min": 5}),
-                ("aggressive", "激进", 25, 48, "快速争取增量，接受更高边际波动", {"target_roi_min": max(1, round(roi * 0.8, 2)), "sales_change_pct_min": 10}),
-            ]
-            rollback_condition = f"ROI 低于 {max(1, round(roi * 0.75, 2))}，或日均花费增长但成交未增长时回退"
-        else:
-            priority, priority_label = "efficiency", "效率优化"
-            field = "bid_value"
+        findings = plan.get("diagnostic_findings") or []
+        risk_findings = [item for item in findings if item.get("signal_type") == "risk"]
+        risk_findings.sort(key=lambda item: ({"critical": 0, "high": 1, "medium": 2}.get(item.get("severity"), 9), -float(item.get("spend_at_risk") or 0)))
+        primary = risk_findings[0] if risk_findings else (findings[0] if findings else {})
+        rule_code = str(primary.get("rule_code") or "")
+        ai = ai_decisions.get(int(plan.get("id") or 0), {})
+        ai_decision = str(ai.get("decision") or "证据不足")
+        ai_confidence = str(ai.get("confidence") or "低")
+        diagnostic_confidence = str(primary.get("confidence") or "low")
+        confidence_key = {"高": "high", "中": "medium", "低": "low"}.get(ai_confidence, "low")
+
+        priority = "urgent" if primary.get("severity") in {"critical", "high"} else "efficiency"
+        priority_label = "优先止损" if priority == "urgent" else "谨慎处理"
+        field = "day_budget"
+        direction = "降低"
+        default_change = 10.0
+        action_type = "降低预算/止损"
+        risk = "调整只能验证一个投放变量，期间需避免叠加修改商品、素材或人群"
+        rule_actionable = rule_code in {"spend_without_sales", "roi_drop", "roi_low", "budget_over", "spend_too_fast"}
+        data_blockers: list[str] = []
+        if not risk_findings:
+            data_blockers.append("诊断中心没有发现风险异常")
+        if rule_code in {"data_stale", "no_spend", "low_spend", "delivery_stopped", "delivery_slow"} or spend <= 0:
+            data_blockers.append("当前问题应先排查数据或投放状态，不能直接修改投放参数")
+        if diagnostic_confidence == "low":
+            data_blockers.append("诊断置信度较低")
+        if plan.get("prev_scope") not in {"same_hour", "full_day", "7d"} and rule_code in {"roi_drop", "delivery_slow", "delivery_stopped"}:
+            data_blockers.append("缺少可比的历史基线")
+
+        variable = str(ai.get("recommended_variable") or "")
+        variable_aliases = {"预算": "day_budget", "日预算": "day_budget", "出价": "bid_value"}
+        variable = variable_aliases.get(variable, variable)
+        if "预算" in variable:
+            variable = "day_budget"
+        elif "出价" in variable:
+            variable = "bid_value"
+        allowed_fields = {"day_budget"}
+        if rule_code in {"roi_drop", "roi_low"} and float(plan.get("bid_value") or 0) > 0:
+            allowed_fields.add("bid_value")
+        if variable in allowed_fields:
+            field = variable
+        elif variable not in {"", "不调整"}:
+            data_blockers.append(f"AI 建议变量 {variable} 不在当前异常的安全调整范围")
+        if field == "bid_value":
             action_type = "降低出价/控成本"
-            reason = f"当前 ROI {roi:.2f} 处于关注区间，需要测试流量成本改善空间。"
-            risk = "出价降低可能导致展现和点击减少"
-            option_configs = [
-                ("conservative", "稳健", -5, 72, "轻微降低流量成本，尽量保持规模", {"roi_change_min": 0.05, "spend_change_pct_max": 0}),
-                ("balanced", "平衡", -10, 48, "兼顾成本改善与流量稳定", {"roi_change_min": 0.1, "spend_change_pct_max": -3}),
-                ("aggressive", "激进", -15, 48, "优先提升效率，接受流量规模下降", {"roi_change_min": 0.15, "spend_change_pct_max": -5}),
-            ]
-            rollback_condition = "展现或点击明显下降，且 ROI 未提升 0.1 时恢复原出价"
+            risk = "出价降低可能导致展现和点击减少；观察期内不要同时调整预算"
+        ai_direction = str(ai.get("recommended_direction") or "")
+        if ai_direction in {"下调", "减少", "收缩"}:
+            ai_direction = "降低"
+        if ai_direction not in {"降低", "不调整", ""}:
+            data_blockers.append("当前风险只允许保持或降低单一投放变量")
+        if not rule_actionable:
+            data_blockers.append("当前异常没有可直接执行的安全动作")
+        if ai_decision != "建议干预":
+            data_blockers.append("AI 未判断为需要立即干预")
+
+        old_value = float(plan.get(field) or 0)
+        if old_value <= 0:
+            data_blockers.append("平台当前值未同步，无法计算目标值")
+        actionable = not data_blockers
+        max_change = 10.0 if confidence_key == "low" else 15.0 if confidence_key == "medium" else 20.0
+        requested_change = float(ai.get("change_pct") or default_change)
+        base_change = min(max_change, max(5.0, requested_change)) if actionable else 0.0
+        observation_hours = int(ai.get("observation_hours") or 48)
+        reason = str(ai.get("primary_cause") or primary.get("summary") or "当前证据不足，暂不形成调整结论")
+        rollback_condition = str(ai.get("rollback_condition") or "调整后成交明显下降且效率没有改善时，恢复原值")
+        if field == "day_budget":
+            success_criteria = {"roi_change_min": 0.05, "spend_change_pct_max": -3}
+        else:
+            success_criteria = {"roi_change_min": 0.05, "spend_change_pct_max": 0}
+        if actionable:
+            factors = [("conservative", "稳健", 0.5), ("balanced", "平衡", 1.0), ("aggressive", "激进", 1.5)]
+            option_configs = []
+            for tier, label, factor in factors:
+                magnitude = min(max_change, max(5.0, round(base_change * factor / 5) * 5))
+                option_configs.append((tier, label, -magnitude, observation_hours, ai.get("next_step") or "单变量调整后观察效率与成交变化", success_criteria))
+            recommended_tier = "balanced" if confidence_key in {"medium", "high"} else "conservative"
+        else:
+            option_configs = [("conservative", "观察", 0, observation_hours, ai.get("next_step") or "保持当前设置，先补齐证据", {"spend_change_pct_max": 0})]
+            recommended_tier = "conservative"
 
         candidates = [
             strategy for strategy in data.get("strategies", [])
@@ -530,6 +648,7 @@ def _build_promo_drafts(data: dict) -> list[dict]:
         ]
         candidates.sort(
             key=lambda strategy: (
+                strategy.get("verification_status") == "verified",
                 strategy.get("outcome") == "success",
                 float(strategy.get("learning_weight") or 1),
                 float(strategy.get("group_success_rate") or 0),
@@ -544,22 +663,17 @@ def _build_promo_drafts(data: dict) -> list[dict]:
         has_constraint_signal = int(scene_constraint.get("rejected_count") or 0) >= 2
         learning_weight = float(matching.get("learning_weight") or 1) if matching else 1.0
         learning_samples = int(matching.get("learning_sample_count") or 0) if matching else 0
-        if has_constraint_signal or has_conflict or not matching or matching.get("outcome") != "success" or int(matching.get("evidence_score") or 0) < 50:
+        if has_constraint_signal or has_conflict or (learning_samples >= 3 and learning_weight < 0.9):
             recommended_tier = "conservative"
-        elif learning_samples >= 3 and learning_weight < 0.9:
-            recommended_tier = "conservative"
-        elif int(matching.get("sample_count") or 0) >= 3 and float(matching.get("group_success_rate") or 0) >= 70 and int(matching.get("evidence_score") or 0) >= 75 and (learning_samples < 3 or learning_weight >= 1.05):
-            recommended_tier = "aggressive"
-        else:
-            recommended_tier = "balanced"
-
-        old_value = float(plan.get(field) or 0)
         if matching:
-            evidence_summary = (
-                f"参考《{matching['name']}》：证据 {matching['evidence_score']} 分；"
-                f"同类 {matching.get('sample_count', 1)} 次，成功率 {matching.get('group_success_rate', 0)}%；"
-                f"学习权重 {learning_weight:.2f}（{learning_samples} 条反馈/验证证据）"
-            )
+            if matching.get("verification_status") == "pending":
+                evidence_summary = f"参考人工经验《{matching['name']}》：当前待验证，不计入历史证据分，也不能单独支持执行"
+            else:
+                evidence_summary = (
+                    f"参考《{matching['name']}》：证据 {matching['evidence_score']} 分；"
+                    f"同类 {matching.get('sample_count', 1)} 次，成功率 {matching.get('group_success_rate', 0)}%；"
+                    f"学习权重 {learning_weight:.2f}（{learning_samples} 条反馈/验证证据）"
+                )
         else:
             evidence_summary = "暂无完全匹配的历史策略，本次建议以当前计划数据为主并采用稳健方案"
         constraint_summary = ""
@@ -585,6 +699,18 @@ def _build_promo_drafts(data: dict) -> list[dict]:
                 "evidence_summary": evidence_summary,
             })
         recommended = next(option for option in options if option["recommended"])
+        diagnostic_evidence = []
+        for item in primary.get("evidence", []):
+            if isinstance(item, dict):
+                current = item.get("current")
+                unit = item.get("unit") or ""
+                baseline = item.get("baseline")
+                text = f"{item.get('label') or '指标'}：{current}{unit}"
+                if baseline is not None:
+                    text += f"（对比 {baseline}{unit}）"
+                diagnostic_evidence.append(text)
+            elif str(item).strip():
+                diagnostic_evidence.append(str(item).strip())
         drafts.append(
             {
                 "plan_id": plan["id"],
@@ -602,6 +728,8 @@ def _build_promo_drafts(data: dict) -> list[dict]:
                 "strategy_id": matching.get("id") if matching else None,
                 "strategy_name": matching.get("name") if matching else None,
                 "strategy_outcome": matching.get("outcome") if matching else None,
+                "strategy_source_type": matching.get("source_type") if matching else None,
+                "strategy_verification_status": matching.get("verification_status") if matching else None,
                 "strategy_score": matching.get("evidence_score") if matching else None,
                 "learning_weight": round(learning_weight, 4),
                 "learning_sample_count": learning_samples,
@@ -610,6 +738,21 @@ def _build_promo_drafts(data: dict) -> list[dict]:
                 "strategy_conflict": has_conflict,
                 "conflict_reason": "高质量历史证据中同时存在成功与谨慎经验，默认采用稳健方案并等待人工选择" if has_conflict else "",
                 "constraint_summary": constraint_summary,
+                "engine_actionable": actionable,
+                "decision_mode": "intervene" if actionable else "observe" if ai_decision == "建议观察" else "insufficient",
+                "ai_decision": ai_decision,
+                "primary_cause": str(ai.get("primary_cause") or ""),
+                "affected_stage": str(ai.get("affected_stage") or ""),
+                "diagnostic_rule": rule_code,
+                "diagnostic_title": primary.get("title") or "未发现风险异常",
+                "diagnostic_confidence": diagnostic_confidence,
+                "decision_confidence": confidence_key,
+                "decision_evidence": ai.get("evidence") or diagnostic_evidence,
+                "missing_data": ai.get("missing_data") or primary.get("unknown_dimensions") or [],
+                "ai_success_criteria_text": ai.get("success_criteria") or [],
+                "next_step": ai.get("next_step") or ("进入调整预览" if actionable else "补齐证据后重新生成决策"),
+                "guardrail_reasons": data_blockers,
+                "not_recommended_reason": "；".join(dict.fromkeys(data_blockers)),
             }
         )
     return drafts
@@ -617,21 +760,31 @@ def _build_promo_drafts(data: dict) -> list[dict]:
 def _build_promo_prompt(d: dict) -> str:
     lines = [
         f"数据范围：{d['mode']}",
-        f"总花费 {d['total_spend']:.0f} 元，总成交 {d['total_sales']:.0f} 元，整体ROI {d['total_roi']}；在投计划 {d['active_count']} 个，其中ROI≥2有{d['high_count']}个、ROI1~2有{d['mid_count']}个、ROI<1有{d['low_count']}个",
+        f"分析范围：仅分析计划 ID {d['focus_plan_id']}" if d.get("focus_plan_id") is not None else "分析范围：当前可见店铺的推广计划",
+        f"总花费 {d['total_spend']:.0f} 元，总成交 {d['total_sales']:.0f} 元，整体ROI {d['total_roi']}；在投计划 {d['active_count']} 个，其中待决策 {d.get('decision_count', d['low_count'])} 个、正常观察 {d.get('observe_count', 0)} 个、证据不足 {d.get('insufficient_count', 0)} 个",
+        "决策口径：仅为待决策计划生成执行草案；正常观察计划保持现状，证据不足计划不形成调整建议。",
     ]
     if d["scenes"]:
         lines.append("分场景：" + "、".join(f"{s['scene_name']}花费{s['spend']:.0f}元成交{s['sales']:.0f}元ROI{s['roi']}" for s in d["scenes"]))
     if d["plans"]:
         top = sorted(d["plans"], key=lambda p: -p["spend"])[:6]
         lines.append("花费最高的计划：" + "；".join(f"{p['plan_name'][:20]}({p['scene_name']})花费{p['spend']:.0f}元ROI{p['roi']}" for p in top))
-        lowplans = [p for p in d["plans"] if p["spend"] > 0 and p["roi"] < 1]
+        lowplans = [p for p in d["plans"] if p.get("decision_status") == "needs_decision"]
         if lowplans:
-            lines.append("ROI<1的计划：" + "；".join(f"{p['plan_name'][:20]}ROI{p['roi']}" for p in lowplans[:6]))
+            lines.append("诊断标记为风险异常的待处理计划：" + "；".join(f"{p['plan_name'][:20]}（ROI{p['roi']}）" for p in lowplans[:6]))
     if d.get("strategies"):
-        lines.append("历史验证策略（证据分表示数据可靠程度，不等于建议方向）：" + "；".join(
+        verified_strategies = [s for s in d["strategies"] if s.get("verification_status") != "pending"]
+        manual_strategies = [s for s in d["strategies"] if s.get("verification_status") == "pending"]
+        if verified_strategies:
+            lines.append("历史验证策略（证据分表示数据可靠程度，不等于建议方向）：" + "；".join(
             f"{s['name']}：{s['conditions']}（适用场景{s.get('scene') or '不限'}，ROI {s.get('min_roi') if s.get('min_roi') is not None else '-∞'}~{s.get('max_roi') if s.get('max_roi') is not None else '+∞'}，结果{s.get('outcome', 'success')}，证据分{s.get('evidence_score', 0)}，学习权重{s.get('learning_weight', 1)}，学习样本{s.get('learning_sample_count', 0)}条，同类样本{s.get('sample_count', 1)}次，同类成功率{s.get('group_success_rate', 0)}%，证据{s['evidence'][:80]}）"
-            for s in d["strategies"][:6]
-        ))
+                for s in verified_strategies[:6]
+            ))
+        if manual_strategies:
+            lines.append("人工经验（仅供参考，待真实验证，不计入证据分且不能单独支持执行）：" + "；".join(
+                f"{s['name']}：{s['conditions']}（动作{s['action_type']}，适用场景{s.get('scene') or '不限'}，人工依据{s['evidence'][:80]}）"
+                for s in manual_strategies[:6]
+            ))
     if d.get("strategy_groups"):
         lines.append("同类经验汇总：" + "；".join(
             f"{group['action_type']}@{group['scene']}：样本{group['sample_count']}，成功{group['success_count']}，部分有效{group['partial_count']}，失败{group['failed_count']}，平均证据分{group['avg_evidence_score']}"
@@ -700,6 +853,9 @@ class PlanBatchAdjustIn(BaseModel):
     plan_ids: list[int]
     field: str = "day_budget"
     change_pct: float = 0
+    # 单计划可直接指定最终目标值；存在时优先于 change_pct，避免百分比
+    # 展示精度（如 3.3%）反算出 3099 而不是用户输入的 3100。
+    target_value: float | None = Field(default=None, ge=0)
     execute: bool = False
 
 class PlanAdjustIn(BaseModel):

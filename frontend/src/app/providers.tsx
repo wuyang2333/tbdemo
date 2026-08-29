@@ -21,14 +21,14 @@ export function useThemeMode() {
 
 export function AppProviders({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ThemeMode>(() => {
-    const saved = localStorage.getItem("tb-workbench-theme");
+    const saved = localStorage.getItem("tb-workbench-theme-v2");
     if (saved === "dark" || saved === "light") return saved;
     return DEFAULT_MODE;
   });
 
   // 单一真相源：主题切换即把 token 写入 :root / body（global.css 与各组件统一引用 var(--ops-*)）
   useEffect(() => {
-    localStorage.setItem("tb-workbench-theme", mode);
+    localStorage.setItem("tb-workbench-theme-v2", mode);
     applyTokens(mode);
   }, [mode]);
 

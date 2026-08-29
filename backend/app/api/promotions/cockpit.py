@@ -11,7 +11,7 @@ from backend.app.api.auth import get_current_user
 from backend.app.core.db import get_db
 
 from ._common import _now, _scope_filter
-from .collaboration import ensure_promo_collaboration_tables
+from .channel import channel_matches, with_channel
 
 
 router = APIRouter()
@@ -56,7 +56,6 @@ def _queue_item(
     store_name: str,
     source_path: str,
     due_at: str | None = None,
-    owner_name: str = "",
     updated_at: str = "",
 ) -> dict:
     return {
@@ -69,16 +68,17 @@ def _queue_item(
         "plan_id": int(plan["id"]),
         "plan_name": plan.get("plan_name") or f"计划 {plan['id']}",
         "scene_name": plan.get("scene_name") or "未标注场景",
+        "channel": with_channel(plan)["channel"],
+        "channel_name": with_channel(plan)["channel_name"],
         "store_id": int(plan["store_id"]),
         "store_name": store_name,
         "source_path": source_path,
         "due_at": due_at,
-        "owner_name": owner_name,
         "updated_at": updated_at,
     }
 
 
-def _load_cockpit_rows(db, user: dict, store_id: int | None) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+def _load_cockpit_rows(db, user: dict, store_id: int | None) -> tuple[list[dict], list[dict], list[dict]]:
     scope_frag, scope_params = _scope_filter(store_id, user)
     plans = [
         dict(row)
@@ -97,42 +97,34 @@ def _load_cockpit_rows(db, user: dict, store_id: int | None) -> tuple[list[dict]
     actions = [
         dict(row)
         for row in db.execute(
-            "SELECT * FROM promo_action_records WHERE 1=1" + scope_frag + " ORDER BY id DESC LIMIT 2000",
+            "SELECT * FROM promo_action_records WHERE COALESCE(lifecycle_status, 'active') = 'active'" + scope_frag + " ORDER BY id DESC LIMIT 2000",
             scope_params,
         ).fetchall()
     ]
-    ensure_promo_collaboration_tables(db)
-    tasks = [
-        dict(row)
-        for row in db.execute(
-            "SELECT * FROM promo_collaboration_tasks WHERE 1=1" + scope_frag + " ORDER BY updated_at DESC LIMIT 2000",
-            scope_params,
-        ).fetchall()
-    ]
-    return plans, decisions, actions, tasks
+    return plans, decisions, actions
 
 
 @router.get("/cockpit")
 def promotion_cockpit(
     store_id: int | None = None,
+    channel: str = "",
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     """返回当前可见店铺的真实推广待办、风险和计划链路摘要。"""
     now = datetime.now().astimezone()
-    plans, decisions, actions, tasks = _load_cockpit_rows(db, user, store_id)
+    plans, decisions, actions = _load_cockpit_rows(db, user, store_id)
+    plans = [plan for plan in plans if channel_matches(channel, plan.get("scene"), plan.get("scene_name"))]
     plan_by_id = {int(plan["id"]): plan for plan in plans}
+    visible_plan_ids = set(plan_by_id)
+    decisions = [decision for decision in decisions if int(decision["plan_id"]) in visible_plan_ids]
+    actions = [action for action in actions if int(action["plan_id"]) in visible_plan_ids]
     store_names = _store_names(db, {int(plan["store_id"]) for plan in plans})
-    collaboration_by_action = {
-        int(task["action_record_id"]): task
-        for task in tasks
-        if task.get("action_record_id") is not None
-    }
     queue: list[dict] = []
 
     from .diagnostics import detect_promotion_anomalies
 
-    diagnostic_payload = detect_promotion_anomalies(db, user, store_id, now=now)
+    diagnostic_payload = detect_promotion_anomalies(db, user, store_id, channel, now=now)
     for diagnostic in diagnostic_payload["items"]:
         if diagnostic["severity"] not in ("critical", "high"):
             continue
@@ -146,17 +138,18 @@ def promotion_cockpit(
             "plan_id": diagnostic["plan_id"],
             "plan_name": diagnostic["plan_name"],
             "scene_name": diagnostic["scene_name"],
+            "channel": diagnostic["channel"],
+            "channel_name": diagnostic["channel_name"],
             "store_id": diagnostic["store_id"],
             "store_name": diagnostic["store_name"],
             "source_path": f"/promotions/diagnostics?diagnostic_id={diagnostic['id']}",
             "due_at": None,
-            "owner_name": "",
             "updated_at": diagnostic["detected_at"],
         })
 
     for decision in decisions:
         plan = plan_by_id.get(int(decision["plan_id"]))
-        if not plan or decision.get("feedback_status") == "rejected":
+        if not plan or decision.get("feedback_status") in ("rejected", "insufficient"):
             continue
         if decision.get("workflow_status") == "selected" and not decision.get("action_record_id"):
             queue.append(_queue_item(
@@ -176,16 +169,16 @@ def promotion_cockpit(
         if not plan:
             continue
         action_id = int(action["id"])
-        if action.get("status") == "planned" and action_id not in collaboration_by_action:
+        if action.get("status") == "planned":
             queue.append(_queue_item(
                 kind="pending_execution",
                 source_id=action_id,
                 priority="high",
                 title=f"执行：{action.get('action_type') or '推广调整'}",
-                reason="动作已经建立，但尚未进入协同任务或确认执行。",
+                reason="动作已经建立，但尚未确认已在平台执行。",
                 plan=plan,
                 store_name=store_names.get(int(plan["store_id"]), ""),
-                source_path=f"/promotions/plans?plan_id={plan['id']}",
+                source_path=f"/promotions/validation?action_id={action_id}&plan_id={plan['id']}&from=cockpit",
                 due_at=action.get("observation_due_at"),
                 updated_at=action.get("created_at") or action.get("executed_at") or "",
             ))
@@ -221,62 +214,6 @@ def promotion_cockpit(
                 updated_at=action.get("executed_at") or "",
             ))
 
-    for task in tasks:
-        plan = plan_by_id.get(int(task["plan_id"]))
-        if not plan or task.get("execution_status") == "completed":
-            continue
-        task_id = int(task["id"])
-        common = {
-            "source_id": task_id,
-            "plan": plan,
-            "store_name": store_names.get(int(plan["store_id"]), ""),
-            "source_path": f"/promotions/collaboration?task_id={task_id}&plan_id={plan['id']}",
-            "due_at": task.get("planned_at"),
-            "owner_name": task.get("owner_name") or "",
-            "updated_at": task.get("updated_at") or "",
-        }
-        if task.get("execution_status") == "needs_rollback":
-            queue.append(_queue_item(
-                kind="needs_rollback",
-                priority="urgent",
-                title=f"评估回退：{task.get('title') or plan.get('plan_name')}",
-                reason=task.get("rollback_reason") or "验证结果未达标，需要人工评估是否回退。",
-                **common,
-            ))
-            continue
-        if task.get("approval_status") == "pending":
-            queue.append(_queue_item(
-                kind="approval_pending",
-                priority="high",
-                title=f"审批：{task.get('title') or '推广执行任务'}",
-                reason="执行任务正在等待审批，审批通过前不应进行平台调整。",
-                **common,
-            ))
-        elif task.get("execution_status") == "executing":
-            queue.append(_queue_item(
-                kind="pending_execution",
-                priority="high",
-                title=task.get("title") or "执行推广调整",
-                reason="协同任务已建立，等待负责人确认执行。",
-                **common,
-            ))
-        elif task.get("execution_status") == "pending_verification":
-            queue.append(_queue_item(
-                kind="pending_verification",
-                priority="high",
-                title=f"验证：{task.get('title') or '推广执行任务'}",
-                reason="执行观察已经完成，等待录入验证结论。",
-                **common,
-            ))
-        if not (task.get("owner_name") or "").strip():
-            queue.append(_queue_item(
-                kind="owner_unassigned",
-                priority="medium",
-                title=f"分配负责人：{task.get('title') or '推广执行任务'}",
-                reason="任务没有负责人，可能导致执行、验证或回退无人跟进。",
-                **common,
-            ))
-
     priority_order = {"urgent": 0, "high": 1, "medium": 2}
     queue.sort(key=lambda item: (priority_order.get(item["priority"], 9), item.get("due_at") or "9999", item["id"]))
     queue_by_plan: dict[int, list[dict]] = {}
@@ -285,12 +222,11 @@ def promotion_cockpit(
 
     decisions_by_plan: dict[int, list[dict]] = {}
     actions_by_plan: dict[int, list[dict]] = {}
-    tasks_by_plan: dict[int, list[dict]] = {}
-    for row, target in ((decisions, decisions_by_plan), (actions, actions_by_plan), (tasks, tasks_by_plan)):
+    for row, target in ((decisions, decisions_by_plan), (actions, actions_by_plan)):
         for item in row:
             target.setdefault(int(item["plan_id"]), []).append(item)
 
-    active_plan_ids = set(decisions_by_plan) | set(actions_by_plan) | set(tasks_by_plan)
+    active_plan_ids = set(decisions_by_plan) | set(actions_by_plan)
     cases: list[dict] = []
     for plan_id in active_plan_ids:
         plan = plan_by_id.get(plan_id)
@@ -298,7 +234,6 @@ def promotion_cockpit(
             continue
         plan_decisions = decisions_by_plan.get(plan_id, [])
         plan_actions = actions_by_plan.get(plan_id, [])
-        plan_tasks = tasks_by_plan.get(plan_id, [])
         open_items = queue_by_plan.get(plan_id, [])
         priorities = {item["priority"] for item in open_items}
         if "urgent" in priorities:
@@ -309,7 +244,7 @@ def promotion_cockpit(
             risk_level = "medium"
         else:
             risk_level = "normal"
-        if any(task.get("execution_status") == "needs_rollback" for task in plan_tasks):
+        if any(action.get("status") == "failed" for action in plan_actions):
             chain_stage = "rollback"
         elif any(action.get("status") == "observing" for action in plan_actions):
             chain_stage = "validation"
@@ -321,14 +256,14 @@ def promotion_cockpit(
             chain_stage = "completed"
         timestamps = [
             value
-            for item in [*plan_decisions, *plan_actions, *plan_tasks]
+            for item in [*plan_decisions, *plan_actions]
             for value in (item.get("updated_at"), item.get("verified_at"), item.get("created_at"), item.get("executed_at"))
             if value
         ]
         updated_at = plan.get("updated_at") or ""
         updated_dt = _parse_datetime(updated_at, now)
         data_status = "missing" if updated_dt is None else "stale" if updated_dt < now - timedelta(hours=24) else "fresh"
-        cases.append({
+        cases.append(with_channel({
             "plan_id": plan_id,
             "plan_name": plan.get("plan_name") or f"计划 {plan_id}",
             "store_id": int(plan["store_id"]),
@@ -344,11 +279,11 @@ def promotion_cockpit(
             "decision_count": len(plan_decisions),
             "action_count": len(plan_actions),
             "verified_count": sum(1 for action in plan_actions if action.get("status") in ("success", "partial", "failed", "insufficient")),
-            "collaboration_count": len(plan_tasks),
             "data_status": data_status,
             "data_updated_at": updated_at,
             "latest_activity_at": max(timestamps, default=updated_at),
-        })
+            "scene": plan.get("scene") or "",
+        }))
     cases.sort(key=lambda item: (priority_order.get(item["risk_level"], 9), -item["open_work_count"], item["latest_activity_at"]), reverse=False)
 
     plan_datetimes = [_parse_datetime(plan.get("updated_at"), now) for plan in plans]
@@ -365,7 +300,7 @@ def promotion_cockpit(
         "medium": sum(1 for item in queue if item["priority"] == "medium"),
         "pending_execution": sum(1 for item in queue if item["kind"] == "pending_execution"),
         "pending_verification": sum(1 for item in queue if item["kind"] in ("verification_overdue", "verification_due_soon", "pending_verification")),
-        "needs_rollback": sum(1 for item in queue if item["kind"] == "needs_rollback"),
+        "needs_rollback": sum(1 for action in actions if action.get("status") == "failed"),
         "diagnostic_count": sum(1 for item in queue if item["kind"] == "diagnostic"),
     }
     return {
@@ -391,7 +326,7 @@ def promotion_cockpit_plan_detail(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """返回单个计划从决策、动作、协同到验证的完整真实链路。"""
+    """返回单个计划从决策、执行到验证的完整真实链路。"""
     scope_frag, scope_params = _scope_filter(store_id, user)
     plan_row = db.execute(
         "SELECT * FROM promo_plans WHERE id = ?" + scope_frag,
@@ -399,7 +334,7 @@ def promotion_cockpit_plan_detail(
     ).fetchone()
     if not plan_row:
         raise HTTPException(status_code=404, detail="推广计划不存在或无权访问")
-    plan = dict(plan_row)
+    plan = with_channel(dict(plan_row))
     store = db.execute("SELECT name FROM stores WHERE id = ?", (plan["store_id"],)).fetchone()
     plan["store_name"] = store["name"] if store else ""
 
@@ -412,30 +347,25 @@ def promotion_cockpit_plan_detail(
         decision["final_success_criteria"] = _json_object(decision.get("final_success_criteria"))
 
     actions = [dict(row) for row in db.execute(
-        "SELECT * FROM promo_action_records WHERE plan_id = ? AND store_id = ? ORDER BY id DESC LIMIT 100",
+        "SELECT * FROM promo_action_records WHERE plan_id = ? AND store_id = ? AND COALESCE(lifecycle_status, 'active') = 'active' ORDER BY id DESC LIMIT 100",
         (plan_id, plan["store_id"]),
     ).fetchall()]
     for action in actions:
         action["success_criteria"] = _json_object(action.get("success_criteria"))
         action["metric_summary"] = _json_object(action.get("metric_summary"))
 
-    ensure_promo_collaboration_tables(db)
-    tasks = [dict(row) for row in db.execute(
-        "SELECT * FROM promo_collaboration_tasks WHERE plan_id = ? AND store_id = ? ORDER BY updated_at DESC LIMIT 100",
-        (plan_id, plan["store_id"]),
-    ).fetchall()]
-    for task in tasks:
-        task["reminder_count"] = int(db.execute(
-            "SELECT COUNT(*) AS count FROM promo_collaboration_reminders WHERE task_id = ?",
-            (task["id"],),
-        ).fetchone()["count"])
-
     timeline: list[dict] = []
     for decision in decisions:
         timeline.append({
             "id": f"decision:{decision['id']}",
             "kind": "decision",
-            "title": "人工确认 AI 决策" if decision.get("feedback_status") != "rejected" else "拒绝 AI 决策",
+            "title": (
+                "拒绝 AI 决策"
+                if decision.get("feedback_status") == "rejected"
+                else "AI 决策暂缓"
+                if decision.get("feedback_status") == "insufficient"
+                else "人工确认 AI 决策"
+            ),
             "summary": decision.get("feedback_reason") or decision.get("feedback_note") or f"选择 {decision.get('selected_tier') or '未标注'} 档方案",
             "status": decision.get("workflow_status") or "selected",
             "occurred_at": decision.get("updated_at") or decision.get("created_at") or "",
@@ -471,22 +401,11 @@ def promotion_cockpit_plan_detail(
                 "occurred_at": action.get("verified_at") or "",
                 "source_id": int(action["id"]),
             })
-    for task in tasks:
-        timeline.append({
-            "id": f"task:{task['id']}",
-            "kind": "collaboration",
-            "title": task.get("title") or "建立协同任务",
-            "summary": task.get("rollback_reason") or task.get("description") or f"负责人：{task.get('owner_name') or '未分配'}",
-            "status": task.get("execution_status") or "executing",
-            "occurred_at": task.get("updated_at") or task.get("created_at") or "",
-            "source_id": int(task["id"]),
-        })
     timeline.sort(key=lambda item: item.get("occurred_at") or "", reverse=True)
     return {
         "plan": plan,
         "decisions": decisions,
         "actions": actions,
-        "collaboration_tasks": tasks,
         "timeline": timeline,
         "generated_at": _now(),
     }

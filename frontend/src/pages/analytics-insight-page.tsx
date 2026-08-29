@@ -1,11 +1,11 @@
-import { BarChartOutlined, BulbOutlined, CheckCircleOutlined, RobotOutlined, SendOutlined, WarningOutlined } from "@ant-design/icons";
+import { BulbOutlined, CheckCircleOutlined, RobotOutlined, SendOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Card, Empty, Input, Segmented, Space, Spin, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useRef, useState } from "react";
 
 import http, { getApiErrorMessage } from "../lib/api";
-import { PageHeader } from "../components/ui/page-header";
 import { StoreScopeSelect } from "../components/analytics/analytics-ui";
+import { DecisionBand, MetricRail, WorkspacePage, WorkspaceToolbar } from "../components/ui/workspace-template";
 
 const { Text } = Typography;
 
@@ -162,13 +162,21 @@ export function AnalyticsInsightPage() {
   };
 
   return (
-    <div>
-      <PageHeader
-        icon={<BarChartOutlined />}
-        eyebrow="数据洞察"
-        title="AI 解读"
-        extra={
-          <Space className="ops-insight-controls" wrap>
+    <WorkspacePage kind="analysis">
+      <DecisionBand
+        eyebrow="数据洞察 · AI 解读"
+        title={result?.sections.overall || "先生成经营结论，再围绕证据继续追问"}
+        description={result ? `解读范围：${result.range} · 生成于 ${dayjs().format("MM-DD HH:mm:ss")}` : "AI 会综合销售、推广、商品与时段数据，输出亮点、风险和建议。"}
+        action={
+          <Button className="ops-insight-generate" type="primary" icon={<RobotOutlined />} loading={loading} onClick={generate}>
+            生成 AI 解读
+          </Button>
+        }
+        ariaLabel="AI 数据解读结论"
+      />
+
+      <WorkspaceToolbar>
+        <Space className="ops-insight-controls" wrap>
             <StoreScopeSelect
               value={storeId}
               onChange={(v) => {
@@ -186,57 +194,26 @@ export function AnalyticsInsightPage() {
                 applyModeStore(m, storeId);
               }}
             />
-            <Button className="ops-insight-generate" type="primary" icon={<RobotOutlined />} loading={loading} onClick={generate}>
-              生成 AI 解读
-            </Button>
-          </Space>
-        }
-      />
+        </Space>
+        <Text type="secondary" style={{ fontSize: 12 }}>数据基于生意参谋与万相台同步结果</Text>
+      </WorkspaceToolbar>
 
-      <Card variant="borderless" style={{ boxShadow: "var(--ops-shadow-sm)" }}>
+      <Card variant="borderless">
         {loading ? (
           <div style={{ textAlign: "center", padding: 60 }}>
             <Spin description="AI 正在分析数据…" />
           </div>
         ) : result ? (
           <div>
-            <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
-              解读范围：{result.range} · 生成于 {dayjs().format("MM-DD HH:mm:ss")} · 数据基于生意参谋与万相台同步结果
-            </Text>
-
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-              {result.metrics.map((m) => (
-                <div
-                  key={m.label}
-                  style={{
-                    flex: "1 1 150px",
-                    minWidth: 140,
-                    padding: "10px 14px",
-                    borderRadius: "var(--ops-radius)",
-                    background: "var(--ops-card-bg-2)",
-                    border: "1px solid var(--ops-border)",
-                  }}
-                >
-                  <div style={{ fontSize: 12, color: "var(--ops-text-secondary)", marginBottom: 2 }}>{m.label}</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{m.value}</div>
-                  <ChangeBadge change={m.change} unit={m.unit} />
-                </div>
-              ))}
-            </div>
-
-            {result.sections.overall && (
-              <div
-                style={{
-                  padding: "12px 16px",
-                  borderRadius: "var(--ops-radius)",
-                  background: "var(--ops-accent-soft)",
-                  borderLeft: "3px solid var(--ops-accent)",
-                  marginBottom: 12,
-                }}
-              >
-                <Text style={{ fontSize: 14, lineHeight: 1.9 }}>{result.sections.overall}</Text>
-              </div>
-            )}
+            <MetricRail
+              columns={result.metrics.length <= 4 ? 4 : 6}
+              items={result.metrics.map((m) => ({
+                key: m.label,
+                label: m.label,
+                value: m.value,
+                hint: <ChangeBadge change={m.change} unit={m.unit} />,
+              }))}
+            />
 
             <div style={{ display: "grid", gap: 10 }}>
               <InsightSection icon={<CheckCircleOutlined />} color="green" title="亮点" items={result.sections.highlights} />
@@ -293,6 +270,6 @@ export function AnalyticsInsightPage() {
           />
         )}
       </Card>
-    </div>
+    </WorkspacePage>
   );
 }
