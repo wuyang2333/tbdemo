@@ -58,6 +58,27 @@ type Evidence = {
   unit: string;
 };
 
+type ItemTrafficMetric = {
+  item_id: string;
+  item_title: string;
+  mode: string;
+  spend: number | null;
+  sales: number | null;
+  roi: number | null;
+  clicks: number | null;
+  orders: number | null;
+  impressions: number | null;
+  source: string;
+  updated_at: string;
+};
+
+type ItemTraffic = {
+  status: "complete" | "partial" | "missing";
+  reason: string;
+  item_id: string;
+  metrics: ItemTrafficMetric[];
+};
+
 type Recommendation = {
   key: string;
   label: string;
@@ -94,6 +115,7 @@ type Diagnostic = {
   spend_at_risk: number;
   sales_gap: number;
   evidence: Evidence[];
+  item_traffic?: ItemTraffic;
   possible_causes: string[];
   recommendations: Recommendation[];
   unknown_dimensions: string[];
@@ -119,6 +141,9 @@ type DiagnosticsData = {
     active_plan_count: number;
     realtime_coverage_count: number;
     realtime_coverage_rate: number;
+    item_traffic_coverage_count?: number;
+    item_traffic_complete_count?: number;
+    item_traffic_coverage_rate?: number;
   };
   thresholds: Record<string, number | string>;
   generated_at: string;
@@ -156,6 +181,7 @@ function aiDiagnosisFingerprint(item: Diagnostic): string {
     confidence: item.confidence,
     possible_causes: item.possible_causes,
     unknown_dimensions: item.unknown_dimensions,
+    item_traffic: item.item_traffic,
   };
   return JSON.stringify(source);
 }
@@ -233,6 +259,31 @@ const categoryLabels: Record<string, string> = {
 function formatEvidenceValue(value: Evidence["current"], unit: string): string {
   if (typeof value === "number") return `${value.toLocaleString("zh-CN")}${unit}`;
   return `${value}${unit}`;
+}
+
+const itemTrafficModeLabels: Record<string, string> = {
+  realtime: "实时",
+  yesterday: "昨天",
+  "7": "近 7 天",
+  "14": "近 14 天",
+  "30": "近 30 天",
+};
+
+const itemTrafficSourceLabels: Record<string, string> = {
+  report: "商品报表",
+  plan_scene: "计划归因",
+  plan: "计划归因",
+};
+
+function formatItemTrafficNumber(value: number | null | undefined, suffix = ""): string {
+  if (value === null || value === undefined) return "—";
+  return `${value.toLocaleString("zh-CN")}${suffix}`;
+}
+
+function formatItemTrafficCount(value: number | null | undefined, metric: ItemTrafficMetric): string {
+  // plan_scene rows use zero as a placeholder when the upstream report omitted a field.
+  if ((value === 0 || value === null || value === undefined) && metric.source !== "report") return "—";
+  return formatItemTrafficNumber(value);
 }
 
 export function PromotionsDiagnosticsPage() {
@@ -666,12 +717,12 @@ export function PromotionsDiagnosticsPage() {
                   status={coverageStatus}
                   format={(value) => `${value}% 实时覆盖`}
                 />
-                <Text type="secondary">可见 {data.data_health.visible_plan_count} 个计划，其中 {data.data_health.realtime_coverage_count} 个在投计划已有实时指标。</Text>
+                <Text type="secondary">可见 {data.data_health.visible_plan_count} 个计划，其中 {data.data_health.realtime_coverage_count} 个在投计划已有实时指标；{data.data_health.item_traffic_coverage_count ?? 0} 个已关联商品流量数据（完整报表 {data.data_health.item_traffic_complete_count ?? 0} 个）。</Text>
               </Card>
             </Col>
             <Col xs={24} lg={12}>
               <Card variant="borderless" title="当前诊断边界" style={{ height: "100%" }}>
-                <Text type="secondary">已接入预算、花费、成交、ROI、点击、计划状态和更新时间。商品库存与价格、活动、素材、人群和竞争环境仍需人工核查。</Text>
+                <Text type="secondary">已接入预算、计划花费/成交/ROI/点击，以及关联商品的流量指标与数据来源。商品库存与价格、活动、素材、人群和竞争环境仍需人工核查。</Text>
               </Card>
             </Col>
           </Row>
@@ -751,6 +802,51 @@ export function PromotionsDiagnosticsPage() {
                   ),
                 },
                 {
+                  key: "item-traffic",
+                  label: "商品流量证据",
+                  children: (() => {
+                    const traffic = selected.item_traffic || { status: "missing" as const, reason: "商品级推广数据尚未同步", item_id: "", metrics: [] };
+                    const statusMeta = traffic.status === "complete"
+                      ? { label: "数据完整", color: "green" as const }
+                      : traffic.status === "partial"
+                        ? { label: "部分数据", color: "orange" as const }
+                        : { label: "暂无数据", color: "default" as const };
+                    const trafficColumns: TableColumnsType<ItemTrafficMetric> = [
+                      { title: "周期", dataIndex: "mode", width: 82, render: (mode: string) => itemTrafficModeLabels[mode] || mode || "—" },
+                      { title: "展现", dataIndex: "impressions", align: "right", render: (value: number | null, metric) => formatItemTrafficCount(value, metric) },
+                      { title: "点击", dataIndex: "clicks", align: "right", render: (value: number | null) => formatItemTrafficNumber(value) },
+                      {
+                        title: "点击率",
+                        key: "ctr",
+                        align: "right",
+                        render: (_, metric) => metric.impressions && metric.impressions > 0 ? `${((metric.clicks || 0) / metric.impressions * 100).toFixed(2)}%` : "—",
+                      },
+                      { title: "花费", dataIndex: "spend", align: "right", render: (value: number | null) => formatItemTrafficNumber(value, " 元") },
+                      { title: "成交", dataIndex: "sales", align: "right", render: (value: number | null) => formatItemTrafficNumber(value, " 元") },
+                      { title: "ROI", dataIndex: "roi", align: "right", render: (value: number | null) => formatItemTrafficNumber(value) },
+                      { title: "订单", dataIndex: "orders", align: "right", render: (value: number | null, metric) => formatItemTrafficCount(value, metric) },
+                      { title: "来源", dataIndex: "source", width: 86, render: (source: string) => <Tag>{itemTrafficSourceLabels[source] || source || "未知"}</Tag> },
+                      { title: "更新时间", dataIndex: "updated_at", width: 128, render: (value: string) => value ? dayjs(value).format("MM-DD HH:mm") : "—" },
+                    ];
+                    return (
+                      <>
+                        <Space wrap size={[6, 4]} style={{ marginBottom: 8 }}>
+                          <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                          {traffic.item_id ? <Text type="secondary">商品 ID {traffic.item_id}</Text> : null}
+                        </Space>
+                        <Alert
+                          type={traffic.status === "complete" ? "success" : traffic.status === "partial" ? "warning" : "info"}
+                          showIcon
+                          title={traffic.reason}
+                          description={traffic.status === "partial" ? "计划归因数据可用于定位花费与成交，但展现量、订单等字段可能未从商品报表同步，不能按 0 解释。" : undefined}
+                          style={{ marginBottom: traffic.metrics.length ? 10 : 0 }}
+                        />
+                        {traffic.metrics.length ? <Table<ItemTrafficMetric> size="small" rowKey={(metric) => `${metric.mode}-${metric.source}`} columns={trafficColumns} dataSource={traffic.metrics} pagination={false} scroll={{ x: 920 }} /> : null}
+                      </>
+                    );
+                  })(),
+                },
+                {
                   key: "ai",
                   label: aiDiagnosis ? "AI 诊断与建议" : "AI 深度诊断（按需运行）",
                   children: (
@@ -766,7 +862,7 @@ export function PromotionsDiagnosticsPage() {
                           <Text type="secondary" style={{ display: "block", marginBottom: 8, fontSize: 12 }}>
                             {aiDiagnosis.cached ? "已复用上次诊断" : "本次刚完成诊断"}{aiDiagnosis.generated_at ? ` · ${dayjs(aiDiagnosis.generated_at).format("YYYY-MM-DD HH:mm")}` : ""}
                           </Text>
-                          <Text type="secondary" style={{ display: "block", marginBottom: 10, fontSize: 12 }}>本次依据：规则证据、计划实时/昨日指标、近 7 天汇总、最近动作记录和可用经验（缺失数据不会被补造）。</Text>
+                          <Text type="secondary" style={{ display: "block", marginBottom: 10, fontSize: 12 }}>本次依据：规则证据、计划实时/昨日指标、商品级流量指标及数据来源、近 7 天汇总、最近动作记录和可用经验（缺失数据不会被补造）。</Text>
                           <Space wrap style={{ marginBottom: 8 }}>
                             <Tag color="purple">{aiDiagnosis.ai_diagnosis.issue_type}</Tag>
                             {aiDiagnosis.ai_diagnosis.decision ? <Tag color={aiDiagnosis.ai_diagnosis.decision === "建议干预" ? "orange" : aiDiagnosis.ai_diagnosis.decision === "建议观察" ? "blue" : "default"}>{aiDiagnosis.ai_diagnosis.decision}</Tag> : null}

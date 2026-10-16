@@ -108,7 +108,14 @@ def record_error(name: str, exc: BaseException, duration: float, trigger: str = 
         count = st["error_count"]
         err = st["last_error"]
         started_at = st["last_started"]
-    _logger.error("%s 失败（连续 %d 次，%.1fs）：%s", name, count, duration, err)
+    _logger.error(
+        "%s 失败（连续 %d 次，%.1fs）：%s",
+        name,
+        count,
+        duration,
+        err,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     _persist_run(name, "error", trigger, store_id, started_at, duration, err)
     if count % 3 == 0:
         _try_alert(name, err, count)

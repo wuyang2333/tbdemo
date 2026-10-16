@@ -9,7 +9,10 @@ export type AlertRule = {
   operator: "cycle_drop_pct" | "cycle_up_pct" | "lt" | "gt";
   threshold: number;
   enabled: boolean;
+  conditions?: AlertCondition[];
 };
+
+export type AlertCondition = Pick<AlertRule, "module" | "field" | "operator" | "threshold">;
 
 export type RuleField = { key: string; label: string; kind: "cycle" | "value"; unit?: string };
 
@@ -52,12 +55,15 @@ const CYCLE_MAP: Record<string, string> = {
   orders: "orders_cycle",
   visitors: "visitors_cycle",
   conversion_rate: "conversion_cycle",
+  real_roi: "real_roi_cycle",
   spend: "spend_cycle",
   roi: "roi_cycle",
 };
 
 export function ruleValue(item: Record<string, unknown>, field: string): number | null {
   if (field === "real_roi") {
+    const realRoi = item.real_roi;
+    if (typeof realRoi === "number" && Number.isFinite(realRoi)) return realRoi;
     const spend = typeof item.promo_spend === "number" ? item.promo_spend : 0;
     const sales = typeof item.sales === "number" ? item.sales : 0;
     return spend > 0 ? sales / spend : null;
@@ -75,21 +81,26 @@ export function ruleCycle(item: Record<string, unknown>, field: string): number 
 
 export function evalRule(rule: AlertRule, item: Record<string, unknown>): boolean {
   if (!rule.enabled) return false;
-  if (rule.operator === "cycle_drop_pct") {
-    const c = ruleCycle(item, rule.field);
-    return c != null && c <= -Math.abs(rule.threshold);
+  const conditions = rule.conditions?.length ? rule.conditions : [rule];
+  return conditions.every((condition) => evalCondition(condition, item));
+}
+
+function evalCondition(condition: AlertCondition, item: Record<string, unknown>): boolean {
+  if (condition.operator === "cycle_drop_pct") {
+    const c = ruleCycle(item, condition.field);
+    return c != null && c <= -Math.abs(condition.threshold);
   }
-  if (rule.operator === "cycle_up_pct") {
-    const c = ruleCycle(item, rule.field);
-    return c != null && c >= rule.threshold;
+  if (condition.operator === "cycle_up_pct") {
+    const c = ruleCycle(item, condition.field);
+    return c != null && c >= condition.threshold;
   }
-  if (rule.operator === "lt") {
-    const v = ruleValue(item, rule.field);
-    return v != null && v < rule.threshold;
+  if (condition.operator === "lt") {
+    const v = ruleValue(item, condition.field);
+    return v != null && v < condition.threshold;
   }
-  if (rule.operator === "gt") {
-    const v = ruleValue(item, rule.field);
-    return v != null && v > rule.threshold;
+  if (condition.operator === "gt") {
+    const v = ruleValue(item, condition.field);
+    return v != null && v > condition.threshold;
   }
   return false;
 }
@@ -99,6 +110,11 @@ export function ruleFieldLabel(module: RuleModule, field: string): string {
 }
 
 export function ruleText(rule: AlertRule): string {
+  if (rule.conditions?.length) return rule.conditions.map((condition) => conditionText(condition)).join(" 且 ");
+  return conditionText(rule);
+}
+
+function conditionText(rule: AlertCondition): string {
   const fl = ruleFieldLabel(rule.module, rule.field);
   if (rule.operator === "cycle_drop_pct") return `${fl} 环比跌超 ${Math.abs(rule.threshold)}%`;
   if (rule.operator === "cycle_up_pct") return `${fl} 环比涨超 ${rule.threshold}%`;
@@ -106,6 +122,7 @@ export function ruleText(rule: AlertRule): string {
 }
 
 export function buildRuleMessage(rule: AlertRule, item: Record<string, unknown>, name: string): string {
+  if (rule.conditions?.length) return `${name}：${ruleText(rule)}，已满足全部条件`;
   const fl = ruleFieldLabel(rule.module, rule.field);
   if (rule.operator === "cycle_drop_pct") {
     const c = ruleCycle(item, rule.field);

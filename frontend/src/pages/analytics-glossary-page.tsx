@@ -45,13 +45,13 @@ export function AnalyticsGlossaryPage() {
 
   const items = groups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.group })));
   const columns: TableColumnsType<GlossaryItem & { group: string }> = [
-    { title: "指标", dataIndex: "metric", key: "metric", width: 180, fixed: "left", render: (value: string) => <Text strong>{value}</Text> },
-    { title: "业务分组", dataIndex: "group", key: "group", width: 130, render: (value: string) => <Tag>{value}</Tag> },
-    { title: "数据来源", dataIndex: "source", key: "source", width: 180 },
-    { title: "时间粒度", dataIndex: "granularity", key: "granularity", width: 110, render: (value: string) => <Tag color="blue">{value}</Tag> },
-    { title: "存储位置", dataIndex: "table", key: "table", width: 180, render: (value: string) => <Text code>{value}</Text> },
-    { title: "刷新频率", dataIndex: "refresh", key: "refresh", width: 120 },
-    { title: "口径说明", dataIndex: "note", key: "note", ellipsis: true },
+    { title: "指标", dataIndex: "metric", key: "metric", width: 220, fixed: "left", render: (value: string) => <Text strong className="glossary-metric">{value}</Text> },
+    { title: "业务分组", dataIndex: "group", key: "group", width: 190, render: (value: string) => <Tag className="glossary-tag">{value}</Tag> },
+    { title: "数据来源", dataIndex: "source", key: "source", width: 260, render: (value: string) => <Text className="glossary-wrap">{value}</Text> },
+    { title: "时间粒度", dataIndex: "granularity", key: "granularity", width: 190, render: (value: string) => <Tag color="blue" className="glossary-tag">{value}</Tag> },
+    { title: "存储位置", dataIndex: "table", key: "table", width: 220, render: (value: string) => <Text code className="glossary-code">{value}</Text> },
+    { title: "刷新频率", dataIndex: "refresh", key: "refresh", width: 190, render: (value: string) => <Text className="glossary-wrap">{value}</Text> },
+    { title: "口径说明", dataIndex: "note", key: "note", width: 300, render: (value: string) => <Text className="glossary-wrap">{value}</Text> },
   ];
 
   return (
@@ -80,14 +80,17 @@ export function AnalyticsGlossaryPage() {
       ) : groups.length === 0 ? (
         <Empty description="暂无口径数据，请先检查数据源或稍后刷新" />
       ) : (
+        <div className="glossary-table-shell">
         <Table
+          className="glossary-table"
           rowKey={(record) => `${record.group}-${record.metric}`}
           columns={columns}
           dataSource={items}
           pagination={false}
           size="small"
-          scroll={{ x: 1050 }}
+          scroll={{ x: 1570 }}
         />
+        </div>
       )}
     </WorkspacePage>
   );

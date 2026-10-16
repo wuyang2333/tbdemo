@@ -186,28 +186,84 @@ def fetch_scene_daily(store: dict, start: str, end: str) -> list[dict]:
     return out
 
 
+def _campaign_page(payload: dict) -> tuple[list[dict], int | None]:
+    data = payload.get("data") or {}
+    if not isinstance(data, dict) or "list" not in data or not isinstance(data.get("list"), list):
+        raise AlimamaError("万相台计划列表格式异常，本次未更新计划状态")
+    rows = data["list"]
+    raw_count = data.get("count")
+    try:
+        count = int(raw_count) if raw_count is not None else None
+    except (TypeError, ValueError):
+        count = None
+    return rows, count
+
+
+def _fetch_campaign_pages(store: dict, key: str, page_size: int = 100) -> list[dict]:
+    """完整读取一个推广场景；只有所有分页均成功时才返回。"""
+    rows: list[dict] = []
+    page = 1
+    total: int | None = None
+    while page <= 100:
+        payload = _run_json(
+            store,
+            [f"promo-{key}", "--limit", str(page_size), "--page", str(page), "--raw"],
+        )
+        batch, count = _campaign_page(payload)
+        if total is None:
+            total = count
+        rows.extend(batch)
+        if not batch or (total is not None and len(rows) >= total) or len(batch) < page_size:
+            break
+        page += 1
+    else:
+        raise AlimamaError("万相台计划数量异常，本次未更新计划状态")
+    if total is not None and len(rows) < total:
+        raise AlimamaError(f"万相台计划列表未读取完整（{len(rows)}/{total}），本次未更新计划状态")
+    return rows
+
+
+def _fetch_content_campaign_pages(store: dict, page_size: int = 100) -> list[dict]:
+    rows: list[dict] = []
+    offset = 0
+    total: int | None = None
+    for _ in range(100):
+        body = json.dumps(
+            {
+                "bizCode": "onebpShortVideo",
+                "adgroupRequired": True,
+                "offset": offset,
+                "pageSize": page_size,
+                "statusList": ["start", "pause"],
+            },
+            ensure_ascii=False,
+        )
+        payload = _run_json(
+            store,
+            ["api", "/campaign/horizontal/findPage.json?bizCode=onebpShortVideo", "--body", body],
+        )
+        batch, count = _campaign_page(payload)
+        if total is None:
+            total = count
+        rows.extend(batch)
+        if not batch or (total is not None and len(rows) >= total) or len(batch) < page_size:
+            break
+        offset += page_size
+    else:
+        raise AlimamaError("万相台内容营销计划数量异常，本次未更新计划状态")
+    if total is not None and len(rows) < total:
+        raise AlimamaError(f"万相台内容营销计划未读取完整（{len(rows)}/{total}），本次未更新计划状态")
+    return rows
+
+
 def fetch_plan_snapshots(store: dict) -> list[dict]:
-    """拉取三个推广场景的当前计划快照（计划名/日预算/出价/状态）。"""
+    """完整拉取各推广场景的当前计划快照。任一分页失败时整体失败，避免误判计划失效。"""
     plans: list[dict] = []
     for key in ("crowd", "keyword", "wholesite"):
-        payload = _run_json(store, [f"promo-{key}", "--limit", "100", "--raw"])
+        payload = {"data": {"list": _fetch_campaign_pages(store, key)}}
         plans.extend(_parse_campaigns(payload, key, SCENE_NAMES.get(key, key)))
-    # 内容营销（onebpShortVideo）走 findPage 接口
-    body = json.dumps(
-        {
-            "bizCode": "onebpShortVideo",
-            "adgroupRequired": True,
-            "offset": 0,
-            "pageSize": 100,
-            "statusList": ["start", "pause"],
-        },
-        ensure_ascii=False,
-    )
-    payload = _run_json(
-        store,
-        ["api", "/campaign/horizontal/findPage.json?bizCode=onebpShortVideo", "--body", body],
-    )
-    plans.extend(_parse_campaigns(payload, "content", "内容营销"))
+    content_payload = {"data": {"list": _fetch_content_campaign_pages(store)}}
+    plans.extend(_parse_campaigns(content_payload, "content", "内容营销"))
     return plans
 
 
@@ -258,12 +314,13 @@ def fetch_plan_reports(store: dict, start: str, end: str) -> list[dict]:
 REALTIME_SCENES = SCENES
 
 
-def fetch_realtime(store: dict) -> list[dict]:
-    """拉取今天各推广场景的实时数据（按小时，分场景）。
+def fetch_realtime(store: dict, target_date: str | None = None) -> list[dict]:
+    """拉取指定日期各推广场景的实时数据（按小时，分场景）。
 
     万相台默认实时报表只覆盖短视频/关键词；货品全站等场景需按 bizCode 单独查。
+    ``target_date`` 默认今天；补历史时传入昨天，可把昨日实时小时留存下来。
     """
-    today = date.today().isoformat()
+    target_date = target_date or date.today().isoformat()
     fields = ["adPv", "charge", "click", "ctr", "alipayInshopAmt", "alipayInshopNum", "cvr", "roi"]
     body = {
         "bizCode": "universalBP",
@@ -276,8 +333,8 @@ def fetch_realtime(store: dict) -> list[dict]:
         "rptType": "real_time",
         "queryDomains": ["date"],
         "queryFieldIn": fields,
-        "startTime": today,
-        "endTime": today,
+        "startTime": target_date,
+        "endTime": target_date,
         "splitType": "hour",
         "effectEqual": 15,
         "havingList": [],
@@ -501,26 +558,54 @@ def _campaign_items(row: dict) -> list[tuple[str, str]]:
 
 
 def _promo_item_map(store: dict) -> dict[str, list[dict]]:
-    """宝贝↔计划映射：campaign_id -> [{item_id, item_title}]（方案B）。"""
+    """宝贝↔计划映射：campaign_id -> [{item_id, item_title}]（方案B）。
+
+    关键词推广的计划级接口经常返回 ``material=null``，因此不能依赖
+    ``promo-keyword`` 的计划行来取商品。CLI 的 ``promo-units`` 改走
+    ``/adgroup/horizontal/findPage`` 单元接口，该接口会稳定返回
+    ``material.materialId``。
+    """
     mapping: dict[str, list[dict]] = {}
-    for cmd in ("promo-wholesite", "promo-keyword", "promo-crowd"):
-        offset = 0
-        for _ in range(200):
-            payload = _run_json(store, [cmd, "--limit", "100", "--page", str(offset // 100 + 1), "--raw"], timeout=180)
-            d = payload.get("data") or {}
-            rows = d.get("list") or []
-            count = int(_num(d.get("count")))
-            for r in rows:
-                if not isinstance(r, dict):
+    for scene in ("wholesite", "keyword", "crowd"):
+        try:
+            payload = _run_json(
+                store,
+                ["promo-units", "--biz", scene, "--status", "start", "pause", "end", "--raw"],
+                timeout=180,
+            )
+            units = payload.get("units") or []
+            for unit in units:
+                if not isinstance(unit, dict):
                     continue
-                cid = str(r.get("campaignId") or "").strip()
-                if not cid:
+                cid = str(unit.get("campaignId") or "").strip()
+                item_id = str(unit.get("itemId") or "").strip()
+                if not cid or not item_id:
                     continue
-                for item_id, item_title in _campaign_items(r):
-                    mapping.setdefault(cid, []).append({"item_id": item_id, "item_title": item_title or ""})
-            offset += len(rows)
-            if not rows or offset >= count:
-                break
+                bucket = mapping.setdefault(cid, [])
+                if not any(item.get("item_id") == item_id for item in bucket):
+                    bucket.append({"item_id": item_id, "item_title": unit.get("title") or ""})
+        except AlimamaError:
+            # 保持兼容：旧接口仍可为全站/人群推广提供兜底映射。
+            cmd = f"promo-{scene}"
+            offset = 0
+            for _ in range(200):
+                payload = _run_json(store, [cmd, "--limit", "100", "--page", str(offset // 100 + 1), "--raw"], timeout=180)
+                d = payload.get("data") or {}
+                rows = d.get("list") or []
+                count = int(_num(d.get("count")))
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    cid = str(row.get("campaignId") or "").strip()
+                    if not cid:
+                        continue
+                    for item_id, item_title in _campaign_items(row):
+                        bucket = mapping.setdefault(cid, [])
+                        if not any(item.get("item_id") == item_id for item in bucket):
+                            bucket.append({"item_id": item_id, "item_title": item_title or ""})
+                offset += len(rows)
+                if not rows or offset >= count:
+                    break
     return mapping
 
 

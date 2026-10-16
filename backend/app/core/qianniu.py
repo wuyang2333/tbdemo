@@ -409,10 +409,20 @@ def _remark_sold_order_by_buyer_once(
             candidates = [
                 order
                 for order in _query_sold_orders_by_buyer(session, buyer_nick, timeout)
-                if _order_date(order) == order_date
+                if not order_date or _order_date(order) == order_date
             ]
             if not candidates:
-                raise QianniuOrderNotFound(f"千牛已卖出商品中未找到旺旺号 {buyer_nick} 在 {order_date} 的订单")
+                scope = f"在 {order_date}" if order_date else ""
+                raise QianniuOrderNotFound(f"千牛已卖出商品中未找到旺旺号 {buyer_nick} {scope}的订单")
+            # 用户下错单后可能先关闭旧单、再用同一旺旺号下新单。
+            # 关闭旧单不应遮挡同日的新订单；仅在全部候选都关闭时才返回关闭结果。
+            open_candidates = [
+                order for order in candidates if _order_status_outcome(order)[0] != "order_closed"
+            ]
+            if open_candidates:
+                candidates = open_candidates
+            else:
+                return _remark_matched_order(session, candidates[0], memo, flag, timeout)
             amount_matches = [
                 order for order in candidates if _amount_matches(_actual_paid_amount(order), expected_amount)
             ]
@@ -652,7 +662,7 @@ def remark_sold_order_by_buyer(
     order_date = str(order_date or "").strip()
     if not buyer_nick or len(buyer_nick) > 100:
         raise QianniuError("千牛旺旺号格式不正确")
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", order_date):
+    if order_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", order_date):
         raise QianniuError("礼品单下单日期格式不正确，无法按旺旺号查询")
     if not memo or len(memo) > 500:
         raise QianniuError("千牛卖家备注内容不正确")

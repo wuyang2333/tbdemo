@@ -44,6 +44,9 @@ type Workspace = {
     channel?: string;
     channel_name?: string;
     status?: string;
+    platform_presence?: "active" | "missing";
+    platform_last_seen_at?: string | null;
+    platform_missing_at?: string | null;
     day_budget?: number;
     bid_type?: string;
     bid_value?: number;
@@ -171,6 +174,7 @@ export function PromotionsPlanDetailPage() {
       : `${adjustmentPct > 0 ? "+" : ""}${adjustmentPct.toFixed(1)}%`;
   const adjustmentLabel = adjustField === "day_budget" ? "日预算" : "出价";
   const adjustmentReady = adjustValue != null && adjustValue >= 0 && Math.abs(adjustValue - adjustmentCurrentValue) >= 0.001;
+  const platformMissing = data.plan.platform_presence === "missing" || data.plan.status === "平台已失效";
 
   const openAdjustment = () => {
     setAdjustField("day_budget");
@@ -248,7 +252,7 @@ export function PromotionsPlanDetailPage() {
         source={quality.source}
         updatedAt={quality.updated_at ? dayjs(quality.updated_at).format("MM-DD HH:mm") : undefined}
         stale={quality.status !== "fresh"}
-        extra={<Space wrap><Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/promotions/plans")}>计划列表</Button><Button onClick={() => navigate(`/promotions/decisions?plan_id=${data.plan.id}`)}>生成 AI 决策</Button><Button type="primary" icon={<SettingOutlined />} onClick={openAdjustment}>调整计划</Button></Space>}
+        extra={<Space wrap><Button icon={<ArrowLeftOutlined />} onClick={() => navigate("/promotions/plans")}>计划列表</Button><Button disabled={platformMissing} onClick={() => navigate(`/promotions/decisions?plan_id=${data.plan.id}`)}>生成 AI 决策</Button><Button disabled={platformMissing} type="primary" icon={<SettingOutlined />} onClick={openAdjustment}>调整计划</Button></Space>}
         stackActions
       />
       <DecisionBand
@@ -260,6 +264,7 @@ export function PromotionsPlanDetailPage() {
       />
 
       {error ? <Alert type="warning" showIcon title="刷新失败，当前展示上一次成功数据" description={error} action={<Button size="small" onClick={() => void load()}>重试</Button>} style={{ marginBottom: 16 }} /> : null}
+      {platformMissing ? <Alert type="info" showIcon title="该计划已不在万相台当前计划列表中" description={`历史数据和操作记录仍保留，但不能再执行启停、预算、出价或 AI 决策。${data.plan.platform_last_seen_at ? ` 最后在平台出现于 ${dayjs(data.plan.platform_last_seen_at).format("YYYY-MM-DD HH:mm")}。` : ""}`} style={{ marginBottom: 16 }} /> : null}
       {quality.status !== "fresh" ? <Alert type="warning" showIcon title={quality.status === "missing" ? "缺少可靠的更新时间" : `计划数据约 ${quality.age_hours ?? "—"} 小时未更新`} description="先同步推广数据，再据此执行调整；历史档案仍可正常查看。" action={<Button size="small" onClick={() => navigate("/promotions/plans")}>前往同步</Button>} style={{ marginBottom: 16 }} /> : null}
       <Card variant="borderless" title={<Space><BulbOutlined />执行要点</Space>} extra={<Tag>{data.decision_summary.source}</Tag>} style={{ marginBottom: 16 }}>
         <Row gutter={[18, 14]}>
@@ -279,7 +284,7 @@ export function PromotionsPlanDetailPage() {
       <Card variant="borderless" style={{ marginBottom: 16 }}>
         <WorkspaceToolbar>
           <PromotionChannelTag item={data.plan} />
-          <Tag color={data.plan.status === "在投" ? "green" : "default"}>{data.plan.status || "状态未知"}</Tag>
+          <Tag color={data.plan.status === "在投" ? "green" : "default"}>{platformMissing ? "平台已失效" : data.plan.status || "状态未知"}</Tag>
           <Tag>计划 ID {data.plan.campaign_id}</Tag>
           <Tag color={quality.trend_days_with_data >= 7 ? "blue" : "orange"}>近30天有数据 {quality.trend_days_with_data} 天</Tag>
           {data.observing.length ? <Tag color="gold">{data.observing.length} 个动作观察中</Tag> : <Tag>暂无观察中动作</Tag>}

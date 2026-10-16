@@ -80,6 +80,9 @@ function mergeConfig(data: Partial<AlertConfig> | null | undefined): AlertConfig
         operator: r.operator,
         threshold: Number(r.threshold || 0),
         enabled: r.enabled !== false,
+        conditions: Array.isArray((r as AlertRule).conditions)
+          ? (r as AlertRule).conditions!.filter((c) => c && typeof c === "object").map((c) => ({ module: c.module, field: String(c.field || ""), operator: c.operator, threshold: Number(c.threshold || 0) }))
+          : undefined,
       }));
   }
   for (const g of groups) {

@@ -100,6 +100,7 @@ export type Gift = {
   remark_attempted_at: string | null;
   remarked_at: string | null;
   remark_error: string;
+  remark_next_retry_at: string | null;
   qianniu_price: number | null;
   price_before_qianniu: number | null;
   price_synced_at: string | null;
@@ -268,11 +269,15 @@ export type PromoPlan = {
   bid_type: string;
   bid_value: number;
   status: string;
+  platform_presence?: "active" | "missing";
+  platform_last_seen_at?: string | null;
+  platform_missing_at?: string | null;
   gmt_create: string;
   spend: number;
   sales: number;
   roi: number;
   clicks: number;
+  real_roi?: number | null;
   spend_cycle?: number | null;
   sales_cycle?: number | null;
   roi_cycle?: number | null;
@@ -460,6 +465,7 @@ export type AnalyticsProduct = {
   rank?: number;
   item_id: string;
   item_title: string;
+  product_alias?: string;
   image?: string;
   sales: number;
   orders: number;
@@ -487,6 +493,18 @@ export type AnalyticsProduct = {
   promo_roi?: number | null;
   promo_net_roi?: number | null;
   promo_share?: number | null;
+  real_roi?: number | null;
+  promo_spend_previous?: number | null;
+  promo_roi_previous?: number | null;
+  promo_net_roi_previous?: number | null;
+  real_roi_previous?: number | null;
+  promo_share_previous?: number | null;
+  promo_spend_cycle?: number | null;
+  promo_roi_cycle?: number | null;
+  promo_net_roi_cycle?: number | null;
+  real_roi_cycle?: number | null;
+  promo_share_cycle?: number | null;
+  sales_share_cycle?: number | null;
 };
 
 export type AnalyticsProducts = {
@@ -494,6 +512,7 @@ export type AnalyticsProducts = {
   total: number;
   days: number;
   fetched_at?: string | null;
+  promo_compare_label?: string | null;
 };
 
 export type AnalyticsProductDetail = {

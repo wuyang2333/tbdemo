@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 from datetime import datetime
 
@@ -35,6 +36,11 @@ def test_diagnostics_returns_evidence_and_respects_store_scope(client, admin_tok
             "VALUES (?, ?, ?, ?, ?, ?)",
             (store_id, campaign_id, f"item-{store_id}", f"诊断商品{store_id}", "https://example.com/item.png", now),
         )
+    conn.execute(
+        "INSERT INTO promo_item_stats (store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at) "
+        "VALUES (?, ?, ?, 'realtime', 35, 140, 4, 28, 7, 560, 'report', ?)",
+        (store_a, f"item-{store_a}", f"诊断商品{store_a}", now),
+    )
     conn.commit()
     conn.close()
 
@@ -66,6 +72,10 @@ def test_diagnostics_returns_evidence_and_respects_store_scope(client, admin_tok
     assert budget_item["item_id"] == f"item-{store_a}"
     assert budget_item["item_title"] == f"诊断商品{store_a}"
     assert budget_item["item_image"] == "https://example.com/item.png"
+    assert budget_item["item_traffic"]["status"] == "complete"
+    assert budget_item["item_traffic"]["item_id"] == f"item-{store_a}"
+    assert budget_item["item_traffic"]["metrics"][0]["impressions"] == 560
+    assert budget_item["item_traffic"]["metrics"][0]["orders"] == 7
     assert budget_item["recommendations"][0]["path"].startswith("/promotions/plans")
     assert budget_item["spend_at_risk"] == 20.0
     assert payload["data_health"]["realtime_coverage_rate"] == 100.0
@@ -193,3 +203,80 @@ def test_dynamic_priority_uses_multiple_evidence_values():
     }
     assert _dynamic_priority(severe, {"priority": "p1"}, bands) == ("p0", "动态判定：ROI 跌幅 68%≥60%；当前花费 420元≥300元")
     assert _dynamic_priority(mild, {"priority": "p1"}, bands) == ("p2", "动态判定：ROI 跌幅 25%≥20%；当前花费 60元≥50元")
+
+
+def test_ai_diagnostic_releases_read_transaction_before_model_call(client, admin_token, monkeypatch):
+    """模型请求期间不能持有 SQLite 读锁，否则保存 AI 结果会失败。"""
+    from backend.app.api import model_configs
+    from backend.app.core import ai_client
+
+    db_path = os.environ["TAOBAO_DB_PATH"]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO stores (name, status, created_at) VALUES ('AI锁测试店', 'active', ?)", (now,))
+    store_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, status, day_budget, updated_at) "
+        "VALUES (?, 'keyword', '关键词推广', 'ai-lock-campaign', 'AI锁测试计划', '在投', 100, ?)",
+        (store_id, now),
+    )
+    plan_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) "
+        "VALUES (?, 'ai-lock-campaign', 'realtime', 120, 0, 0, 50, ?)",
+        (store_id, now),
+    )
+    conn.commit()
+    conn.close()
+
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    diagnostics = client.get(f"/api/promotions/diagnostics?store_id={store_id}", headers=headers)
+    assert diagnostics.status_code == 200, diagnostics.text
+    item = diagnostics.json()["items"][0]
+    monkeypatch.setattr(model_configs, "get_default_config", lambda db: {"api_key": "test", "base_url": "https://example.com/v1", "model": "test"})
+    monkeypatch.setattr(ai_client, "chat_completion", lambda *args, **kwargs: json.dumps({"conclusion": "可观察", "decision": "建议观察"}, ensure_ascii=False))
+
+    response = client.post(
+        "/api/promotions/diagnostics/ai",
+        headers=headers,
+        json={
+            "diagnostic_id": item["id"],
+            "plan_id": plan_id,
+            "store_id": store_id,
+            "channel": item["channel"],
+            "rule_code": item["rule_code"],
+            "force": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ai_diagnosis"]["decision"] == "建议观察"
+
+
+def test_ai_context_preserves_plan_report_detail_fields():
+    from backend.app.api.promotions.diagnostics import _plan_stat_context
+
+    context = _plan_stat_context({
+        "mode": "realtime",
+        "spend": 480.13,
+        "sales": 1066.75,
+        "roi": 2.16,
+        "clicks": 208,
+        "alipay_dir": 900,
+        "alipay_indir": 166.75,
+        "retained_sales": 1036.85,
+        "refund_amt": 0,
+        "extra_json": json.dumps({"adPv": 13227, "ctr": 0.0157, "cvr": 0.1394, "alipayInshopNum": 29}),
+    })
+    assert context["report_details"]["adPv"] == 13227
+    assert context["funnel"] == {
+        "impressions": 13227,
+        "clicks": 208,
+        "ctr_percent": 1.57,
+        "conversion_rate_percent": 13.94,
+        "orders": 29,
+        "direct_sales": 900,
+        "indirect_sales": 166.75,
+        "retained_sales": 1036.85,
+        "add_cart_orders": None,
+        "refund_amount": 0,
+    }

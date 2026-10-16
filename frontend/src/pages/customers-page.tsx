@@ -5,21 +5,22 @@ import {
   CommentOutlined,
   CopyOutlined,
   FileSearchOutlined,
-  MoreOutlined,
   ReloadOutlined,
   RobotOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Descriptions, Drawer, Dropdown, Empty, Input, InputNumber, List, Modal, Popconfirm, Progress, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography, Upload, message } from "antd";
+import { Alert, Button, Card, Col, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Popconfirm, Progress, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography, Upload, message } from "antd";
 import type { TableColumnsType, UploadProps } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import type { Key } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import http, { getApiErrorMessage } from "../lib/api";
 import { useStores } from "../lib/store";
 import { PageHeader } from "../components/ui/page-header";
 import { LoadingBlock } from "../components/ui/page-state";
 import { MetricRail, WorkspaceToolbar } from "../components/ui/workspace-template";
+import ProductQualityDashboard, { type QualityProduct, type QualityTopic } from "../components/reviews/product-quality-dashboard";
 
 const { Text, Paragraph } = Typography;
 
@@ -68,18 +69,19 @@ type Summary = {
   top_aspects: { aspect: string; count: number }[];
   trend: { date: string; total: number; negative: number }[];
 };
-type ProductSummary = { item_id: string; item_title: string; total: number; positive: number; negative: number; negative_rate: number };
 type ReviewAlert = { id: number; title: string; message: string; status: string; content: string; item_title: string; review_time: string };
 type ReplyTemplate = { id: number; name: string; category: string; content: string };
 type TrendAlert = { id: number; store_name: string; message: string; level: "warning" | "critical"; status: string; current_rate: number; baseline_rate: number; alert_date: string };
-type TopicReport = { total: number; items: { topic: string; count: number; negative: number; negative_rate: number; products: { name: string; count: number }[]; examples: { id: number; content: string; item_title: string }[] }[]; emerging_terms: { term: string; count: number }[] };
+type TopicReport = { total: number; items: { topic: string; count: number; negative: number; negative_rate: number; products: { store_id: number; item_id: string; name: string; count: number }[]; examples: { id: number; store_id: number; item_id: string; content: string; item_title: string }[] }[]; emerging_terms: { term: string; count: number }[] };
 type AccuracyReport = { total: number; confirmed_sample: number; corrected_count: number; manual_agreement_rate: number | null; correction_rate: number | null; needs_review_count: number; average_confidence: number; sources: { source: string; count: number }[]; corrections: { transition: string; count: number }[] };
-type WeeklyReport = { week_start: string; week_end: string; total: number; positive: number; neutral: number; negative: number; negative_rate: number; summary: string; actions: string[]; topics: TopicReport["items"]; products: { item_title: string; total: number; negative: number }[] };
+type WeeklyReport = { week_start: string; week_end: string; total: number; positive: number; neutral: number; negative: number; negative_rate: number; summary: string; actions: string[]; topics: TopicReport["items"]; products: { store_id: number; item_id: string; item_title: string; total: number; negative: number }[] };
 type CustomTerm = { id: number; store_id: number; term: string; sentiment: "positive" | "neutral" | "negative"; weight: number; enabled: boolean; source: string };
 type KnowledgeArticle = { id: number; store_id: number; title: string; category: string; problem_terms: string[]; solution: string; reply_template: string; enabled: boolean; confidence?: number; matched_terms?: string[] };
+type KnowledgeSuggestion = { id: number; store_id: number; title: string; category: string; problem_terms: string[]; solution: string; reply_template: string; evidence_count: number; sample_review_ids: number[]; status: string };
+type ReplySample = { id: number; store_id: number; item_id: string; item_title: string; review_content: string; ai_draft: string; final_reply: string; enabled: boolean; published_at: string };
 
 const sentimentLabels: Record<string, string> = { positive: "好评", neutral: "中评", negative: "差评" };
-const processLabels: Record<string, string> = { pending: "待处理", contacted: "已联系", resolved: "已解决", ignored: "已忽略" };
+const processLabels: Record<string, string> = { pending: "待处理", replied: "已回复", ignored: "已忽略" };
 const replyStatusLabels: Record<string, string> = { draft: "回复待审核", approved: "回复已审核", published: "回复已发布", failed: "回复发布失败" };
 
 function sentimentTag(value: string) {
@@ -88,16 +90,25 @@ function sentimentTag(value: string) {
 
 export function CustomersPage() {
   const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { stores, currentStore } = useStores();
   const todoStoreId = Number(searchParams.get("store_id")) || undefined;
   const [storeId, setStoreId] = useState<number | undefined>(todoStoreId ?? currentStore?.id);
   const [days, setDays] = useState(30);
+  const viewMode: "quality" | "reviews" = location.pathname.endsWith("/reviews") ? "reviews" : "quality";
+  const toolRoute = location.pathname.match(/^\/customers\/tools\/([^/]+)/)?.[1] ?? "";
+  const toolsPage = location.pathname === "/customers/tools";
   const [sentiment, setSentiment] = useState(searchParams.get("sentiment") || "");
   const [processStatus, setProcessStatus] = useState(searchParams.get("process_status") || "");
   const [replyStatus, setReplyStatus] = useState(searchParams.get("reply_status") || "");
-  const [keyword, setKeyword] = useState("");
-  const [query, setQuery] = useState("");
+  const [reviewStatus, setReviewStatus] = useState(searchParams.get("review_status") || "");
+  const [reviewSort, setReviewSort] = useState(searchParams.get("review_sort") || "priority");
+  const [keyword, setKeyword] = useState(searchParams.get("q") || "");
+  const [query, setQuery] = useState(searchParams.get("q") || "");
   const [page, setPage] = useState(1);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
+  const [batchProcessing, setBatchProcessing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -108,10 +119,9 @@ export function CustomersPage() {
   const [replyLoading, setReplyLoading] = useState(false);
   const [replyPublishing, setReplyPublishing] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
-  const [productSummary, setProductSummary] = useState<ProductSummary[]>([]);
   const [alerts, setAlerts] = useState<ReviewAlert[]>([]);
   const [aiSummary, setAiSummary] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
+  const [, setAiLoading] = useState(false);
   const [aiReviewLoading, setAiReviewLoading] = useState(false);
   const [replyTemplates, setReplyTemplates] = useState<ReplyTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<number>();
@@ -144,10 +154,31 @@ export function CustomersPage() {
   const [knowledgeSolution, setKnowledgeSolution] = useState("");
   const [knowledgeReply, setKnowledgeReply] = useState("");
   const [knowledgeMatches, setKnowledgeMatches] = useState<KnowledgeArticle[]>([]);
+  const [knowledgeSuggestions, setKnowledgeSuggestions] = useState<KnowledgeSuggestion[]>([]);
+  const [replySamples, setReplySamples] = useState<ReplySample[]>([]);
+
+  const toolMeta: Record<string, { title: string; description: string }> = {
+    summary: { title: "AI 总结", description: "总结近期评价中的主要反馈和问题。" },
+    insights: { title: "分析中心", description: "查看问题主题、趋势、周报和分析准确率。" },
+    ask: { title: "评论问答", description: "针对当前店铺评价提问并获得数据依据。" },
+    terms: { title: "自定义情绪词库", description: "维护行业黑话和容易误判的表达。" },
+    knowledge: { title: "回复学习库", description: "沉淀已发布回复，追踪人工修改，并用于下一次 AI 草稿生成。" },
+    template: { title: "回复模板", description: "管理回复的语气和表达风格。" },
+  };
 
   useEffect(() => {
-    if (!todoStoreId && currentStore?.id) setStoreId(currentStore.id);
-  }, [currentStore?.id, todoStoreId]);
+    const nextStoreId = Number(searchParams.get("store_id")) || (todoStoreId ? undefined : currentStore?.id);
+    setStoreId(nextStoreId);
+    setSentiment(searchParams.get("sentiment") || "");
+    setProcessStatus(searchParams.get("process_status") || "");
+    setReplyStatus(searchParams.get("reply_status") || "");
+    setReviewStatus(searchParams.get("review_status") || "");
+    setReviewSort(searchParams.get("review_sort") || "priority");
+    const nextQuery = searchParams.get("q") || "";
+    setQuery(nextQuery);
+    setKeyword(nextQuery);
+    setPage(1);
+  }, [currentStore?.id, location.search, searchParams, todoStoreId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,13 +188,21 @@ export function CustomersPage() {
       if (sentiment) params.set("sentiment", sentiment);
       if (processStatus) params.set("process_status", processStatus);
       if (replyStatus) params.set("reply_status", replyStatus);
+      if (reviewStatus) params.set("review_status", reviewStatus);
+      if (reviewSort === "recent_asc") {
+        params.set("order_by", "recent");
+        params.set("order_dir", "asc");
+      } else if (reviewSort === "recent_desc") {
+        params.set("order_by", "recent");
+        params.set("order_dir", "desc");
+      }
       if (query) params.set("q", query);
       const summaryParams = new URLSearchParams({ days: String(days) });
       if (storeId) summaryParams.set("store_id", String(storeId));
-      const [listResponse, summaryResponse, productResponse, alertResponse, templateResponse, trendResponse] = await Promise.all([
+      if (query) summaryParams.set("q", query);
+      const [listResponse, summaryResponse, alertResponse, templateResponse, trendResponse] = await Promise.all([
         http.get<{ items: Review[]; total: number }>(`/customers/reviews?${params.toString()}`),
         http.get<Summary>(`/customers/reviews/summary?${summaryParams.toString()}`),
-        http.get<{ items: ProductSummary[] }>(`/customers/reviews/product-summary?${summaryParams.toString()}`),
         http.get<{ items: ReviewAlert[] }>(`/customers/reviews/alerts?${storeId ? `store_id=${storeId}` : ""}`),
         http.get<{ items: ReplyTemplate[] }>("/customers/reviews/reply-templates"),
         http.get<{ items: TrendAlert[] }>(`/customers/reviews/trend-alerts?${storeId ? `store_id=${storeId}` : ""}`),
@@ -171,7 +210,6 @@ export function CustomersPage() {
       setReviews(listResponse.data.items);
       setTotal(listResponse.data.total);
       setSummary(summaryResponse.data);
-      setProductSummary(productResponse.data.items);
       setAlerts(alertResponse.data.items);
       setReplyTemplates(templateResponse.data.items);
       setTrendAlerts(trendResponse.data.items);
@@ -180,7 +218,7 @@ export function CustomersPage() {
     } finally {
       setLoading(false);
     }
-  }, [days, page, processStatus, query, replyStatus, sentiment, storeId]);
+  }, [days, page, processStatus, query, replyStatus, reviewSort, reviewStatus, sentiment, storeId]);
 
   useEffect(() => {
     load();
@@ -256,7 +294,11 @@ export function CustomersPage() {
     if (!detail) return;
     setReplyLoading(true);
     try {
-      const { data } = await http.post<{ reply: string; knowledge: KnowledgeArticle[] }>(`/customers/reviews/${detail.id}/reply-draft`, { template_id: selectedTemplateId });
+      const { data } = await http.post<{ reply: string; knowledge: KnowledgeArticle[] }>(
+        `/customers/reviews/${detail.id}/reply-draft`,
+        { template_id: selectedTemplateId },
+        { timeout: 150000 },
+      );
       setDetail({ ...detail, reply_content: data.reply, reply_status: "draft" });
       setKnowledgeMatches(data.knowledge ?? []);
       message.success("回复草稿已生成");
@@ -298,7 +340,7 @@ export function CustomersPage() {
     setReplyPublishing(true);
     try {
       const { data } = await http.post<{ status: string; published_at: string }>(`/customers/reviews/${detail.id}/reply/publish`, undefined, { timeout: 120000 });
-      setDetail({ ...detail, reply_status: data.status, reply_published_at: data.published_at, reply_error: "" });
+      setDetail({ ...detail, reply_status: data.status, reply_published_at: data.published_at, reply_error: "", process_status: "replied" });
       message.success("回复已发布到淘宝");
       await load();
     } catch (error) {
@@ -355,12 +397,12 @@ export function CustomersPage() {
     }
   };
 
-  const editTemplate = (template?: ReplyTemplate) => {
+  const editTemplate = (template?: ReplyTemplate, openModal = true) => {
     setTemplateEditing(template ?? null);
     setTemplateName(template?.name ?? "");
     setTemplateCategory(template?.category ?? "通用");
     setTemplateContent(template?.content ?? "");
-    setTemplateOpen(true);
+    if (openModal) setTemplateOpen(true);
   };
 
   const saveTemplate = async () => {
@@ -413,17 +455,10 @@ export function CustomersPage() {
     }
   };
 
-  const openInsights = () => {
-    setInsightsOpen(true);
-    void loadInsights();
-  };
-
-  const openTerms = async () => {
+  const loadTerms = async () => {
     if (!storeId) {
-      message.warning("请先选择店铺，再维护店铺词库");
       return;
     }
-    setTermsOpen(true);
     try {
       const { data } = await http.get<{ items: CustomTerm[] }>(`/customers/reviews/custom-terms?store_id=${storeId}`);
       setCustomTerms(data.items);
@@ -435,15 +470,6 @@ export function CustomersPage() {
   const loadKnowledge = async () => {
     const { data } = await http.get<{ items: KnowledgeArticle[] }>(`/customers/reviews/knowledge${storeId ? `?store_id=${storeId}` : ""}`);
     setKnowledgeArticles(data.items);
-  };
-
-  const openKnowledge = async () => {
-    setKnowledgeOpen(true);
-    try {
-      await loadKnowledge();
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    }
   };
 
   const editKnowledge = (article?: KnowledgeArticle) => {
@@ -553,6 +579,171 @@ export function CustomersPage() {
     }
   };
 
+  const openTerms = async () => {
+    if (!storeId) {
+      message.warning("请先选择店铺，再维护店铺词库");
+      return;
+    }
+    setTermsOpen(true);
+    await loadTerms();
+  };
+
+  const loadKnowledgeSuggestions = async () => {
+    const { data } = await http.get<{ items: KnowledgeSuggestion[] }>(`/customers/reviews/knowledge-suggestions${storeId ? `?store_id=${storeId}` : ""}`);
+    setKnowledgeSuggestions(data.items);
+  };
+
+  const loadReplySamples = async () => {
+    try {
+      const { data } = await http.get<{ items: ReplySample[] }>(`/customers/reviews/reply-samples${storeId ? `?store_id=${storeId}` : ""}`);
+      setReplySamples(data.items);
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const toggleReplySample = async (sample: ReplySample) => {
+    try {
+      await http.put(`/customers/reviews/reply-samples/${sample.id}`, { enabled: !sample.enabled });
+      await loadReplySamples();
+      message.success(sample.enabled ? "已停用这条学习样本" : "已启用这条学习样本");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const deleteReplySample = async (sample: ReplySample) => {
+    try {
+      await http.delete(`/customers/reviews/reply-samples/${sample.id}`);
+      await loadReplySamples();
+      message.success("学习样本已删除");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const refreshKnowledgeSuggestions = async () => {
+    try {
+      const { data } = await http.post<{ generated: number }>(`/customers/reviews/knowledge-suggestions/refresh${storeId ? `?store_id=${storeId}` : ""}`);
+      await loadKnowledgeSuggestions();
+      message.success(data.generated ? `发现 ${data.generated} 条知识库建议` : "暂未发现新的高频问题");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const decideKnowledgeSuggestion = async (suggestion: KnowledgeSuggestion, status: "approved" | "rejected") => {
+    try {
+      await http.put(`/customers/reviews/knowledge-suggestions/${suggestion.id}`, { status });
+      await Promise.all([loadKnowledge(), loadKnowledgeSuggestions()]);
+      message.success(status === "approved" ? "已加入知识库" : "已忽略这条建议");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    }
+  };
+
+  const batchProcess = async (status: "pending" | "ignored") => {
+    if (!selectedRowKeys.length) return;
+    setBatchProcessing(true);
+    try {
+      const { data } = await http.post<{ updated: number }>("/customers/reviews/batch-process", {
+        review_ids: selectedRowKeys.map(Number),
+        status,
+      });
+      message.success(status === "ignored" ? `已忽略 ${data.updated} 条评论` : `已恢复 ${data.updated} 条评论为待处理`);
+      setSelectedRowKeys([]);
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setBatchProcessing(false);
+    }
+  };
+
+  const batchReplyDraft = async () => {
+    if (!selectedRowKeys.length) return;
+    setBatchProcessing(true);
+    try {
+      const { data } = await http.post<{
+        generated: number;
+        failed: number;
+        skipped: number;
+        results: { id: number; status: string; reply?: string }[];
+      }>("/customers/reviews/batch-reply-draft", {
+        review_ids: selectedRowKeys.map(Number),
+      }, { timeout: 180000 });
+      const details = [
+        data.generated ? `生成 ${data.generated} 条` : "",
+        data.skipped ? `跳过 ${data.skipped} 条已发布评论` : "",
+        data.failed ? `失败 ${data.failed} 条` : "",
+      ].filter(Boolean).join("，");
+      if (data.failed) message.warning(`批量生成完成：${details}`);
+      else message.success(`批量生成完成：${details || "没有可生成的评论"}`);
+      setSelectedRowKeys([]);
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setBatchProcessing(false);
+    }
+  };
+
+  const openQualityProduct = (product: QualityProduct) => {
+    const params = new URLSearchParams();
+    if (product.store_id) params.set("store_id", String(product.store_id));
+    params.set("q", product.item_id || product.item_title);
+    navigate(`/customers/reviews?${params.toString()}`);
+    message.info(`已切换到评论处理：${product.item_title || product.item_id}`);
+  };
+
+  const openQualityTopic = (topic: QualityTopic) => {
+    const params = new URLSearchParams({ sentiment: "negative", q: topic.topic });
+    if (storeId) params.set("store_id", String(storeId));
+    navigate(`/customers/reviews?${params.toString()}`);
+    message.info(`已切换到评论处理：${topic.topic}`);
+  };
+
+  useEffect(() => {
+    if (toolRoute === "insights") void loadInsights();
+    if (toolRoute === "terms" && storeId) void loadTerms();
+    if (toolRoute === "knowledge") void Promise.all([loadKnowledge(), loadKnowledgeSuggestions()]);
+    if (toolRoute === "knowledge") void loadReplySamples();
+  }, [toolRoute, days, storeId]);
+
+  const insightsPanel = <>
+    {insightsLoading && !topics ? <LoadingBlock /> : <Tabs items={[
+      { key: "topics", label: "问题主题", children: topics ? <Space direction="vertical" style={{ width: "100%" }} size={16}><div><Text strong>新出现的高频表达：</Text><Space wrap>{topics.emerging_terms.length ? topics.emerging_terms.map((item) => <Tag key={item.term}>{item.term} {item.count}</Tag>) : <Text type="secondary">暂无</Text>}</Space></div><Table size="small" rowKey="topic" pagination={false} dataSource={topics.items} columns={[{ title: "主题", dataIndex: "topic" }, { title: "涉及评论", dataIndex: "count", width: 90 }, { title: "负面数", dataIndex: "negative", width: 80 }, { title: "负面率", dataIndex: "negative_rate", width: 90, render: (value: number) => `${value}%` }, { title: "主要负面商品", dataIndex: "products", render: (items: { name: string; count: number }[]) => items.length ? items.map((item) => `${item.name}(${item.count})`).join("、") : <Text type="secondary">暂无</Text> }]}/></Space> : <Empty description="暂无主题数据" /> },
+      { key: "trend", label: `趋势预警${trendAlerts.length ? ` (${trendAlerts.length})` : ""}`, children: trendAlerts.length ? <List dataSource={trendAlerts} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={<Space><Tag color={alert.level === "critical" ? "red" : "orange"}>{alert.level === "critical" ? "严重" : "预警"}</Tag>{alert.store_name}</Space>} description={`${alert.message} · ${alert.alert_date}`} /></List.Item>} /> : <Empty description="当前没有评论趋势异常" /> },
+      { key: "weekly", label: "每周改进报告", children: weeklyReport ? <Space direction="vertical" size={16} style={{ width: "100%" }}><Alert type={weeklyReport.negative_rate >= 20 ? "warning" : "success"} showIcon message={weeklyReport.summary} description={`${weeklyReport.week_start} 至 ${weeklyReport.week_end}`} /><Row gutter={12}><Col span={6}><Statistic title="评论数" value={weeklyReport.total} /></Col><Col span={6}><Statistic title="好评" value={weeklyReport.positive} /></Col><Col span={6}><Statistic title="差评" value={weeklyReport.negative} /></Col><Col span={6}><Statistic title="差评率" value={weeklyReport.negative_rate} suffix="%" /></Col></Row><Card size="small" title="建议动作"><List size="small" dataSource={weeklyReport.actions} renderItem={(item) => <List.Item>{item}</List.Item>} /></Card><Card size="small" title="重点商品"><Table size="small" rowKey={(row) => `${row.store_id}-${row.item_id || row.item_title}`} pagination={false} dataSource={weeklyReport.products} columns={[{ title: "商品", dataIndex: "item_title" }, { title: "评论数", dataIndex: "total", width: 90 }, { title: "差评数", dataIndex: "negative", width: 90 }]} /></Card></Space> : <Empty description="暂无周报" /> },
+      { key: "accuracy", label: "准确率看板", children: accuracy ? <Space direction="vertical" style={{ width: "100%" }} size={16}><Row gutter={12}><Col span={6}><Statistic title="平均置信度" value={accuracy.average_confidence} suffix="%" /></Col><Col span={6}><Statistic title="人工确认样本" value={accuracy.confirmed_sample} /></Col><Col span={6}><Statistic title="人工修正" value={accuracy.corrected_count} /></Col><Col span={6}><Statistic title="待确认" value={accuracy.needs_review_count} /></Col></Row><Alert type="info" showIcon message={accuracy.manual_agreement_rate !== null ? `人工确认一致率 ${accuracy.manual_agreement_rate}%` : accuracy.confirmed_sample ? "已有人工确认，继续积累修正对比样本" : "还没有人工确认样本"} description="人工修正会成为历史记忆，并作为后续 AI 复核的示例。样本越多，这里的评估越可靠。" /><div><Text strong>分析来源：</Text><Space wrap>{accuracy.sources.map((item) => <Tag key={item.source}>{item.source} {item.count}</Tag>)}</Space></div>{accuracy.corrections.length ? <div><Text strong>常见修正：</Text><Space wrap>{accuracy.corrections.map((item) => <Tag color="orange" key={item.transition}>{item.transition} {item.count}</Tag>)}</Space></div> : null}</Space> : <Empty description="暂无准确率数据" /> },
+    ]} />}
+  </>;
+
+  const askToolPanel = <Space direction="vertical" style={{ width: "100%" }} size={16}>
+    <Input.TextArea value={question} onChange={(event) => setQuestion(event.target.value)} rows={4} maxLength={300} showCount placeholder="例如：最近客户最不满意什么？哪个商品的包装问题最多？" />
+    <Space wrap><Button type="primary" icon={<RobotOutlined />} onClick={() => void askReviews()} loading={asking}>分析并回答</Button><Text type="secondary">分析近 {days} 天{storeId ? "当前店铺" : "全部店铺"}的评论，仅依据已有评论数据。</Text></Space>
+    {answer ? <Card size="small" title="分析结果"><Paragraph style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{answer}</Paragraph></Card> : <Alert type="info" showIcon message="输入问题后开始分析" description="回答会引用评论中实际出现的内容，不会编造没有出现的信息。" />}
+  </Space>;
+
+  const termsToolPanel = <Space direction="vertical" style={{ width: "100%" }} size={16}>
+    <Alert type="info" showIcon message="词条保存后会立即重新分析包含该词的评论" description="店铺词库适合添加行业黑话、产品专用表达和容易误判的反讽词。" />
+    <Space wrap><Select value={storeId} onChange={setStoreId} allowClear placeholder="选择店铺" style={{ width: 180 }} options={stores.map((store) => ({ value: store.id, label: store.name }))} /><Input value={termText} onChange={(event) => setTermText(event.target.value)} placeholder="词语，例如：绝绝子" style={{ width: 220 }} /><Select value={termSentiment} onChange={setTermSentiment} style={{ width: 100 }} options={[{ value: "positive", label: "正向" }, { value: "neutral", label: "中性" }, { value: "negative", label: "负向" }]} /><InputNumber min={0.5} max={4} step={0.5} value={termWeight} onChange={(value) => setTermWeight(value ?? 1.5)} /><Button type="primary" onClick={() => void saveTerm()} disabled={!storeId}>添加词条</Button></Space>
+    {!storeId ? <Alert type="warning" showIcon message="请先选择店铺" description="自定义情绪词条按店铺维护，选择店铺后才能添加和查看。" /> : <List dataSource={customTerms} locale={{ emptyText: "暂无自定义词条" }} renderItem={(term) => <List.Item actions={term.store_id === storeId ? [<Button size="small" onClick={() => void toggleTerm(term)}>{term.enabled ? "停用" : "启用"}</Button>, <Popconfirm title="删除后会重新分析相关评论，确认删除？" onConfirm={() => void deleteTerm(term)}><Button size="small" danger>删除</Button></Popconfirm>] : []}><List.Item.Meta title={<Space>{term.term}{sentimentTag(term.sentiment)}{term.store_id === 0 ? <Tag>全局</Tag> : null}{!term.enabled ? <Tag>已停用</Tag> : null}</Space>} description={`权重 ${term.weight} · 来源 ${term.source === "learned" ? "自动学习" : "人工维护"}`} /></List.Item>} />}
+  </Space>;
+
+  const templateToolPanel = <Space direction="vertical" style={{ width: "100%" }} size={16}>
+    <Alert type="info" showIcon message="回复模板负责表达语气和风格" description="模板只影响回复怎么说；问题知识库负责判断问题和给出处理方案。" />
+    {replyTemplates.length ? <List size="small" dataSource={replyTemplates} renderItem={(template) => <List.Item actions={[<Button size="small" onClick={() => editTemplate(template, false)}>编辑</Button>, <Popconfirm title="确认删除这个模板？" onConfirm={() => void deleteTemplate(template)}><Button size="small" danger>删除</Button></Popconfirm>]}><List.Item.Meta title={<Space><Tag>{template.category}</Tag>{template.name}</Space>} description={template.content} /></List.Item>} /> : <Empty description="暂无回复模板，请先新增一个模板" />}
+    <Card size="small" title={templateEditing ? `编辑：${templateEditing.name}` : "新增回复模板"}><Space direction="vertical" style={{ width: "100%" }}><Space wrap style={{ width: "100%" }}><Input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="模板名称，例如：包装破损安抚" maxLength={40} style={{ width: 280 }} /><Input value={templateCategory} onChange={(event) => setTemplateCategory(event.target.value)} placeholder="分类，例如：质量、物流、好评" maxLength={20} style={{ width: 180 }} />{templateEditing ? <Button onClick={() => editTemplate(undefined, false)}>取消编辑</Button> : null}</Space><Input.TextArea value={templateContent} onChange={(event) => setTemplateContent(event.target.value)} placeholder="回复模板内容" rows={5} maxLength={1000} showCount /><Button type="primary" onClick={() => void saveTemplate()}>保存模板</Button></Space></Card>
+  </Space>;
+
+  const learningToolPanel = <Space direction="vertical" style={{ width: "100%" }} size={16}>
+    <Alert type="info" showIcon message="这里沉淀已审核并成功发布的真实回复" description="系统会保留 AI 初稿和人工最终回复。启用的样本会在下一次生成相似评论草稿时自动作为参考，不会直接改写你的回复。" />
+    {replySamples.length ? <List dataSource={replySamples} renderItem={(sample) => <List.Item actions={[<Button size="small" onClick={() => void toggleReplySample(sample)}>{sample.enabled ? "停用学习" : "启用学习"}</Button>, <Popconfirm title="删除这条学习样本？" onConfirm={() => void deleteReplySample(sample)}><Button size="small" danger>删除</Button></Popconfirm>]}><List.Item.Meta title={<Space><Tag color={sample.enabled ? "green" : "default"}>{sample.enabled ? "学习中" : "已停用"}</Tag>{sample.item_title || sample.item_id}<Text type="secondary">{sample.published_at ? dayjs(sample.published_at).format("YYYY-MM-DD HH:mm") : ""}</Text></Space>} description={<Space direction="vertical" size={4} style={{ width: "100%" }}><div><Text strong>原评价：</Text>{sample.review_content || "暂无评价内容"}</div><div><Text strong>AI 初稿：</Text>{sample.ai_draft || "暂无记录"}</div><div><Text strong>人工最终回复：</Text>{sample.final_reply}</div></Space>} /></List.Item>} /> : <Empty description="还没有已发布回复样本。完成审核并发布后，会自动沉淀到这里。" />}
+  </Space>;
+
+  const summaryToolPanel = <Space direction="vertical" style={{ width: "100%" }} size={16}><Alert type="info" showIcon message={`总结近 ${days} 天的评价反馈`} description="生成后会在当前页面显示，可用于快速了解主要问题和改进方向。" /><Button type="primary" icon={<RobotOutlined />} onClick={() => void createAiSummary()}>生成 AI 总结</Button></Space>;
+
   const columns = useMemo<TableColumnsType<Review>>(() => [
     {
       title: "评价",
@@ -570,8 +761,8 @@ export function CustomersPage() {
     { title: "店铺", dataIndex: "store_name", key: "store_name", width: 140, ellipsis: true },
     { title: "时间", dataIndex: "review_time", key: "review_time", width: 150, render: (value: string) => dayjs(value).format("YYYY-MM-DD HH:mm") },
     { title: "优先级", dataIndex: "priority_level", key: "priority_level", width: 100, render: (value: Review["priority_level"], row) => <Tag color={value === "urgent" ? "red" : value === "high" ? "orange" : "default"}>{value === "urgent" ? "紧急" : value === "high" ? "优先" : "普通"} {row.priority_score}</Tag> },
-    { title: "处理", dataIndex: "process_status", key: "process_status", width: 110, render: (value: string) => <Tag icon={value === "resolved" ? <CheckCircleOutlined /> : <ClockCircleOutlined />} color={value === "resolved" ? "green" : value === "pending" ? "orange" : "blue"}>{processLabels[value] ?? value}</Tag> },
-    { title: "操作", key: "action", width: 150, fixed: "right", render: (_, row) => <Space size={4}><Button size="small" icon={<FileSearchOutlined />} onClick={() => void openDetail(row)}>查看</Button>{row.sentiment === "negative" && row.process_status === "pending" ? <Button size="small" type="link" onClick={() => updateProcess(row, "contacted")}>标记已联系</Button> : null}</Space> },
+    { title: "处理", dataIndex: "process_status", key: "process_status", width: 110, render: (value: string) => <Tag icon={value === "replied" ? <CheckCircleOutlined /> : <ClockCircleOutlined />} color={value === "replied" ? "green" : value === "pending" ? "orange" : "default"}>{processLabels[value] ?? value}</Tag> },
+    { title: "操作", key: "action", width: 150, fixed: "right", render: (_, row) => <Space size={4}><Button size="small" icon={<FileSearchOutlined />} onClick={() => void openDetail(row)}>查看</Button>{row.process_status === "pending" ? <Button size="small" type="link" onClick={() => updateProcess(row, "ignored")}>忽略</Button> : null}</Space> },
   ], [detail, load]);
 
   return (
@@ -579,26 +770,27 @@ export function CustomersPage() {
       <PageHeader
         icon={<CommentOutlined />}
         eyebrow="评价管理"
-        title="评论分析"
-        description="识别评价情绪、归纳商品问题、跟进差评处理"
-        extra={<Space wrap><Button onClick={syncReviews} loading={syncing}>同步评论</Button><Button icon={<RobotOutlined />} onClick={reviewAmbiguousWithAi} loading={aiReviewLoading}>AI 复核{summary?.needs_review_count ? ` (${summary.needs_review_count})` : ""}</Button><Upload {...uploadProps}><Button type="primary" icon={<CloudUploadOutlined />} loading={importing}>导入 CSV</Button></Upload><Dropdown trigger={["click"]} menu={{ items: [{ key: "summary", label: "AI 总结", onClick: createAiSummary }, { key: "insights", label: "分析中心", onClick: openInsights }, { key: "ask", label: "评论问答", onClick: () => setAskOpen(true) }, { type: "divider" }, { key: "terms", label: "自定义词库", onClick: () => void openTerms() }, { key: "knowledge", label: "问题知识库", onClick: () => void openKnowledge() }, { key: "template", label: "回复模板", onClick: () => editTemplate() }] }}><Button icon={<MoreOutlined />} aria-label="更多评价工具" loading={aiLoading}>更多</Button></Dropdown></Space>}
+        title={toolsPage ? "评价工具" : toolRoute ? toolMeta[toolRoute]?.title ?? "评价工具" : viewMode === "quality" ? "商品质量" : "评论处理"}
+        description={toolsPage ? "把评价分析、知识和回复工具分开管理，按任务进入对应页面" : toolRoute ? toolMeta[toolRoute]?.description : viewMode === "quality" ? "从评价信号发现商品风险，跟踪问题改进效果" : "处理评价、审核回复并跟进客户反馈"}
+        extra={!toolsPage && !toolRoute ? <Space wrap><Button onClick={syncReviews} loading={syncing}>同步评论</Button><Upload {...uploadProps}><Button type="primary" icon={<CloudUploadOutlined />} loading={importing}>导入 CSV</Button></Upload>{viewMode === "reviews" ? <Button icon={<RobotOutlined />} onClick={reviewAmbiguousWithAi} loading={aiReviewLoading}>AI 复核{summary?.needs_review_count ? ` (${summary.needs_review_count})` : ""}</Button> : null}</Space> : null}
       />
 
-      <WorkspaceToolbar>
+      {toolsPage ? <Card variant="borderless" title="评价工具导航" style={{ marginBottom: 16 }}><Row gutter={[16, 16]}>{Object.entries(toolMeta).map(([key, item]) => <Col xs={24} sm={12} lg={8} key={key}><Card hoverable size="small" title={item.title} onClick={() => navigate(`/customers/tools/${key}`)}><Text type="secondary">{item.description}</Text><div style={{ marginTop: 12 }}><Button type="link" style={{ padding: 0 }}>进入工具 →</Button></div></Card></Col>)}</Row></Card> : null}
+
+      {!toolRoute && !toolsPage ? <WorkspaceToolbar>
         <Select value={storeId} onChange={(value) => { setStoreId(value); setPage(1); }} allowClear placeholder="全部店铺" style={{ width: 170 }} options={stores.map((store) => ({ value: store.id, label: store.name }))} />
         <Select value={days} onChange={(value) => { setDays(value); setPage(1); }} options={[{ value: 7, label: "近 7 天" }, { value: 30, label: "近 30 天" }, { value: 90, label: "近 90 天" }]} style={{ width: 120 }} />
         <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-        <Text className="ops-filter-bar__meta">先处理待办评价，再进入趋势和知识分析</Text>
-      </WorkspaceToolbar>
+        <Text className="ops-filter-bar__meta">{viewMode === "quality" ? "先看风险商品和问题主题，再进入评论证据" : "处理评价、回复审核和客户跟进"}</Text>
+      </WorkspaceToolbar> : null}
 
-      <Alert type={syncNotice ? "warning" : "info"} showIcon title={syncNotice || "每小时自动增量同步"} description="系统从千牛评价管理读取评论正文；新差评会自动生成回复草稿并等待人工审核，不会自动发布。差评预警可通过 PushPlus/Webhook 推送。" style={{ marginBottom: 16 }} />
+      {!toolRoute && !toolsPage ? <Alert type={syncNotice ? "warning" : "info"} showIcon title={syncNotice || "每小时自动增量同步"} description="系统从千牛评价管理读取评论正文；新差评会自动生成回复草稿并等待人工审核，不会自动发布。差评预警可通过 PushPlus/Webhook 推送。" style={{ marginBottom: 16 }} /> : null}
 
-      {trendAlerts.length ? <Alert type="error" showIcon title={`${trendAlerts.length} 个评论趋势异常`} description={<List size="small" dataSource={trendAlerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={`${alert.store_name || "店铺"} · ${alert.level === "critical" ? "严重" : "预警"}`} description={alert.message} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
+      {!toolRoute && !toolsPage && trendAlerts.length ? <Alert type="error" showIcon title={`${trendAlerts.length} 个评论趋势异常`} description={<List size="small" dataSource={trendAlerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={`${alert.store_name || "店铺"} · ${alert.level === "critical" ? "严重" : "预警"}`} description={alert.message} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
 
-      {loading && !summary ? <LoadingBlock /> : summary ? <>
-        {summary.needs_review_count > 0 ? <Alert type="warning" showIcon title={`${summary.needs_review_count} 条评论情绪不明确`} description="这些评论存在正负冲突、隐含表达或没有明显情绪词，可点击“AI 复核”批量判断，也可在详情中人工确认。" style={{ marginBottom: 16 }} /> : null}
+      {toolRoute === "insights" ? <Card variant="borderless" style={{ marginTop: 16 }}><Space direction="vertical" size={16} style={{ width: "100%" }}><Space style={{ width: "100%", justifyContent: "space-between" }}><Button type="link" onClick={() => navigate("/customers/tools")} style={{ padding: 0 }}>← 返回评价工具</Button><Button size="small" onClick={() => void loadInsights()} loading={insightsLoading}>刷新分析</Button></Space><div><Text type="secondary">评价工具</Text><Typography.Title level={2} style={{ margin: "6px 0" }}>分析中心</Typography.Title><Paragraph type="secondary" style={{ marginBottom: 0 }}>查看问题主题、趋势、周报和分析准确率。</Paragraph></div>{insightsPanel}</Space></Card> : toolRoute === "summary" || toolRoute === "ask" || toolRoute === "terms" || toolRoute === "knowledge" || toolRoute === "template" ? <Card variant="borderless" style={{ marginTop: 16 }}><Space direction="vertical" size={18} style={{ width: "100%" }}><Button type="link" onClick={() => navigate("/customers/tools")} style={{ padding: 0, alignSelf: "flex-start" }}>← 返回评价工具</Button><div><Text type="secondary">评价工具</Text><Typography.Title level={2} style={{ margin: "6px 0" }}>{toolMeta[toolRoute].title}</Typography.Title><Paragraph type="secondary" style={{ marginBottom: 0 }}>{toolMeta[toolRoute].description}</Paragraph></div>{toolRoute === "summary" ? summaryToolPanel : toolRoute === "ask" ? askToolPanel : toolRoute === "terms" ? termsToolPanel : toolRoute === "knowledge" ? learningToolPanel : templateToolPanel}</Space></Card> : toolRoute && toolMeta[toolRoute] ? <Card variant="borderless" style={{ marginTop: 16 }}><Space direction="vertical" size={18} style={{ width: "100%" }}><Button type="link" onClick={() => navigate("/customers/tools")} style={{ padding: 0, alignSelf: "flex-start" }}>← 返回评价工具</Button><div><Text type="secondary">评价工具</Text><Typography.Title level={2} style={{ margin: "6px 0" }}>{toolMeta[toolRoute].title}</Typography.Title><Paragraph type="secondary" style={{ marginBottom: 0 }}>{toolMeta[toolRoute].description}</Paragraph></div></Space></Card> : !toolsPage && (viewMode === "quality" ? <ProductQualityDashboard storeId={storeId} days={days} onSelectProduct={openQualityProduct} onSelectTopic={openQualityTopic} /> : loading && !summary ? <LoadingBlock /> : summary ? <>
+        {summary.needs_review_count > 0 ? <Alert type="warning" showIcon title={`${summary.needs_review_count} 条评论情绪不明确`} description="这些评论存在正负冲突、隐含表达或没有明显情绪词。点击“查看待确认评论”即可定位到它们，再逐条人工确认或批量交给 AI 复核。" action={<Space><Button size="small" onClick={() => { setReviewStatus("needs_review"); setPage(1); }}>查看待确认评论</Button><Button size="small" type="primary" onClick={() => void reviewAmbiguousWithAi()} loading={aiReviewLoading}>AI 复核</Button></Space>} style={{ marginBottom: 16 }} /> : null}
         {alerts.length ? <Alert type="warning" showIcon title={`有 ${alerts.length} 条评论预警`} description={<List size="small" dataSource={alerts.slice(0, 3)} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateAlert(alert, "acknowledged")}>已知悉</Button>]}><List.Item.Meta title={alert.title} description={`${alert.message} · ${alert.item_title || "未关联商品"}`} /></List.Item>} />} style={{ marginBottom: 16 }} /> : null}
-        {productSummary.length ? <Card variant="borderless" title="商品维度分析" style={{ marginBottom: 16 }}><Table<ProductSummary> size="small" rowKey="item_id" pagination={{ pageSize: 5 }} dataSource={productSummary.slice(0, 20)} columns={[{ title: "商品", dataIndex: "item_title", ellipsis: true }, { title: "评论数", dataIndex: "total", width: 80 }, { title: "差评数", dataIndex: "negative", width: 80 }, { title: "差评率", dataIndex: "negative_rate", width: 90, render: (value: number) => `${value}%` }]} /></Card> : null}
         <MetricRail columns={4} items={[
           { label: "评论总数", value: summary.total, hint: `近 ${days} 天` },
           { label: "好评率", value: `${summary.positive_rate.toFixed(1)}%`, hint: "正向评价占比", tone: "var(--ops-success)" },
@@ -609,10 +801,11 @@ export function CustomersPage() {
           <Col xs={24} lg={15}><Card variant="borderless" title={`问题维度（近 ${days} 天）`}><Space wrap>{summary.top_aspects.length ? summary.top_aspects.map((item) => <Tag key={item.aspect} color={item.count >= 5 ? "red" : "gold"}>{item.aspect} {item.count}</Tag>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无问题标签" />}</Space></Card></Col>
           <Col xs={24} lg={9}><Card variant="borderless" title="评价结构"><Space direction="vertical" style={{ width: "100%" }}><div><Text>好评</Text><Progress percent={summary.total ? summary.positive / summary.total * 100 : 0} strokeColor="var(--ops-success)" format={(value) => `${value?.toFixed(1)}%`} /></div><div><Text>中评</Text><Progress percent={summary.total ? summary.neutral / summary.total * 100 : 0} strokeColor="var(--ops-warn)" format={(value) => `${value?.toFixed(1)}%`} /></div><div><Text>差评</Text><Progress percent={summary.total ? summary.negative / summary.total * 100 : 0} strokeColor="var(--ops-danger)" format={(value) => `${value?.toFixed(1)}%`} /></div></Space></Card></Col>
         </Row>
-        <Card variant="borderless" title="评论明细" extra={<Space wrap><Input.Search value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={(value) => { setQuery(value.trim()); setPage(1); }} allowClear placeholder="搜索评价、商品" style={{ width: 220 }} /><Select value={sentiment || undefined} onChange={(value) => { setSentiment(value ?? ""); setPage(1); }} allowClear placeholder="情绪" style={{ width: 100 }} options={[{ value: "positive", label: "好评" }, { value: "neutral", label: "中评" }, { value: "negative", label: "差评" }]} /><Select value={processStatus || undefined} onChange={(value) => { setProcessStatus(value ?? ""); setPage(1); }} allowClear placeholder="处理状态" style={{ width: 120 }} options={Object.entries(processLabels).map(([value, label]) => ({ value, label }))} /><Select value={replyStatus || undefined} onChange={(value) => { setReplyStatus(value ?? ""); setPage(1); }} allowClear placeholder="回复标签" style={{ width: 130 }} options={Object.entries(replyStatusLabels).map(([value, label]) => ({ value, label }))} /></Space>}>
-          <Table<Review> rowKey="id" loading={loading} columns={columns} dataSource={reviews} scroll={{ x: 1100 }} pagination={{ current: page, pageSize: 20, total, showSizeChanger: false, onChange: (next) => setPage(next), showTotal: (count) => `共 ${count} 条` }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无评论，请先导入 CSV" /> }} />
+        <Card variant="borderless" title="评论明细" extra={<Space wrap><Input.Search value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={(value) => { setQuery(value.trim()); setPage(1); }} allowClear placeholder="搜索评价、商品" style={{ width: 220 }} /><Select value={reviewSort} onChange={(value) => { setReviewSort(value); setPage(1); }} style={{ width: 130 }} options={[{ value: "priority", label: "优先级排序" }, { value: "recent_desc", label: "日期：最新" }, { value: "recent_asc", label: "日期：最早" }]} /><Select value={sentiment || undefined} onChange={(value) => { setSentiment(value ?? ""); setPage(1); }} allowClear placeholder="情绪" style={{ width: 100 }} options={[{ value: "positive", label: "好评" }, { value: "neutral", label: "中评" }, { value: "negative", label: "差评" }]} /><Select value={reviewStatus || undefined} onChange={(value) => { setReviewStatus(value ?? ""); setPage(1); }} allowClear placeholder="分析状态" style={{ width: 120 }} options={[{ value: "needs_review", label: "待确认情绪" }, { value: "confirmed", label: "人工已确认" }, { value: "auto", label: "自动判断" }]} /><Select value={processStatus || undefined} onChange={(value) => { setProcessStatus(value ?? ""); setPage(1); }} allowClear placeholder="处理状态" style={{ width: 120 }} options={Object.entries(processLabels).map(([value, label]) => ({ value, label }))} /><Select value={replyStatus || undefined} onChange={(value) => { setReplyStatus(value ?? ""); setPage(1); }} allowClear placeholder="回复标签" style={{ width: 130 }} options={Object.entries(replyStatusLabels).map(([value, label]) => ({ value, label }))} /></Space>}>
+          {selectedRowKeys.length ? <Alert type="info" showIcon message={`已选 ${selectedRowKeys.length} 条评论`} description="批量生成只会保存为待审核草稿，仍需人工审核，不会自动发布到淘宝。" action={<Space wrap><Popconfirm title={`为选中的 ${selectedRowKeys.length} 条评论生成 AI 回复草稿？`} description="生成后仍需人工审核，不会自动发布。已发布回复的评论会自动跳过。" okText="生成草稿" cancelText="取消" onConfirm={() => void batchReplyDraft()}><Button size="small" type="primary" icon={<RobotOutlined />} loading={batchProcessing}>批量生成 AI 草稿</Button></Popconfirm><Popconfirm title={`确认忽略这 ${selectedRowKeys.length} 条评论？`} onConfirm={() => void batchProcess("ignored")}><Button size="small" loading={batchProcessing}>批量忽略</Button></Popconfirm><Button size="small" loading={batchProcessing} onClick={() => void batchProcess("pending")}>恢复待处理</Button></Space>} style={{ marginBottom: 12 }} /> : null}
+          <Table<Review> rowKey="id" loading={loading} rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys, getCheckboxProps: (row) => ({ disabled: row.process_status === "replied" }) }} columns={columns} dataSource={reviews} scroll={{ x: 1100 }} pagination={{ current: page, pageSize: 20, total, showSizeChanger: false, onChange: (next) => { setSelectedRowKeys([]); setPage(next); }, showTotal: (count) => `共 ${count} 条` }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无评论，请先导入 CSV" /> }} />
         </Card>
-      </> : null}
+      </> : null)}
 
       <Modal title={`AI 评论总结（近 ${days} 天）`} open={Boolean(aiSummary)} onCancel={() => setAiSummary("")} footer={null} width={680}><Paragraph style={{ whiteSpace: "pre-wrap" }}>{aiSummary}</Paragraph></Modal>
 
@@ -627,16 +820,17 @@ export function CustomersPage() {
 
       <Modal title="评论分析中心" open={insightsOpen} onCancel={() => setInsightsOpen(false)} footer={<Button onClick={() => void loadInsights()} loading={insightsLoading}>刷新分析</Button>} width={920}>
         {insightsLoading && !topics ? <LoadingBlock /> : <Tabs items={[
-          { key: "topics", label: "问题主题", children: topics ? <Space direction="vertical" style={{ width: "100%" }} size={16}><div><Text strong>新出现的高频表达：</Text><Space wrap>{topics.emerging_terms.length ? topics.emerging_terms.map((item) => <Tag key={item.term}>{item.term} {item.count}</Tag>) : <Text type="secondary">暂无</Text>}</Space></div><Table size="small" rowKey="topic" pagination={false} dataSource={topics.items} columns={[{ title: "主题", dataIndex: "topic" }, { title: "涉及评论", dataIndex: "count", width: 90 }, { title: "负面数", dataIndex: "negative", width: 80 }, { title: "负面率", dataIndex: "negative_rate", width: 90, render: (value: number) => `${value}%` }, { title: "主要商品", dataIndex: "products", render: (items: { name: string; count: number }[]) => items.map((item) => `${item.name}(${item.count})`).join("、") }]}/></Space> : <Empty description="暂无主题数据" /> },
+          { key: "topics", label: "问题主题", children: topics ? <Space direction="vertical" style={{ width: "100%" }} size={16}><div><Text strong>新出现的高频表达：</Text><Space wrap>{topics.emerging_terms.length ? topics.emerging_terms.map((item) => <Tag key={item.term}>{item.term} {item.count}</Tag>) : <Text type="secondary">暂无</Text>}</Space></div><Table size="small" rowKey="topic" pagination={false} dataSource={topics.items} columns={[{ title: "主题", dataIndex: "topic" }, { title: "涉及评论", dataIndex: "count", width: 90 }, { title: "负面数", dataIndex: "negative", width: 80 }, { title: "负面率", dataIndex: "negative_rate", width: 90, render: (value: number) => `${value}%` }, { title: "主要负面商品", dataIndex: "products", render: (items: { name: string; count: number }[]) => items.length ? items.map((item) => `${item.name}(${item.count})`).join("、") : <Text type="secondary">暂无</Text> }]}/></Space> : <Empty description="暂无主题数据" /> },
           { key: "trend", label: `趋势预警${trendAlerts.length ? ` (${trendAlerts.length})` : ""}`, children: trendAlerts.length ? <List dataSource={trendAlerts} renderItem={(alert) => <List.Item actions={[<Button size="small" onClick={() => updateTrendAlert(alert)}>已知悉</Button>]}><List.Item.Meta title={<Space><Tag color={alert.level === "critical" ? "red" : "orange"}>{alert.level === "critical" ? "严重" : "预警"}</Tag>{alert.store_name}</Space>} description={`${alert.message} · ${alert.alert_date}`} /></List.Item>} /> : <Empty description="当前没有评论趋势异常" /> },
-          { key: "weekly", label: "每周改进报告", children: weeklyReport ? <Space direction="vertical" size={16} style={{ width: "100%" }}><Alert type={weeklyReport.negative_rate >= 20 ? "warning" : "success"} showIcon message={weeklyReport.summary} description={`${weeklyReport.week_start} 至 ${weeklyReport.week_end}`} /><Row gutter={12}><Col span={6}><Statistic title="评论数" value={weeklyReport.total} /></Col><Col span={6}><Statistic title="好评" value={weeklyReport.positive} /></Col><Col span={6}><Statistic title="差评" value={weeklyReport.negative} /></Col><Col span={6}><Statistic title="差评率" value={weeklyReport.negative_rate} suffix="%" /></Col></Row><Card size="small" title="建议动作"><List size="small" dataSource={weeklyReport.actions} renderItem={(item) => <List.Item>{item}</List.Item>} /></Card><Card size="small" title="重点商品"><Table size="small" rowKey="item_title" pagination={false} dataSource={weeklyReport.products} columns={[{ title: "商品", dataIndex: "item_title" }, { title: "评论数", dataIndex: "total", width: 90 }, { title: "差评数", dataIndex: "negative", width: 90 }]} /></Card></Space> : <Empty description="暂无周报" /> },
+          { key: "weekly", label: "每周改进报告", children: weeklyReport ? <Space direction="vertical" size={16} style={{ width: "100%" }}><Alert type={weeklyReport.negative_rate >= 20 ? "warning" : "success"} showIcon message={weeklyReport.summary} description={`${weeklyReport.week_start} 至 ${weeklyReport.week_end}`} /><Row gutter={12}><Col span={6}><Statistic title="评论数" value={weeklyReport.total} /></Col><Col span={6}><Statistic title="好评" value={weeklyReport.positive} /></Col><Col span={6}><Statistic title="差评" value={weeklyReport.negative} /></Col><Col span={6}><Statistic title="差评率" value={weeklyReport.negative_rate} suffix="%" /></Col></Row><Card size="small" title="建议动作"><List size="small" dataSource={weeklyReport.actions} renderItem={(item) => <List.Item>{item}</List.Item>} /></Card><Card size="small" title="重点商品"><Table size="small" rowKey={(row) => `${row.store_id}-${row.item_id || row.item_title}`} pagination={false} dataSource={weeklyReport.products} columns={[{ title: "商品", dataIndex: "item_title" }, { title: "评论数", dataIndex: "total", width: 90 }, { title: "差评数", dataIndex: "negative", width: 90 }]} /></Card></Space> : <Empty description="暂无周报" /> },
           { key: "accuracy", label: "准确率看板", children: accuracy ? <Space direction="vertical" style={{ width: "100%" }} size={16}><Row gutter={12}><Col span={6}><Statistic title="平均置信度" value={accuracy.average_confidence} suffix="%" /></Col><Col span={6}><Statistic title="人工确认样本" value={accuracy.confirmed_sample} /></Col><Col span={6}><Statistic title="人工修正" value={accuracy.corrected_count} /></Col><Col span={6}><Statistic title="待确认" value={accuracy.needs_review_count} /></Col></Row><Alert type="info" showIcon message={accuracy.manual_agreement_rate !== null ? `人工确认一致率 ${accuracy.manual_agreement_rate}%` : accuracy.confirmed_sample ? "已有人工确认，继续积累修正对比样本" : "还没有人工确认样本"} description="人工修正会成为历史记忆，并作为后续 AI 复核的示例。样本越多，这里的评估越可靠。" /><div><Text strong>分析来源：</Text><Space wrap>{accuracy.sources.map((item) => <Tag key={item.source}>{item.source} {item.count}</Tag>)}</Space></div>{accuracy.corrections.length ? <div><Text strong>常见修正：</Text><Space wrap>{accuracy.corrections.map((item) => <Tag color="orange" key={item.transition}>{item.transition} {item.count}</Tag>)}</Space></div> : null}</Space> : <Empty description="暂无准确率数据" /> },
         ]} />}
       </Modal>
 
       <Modal title="评论问题知识库" open={knowledgeOpen} onCancel={() => setKnowledgeOpen(false)} footer={null} width={860}>
-        <Alert type="info" showIcon message="命中问题词后，会在评论详情中推荐处理方案，并用于生成更贴合的回复草稿。" style={{ marginBottom: 16 }} />
-        <List size="small" dataSource={knowledgeArticles} style={{ maxHeight: 280, overflow: "auto", marginBottom: 16 }} locale={{ emptyText: "暂无知识条目" }} renderItem={(article) => <List.Item actions={[<Button size="small" onClick={() => editKnowledge(article)}>编辑</Button>, <Popconfirm title="确认删除这条问题知识？" onConfirm={() => deleteKnowledge(article)}><Button size="small" danger>删除</Button></Popconfirm>]}><List.Item.Meta title={<Space><Tag>{article.category}</Tag>{article.title}{article.store_id === 0 ? <Tag color="blue">全局</Tag> : null}</Space>} description={<><div>匹配词：{article.problem_terms.join("、") || "未设置"}</div><Text type="secondary">{article.solution}</Text></>} /></List.Item>} />
+        <Alert type="info" showIcon message="回复模板负责表达语气；问题知识库负责问题判断和处理方案。两者可以一起使用，但作用不同。" description="系统会从重复出现的差评中发现知识库建议；确认后才会加入正式知识库并用于回复草稿。" action={<Button size="small" onClick={() => void refreshKnowledgeSuggestions()}>重新发现</Button>} style={{ marginBottom: 16 }} />
+        {knowledgeSuggestions.length ? <Card size="small" title={`待确认建议（${knowledgeSuggestions.length}）`} style={{ marginBottom: 16 }}><List size="small" dataSource={knowledgeSuggestions} renderItem={(suggestion) => <List.Item actions={[<Button size="small" type="primary" onClick={() => void decideKnowledgeSuggestion(suggestion, "approved")}>加入知识库</Button>, <Popconfirm title="忽略这条知识库建议？" onConfirm={() => void decideKnowledgeSuggestion(suggestion, "rejected")}><Button size="small">忽略</Button></Popconfirm>]}><List.Item.Meta title={<Space><Tag color="orange">待确认</Tag>{suggestion.title}</Space>} description={<Space direction="vertical" size={4} style={{ width: "100%" }}><Text type="secondary">近期开启证据：{suggestion.evidence_count} 条评论 · 匹配词：{suggestion.problem_terms.join("、")}</Text><div><Text strong>内部处理方案：</Text>{suggestion.solution}</div><div><Text strong>给买家的回复话术：</Text>{suggestion.reply_template || "暂未生成"}</div></Space>} /></List.Item>} /></Card> : null}
+        <List size="small" dataSource={knowledgeArticles} style={{ maxHeight: 280, overflow: "auto", marginBottom: 16 }} locale={{ emptyText: "暂无知识条目" }} renderItem={(article) => <List.Item actions={[<Button size="small" onClick={() => editKnowledge(article)}>编辑</Button>, <Popconfirm title="确认删除这条问题知识？" onConfirm={() => deleteKnowledge(article)}><Button size="small" danger>删除</Button></Popconfirm>]}><List.Item.Meta title={<Space><Tag>{article.category}</Tag>{article.title}{article.store_id === 0 ? <Tag color="blue">全局</Tag> : null}</Space>} description={<Space direction="vertical" size={2}><div>匹配词：{article.problem_terms.join("、") || "未设置"}</div><div><Text strong>内部处理方案：</Text><Text type="secondary">{article.solution}</Text></div><div><Text strong>给买家的回复话术：</Text><Text type="secondary">{article.reply_template || "暂未设置"}</Text></div></Space>} /></List.Item>} />
         <Card size="small" title={knowledgeEditing ? `编辑：${knowledgeEditing.title}` : "新增知识条目"}>
           <Space direction="vertical" style={{ width: "100%" }}>
             <Space style={{ width: "100%" }}><Input value={knowledgeTitle} onChange={(event) => setKnowledgeTitle(event.target.value)} placeholder="问题标题" style={{ width: 280 }} /><Input value={knowledgeCategory} onChange={(event) => setKnowledgeCategory(event.target.value)} placeholder="分类" style={{ width: 160 }} />{knowledgeEditing ? <Button onClick={() => editKnowledge()}>取消编辑</Button> : null}</Space>
@@ -671,8 +865,8 @@ export function CustomersPage() {
           </Descriptions>
           <Card size="small" title="评价内容"><Paragraph style={{ whiteSpace: "pre-wrap" }}>{detail.content || "（无文字评价）"}</Paragraph>{detail.append_content ? <Paragraph type="secondary" style={{ whiteSpace: "pre-wrap" }}>追评：{detail.append_content}</Paragraph> : null}</Card>
           <Card size="small" title="人工确认情绪"><Space><Button onClick={() => confirmSentiment("positive")}>好评</Button><Button onClick={() => confirmSentiment("neutral")}>中评</Button><Button danger onClick={() => confirmSentiment("negative")}>差评</Button></Space></Card>
-          {knowledgeMatches.length ? <Card size="small" title="知识库推荐"><List size="small" dataSource={knowledgeMatches} renderItem={(article) => <List.Item><List.Item.Meta title={<Space><Tag>{article.category}</Tag>{article.title}<Tag color="green">匹配 {(article.confidence! * 100).toFixed(0)}%</Tag></Space>} description={<><div>命中：{article.matched_terms?.join("、")}</div><div>{article.solution}</div></>} /></List.Item>} /></Card> : null}
-          <Space wrap><Select value={detail.process_status} onChange={(value) => updateProcess(detail, value)} options={Object.entries(processLabels).map(([value, label]) => ({ value, label }))} /><Select allowClear value={selectedTemplateId} onChange={setSelectedTemplateId} placeholder="选择回复模板" style={{ width: 170 }} options={replyTemplates.map((template) => ({ value: template.id, label: `${template.category} · ${template.name}` }))} /><Button icon={<RobotOutlined />} loading={replyLoading} onClick={createReplyDraft}>生成回复草稿</Button></Space>
+          {knowledgeMatches.length ? <Card size="small" title={<Space>问题知识库匹配<Tag color="green">自动匹配</Tag></Space>}><Alert type="info" showIcon message="知识库负责说明问题和处理重点，不负责决定回复语气。" style={{ marginBottom: 10 }} /><List size="small" dataSource={knowledgeMatches} renderItem={(article) => <List.Item><List.Item.Meta title={<Space><Tag>{article.category}</Tag>{article.title}<Tag color="green">匹配 {(article.confidence! * 100).toFixed(0)}%</Tag></Space>} description={<><div>命中：{article.matched_terms?.join("、")}</div><div><Text strong>内部处理方案：</Text>{article.solution}</div><div><Text strong>参考回复内容：</Text>{article.reply_template || "暂无"}</div></>} /></List.Item>} /></Card> : null}
+          <Space wrap><Select value={detail.process_status} disabled={detail.process_status === "replied"} onChange={(value) => updateProcess(detail, value)} options={detail.process_status === "replied" ? [{ value: "replied", label: "已回复" }] : [{ value: "pending", label: "待处理" }, { value: "ignored", label: "已忽略" }]} /><Select allowClear value={selectedTemplateId} onChange={setSelectedTemplateId} placeholder="选择回复语气模板（可选）" style={{ width: 210 }} options={replyTemplates.map((template) => ({ value: template.id, label: `${template.category} · ${template.name}` }))} /><Button icon={<RobotOutlined />} loading={replyLoading} onClick={createReplyDraft}>生成回复草稿</Button></Space>
           {detail.reply_content ? <Card size="small" title={<Space>回复内容<Tag color={detail.reply_status === "published" ? "green" : detail.reply_status === "approved" ? "blue" : detail.reply_status === "failed" ? "red" : "gold"}>{detail.reply_status === "published" ? "已发布" : detail.reply_status === "approved" ? "已审核" : detail.reply_status === "failed" ? "发布失败" : "草稿"}</Tag></Space>} extra={<Button type="text" icon={<CopyOutlined />} onClick={() => { void navigator.clipboard?.writeText(detail.reply_content); message.success("已复制"); }}>复制</Button>}><Space direction="vertical" style={{ width: "100%" }}><Input.TextArea value={detail.reply_content} disabled={detail.reply_status === "published"} onChange={(event) => setDetail({ ...detail, reply_content: event.target.value, reply_status: "draft", reply_error: "" })} rows={5} maxLength={500} showCount />{detail.reply_error ? <Alert type="error" showIcon message={detail.reply_error} /> : null}{detail.reply_published_at ? <Text type="secondary">发布时间：{dayjs(detail.reply_published_at).format("YYYY-MM-DD HH:mm")}</Text> : null}<Space><Button onClick={approveReply} loading={replyLoading} disabled={detail.reply_status === "published"}>审核通过</Button><Popconfirm title="确认将这段回复发布到淘宝？发布后不能撤回。" onConfirm={publishReply} disabled={detail.reply_status !== "approved"}><Button type="primary" loading={replyPublishing} disabled={detail.reply_status !== "approved" || detail.source !== "seller-review-management"}>发布到淘宝</Button></Popconfirm>{detail.source !== "seller-review-management" && detail.reply_status !== "published" ? <Text type="secondary">仅千牛评价管理抓取的评论可直接发布</Text> : null}</Space></Space></Card> : null}
           {detail.image_urls?.length ? <Space wrap>{detail.image_urls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer">查看评价图片</a>)}</Space> : null}
         </Space> : null}

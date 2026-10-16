@@ -25,6 +25,7 @@ from backend.app.core.sycm import (
     fetch_store_daily,
     has_profile,
 )
+from backend.app.core.scrape_resilience import is_login_error
 
 router = APIRouter()
 
@@ -72,6 +73,22 @@ def _meta_set(db, key: str, value: str) -> None:
         "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, value),
     )
+
+
+def _record_sycm_status(db, store_id: int, *, status: str, error: str = "") -> None:
+    """Persist the latest login check result so all store views share one source of truth."""
+    _meta_set(db, f"store_{store_id}_sycm_status", status)
+    _meta_set(db, f"store_{store_id}_sycm_error", error[:300] if error else "")
+    _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
+
+
+def _record_login_error(db, store_id: int, exc: BaseException) -> None:
+    """Only login-specific failures invalidate the displayed login state.
+
+    Network/API/schema errors must not turn a healthy login into "登录失效".
+    """
+    if is_login_error(exc):
+        _record_sycm_status(db, store_id, status="error", error=str(exc))
 
 
 def _log(db, user: dict, action: str, target_name: str = "", detail: str = "") -> None:
@@ -124,12 +141,9 @@ def run_inspect_once() -> int:
             if has_profile(row["id"]):
                 try:
                     check_sycm_login(dict(row))
-                    _meta_set(conn, f"store_{row['id']}_sycm_status", "ok")
-                    _meta_set(conn, f"store_{row['id']}_sycm_error", "")
+                    _record_sycm_status(conn, row["id"], status="ok")
                 except SycmError as exc:
-                    _meta_set(conn, f"store_{row['id']}_sycm_status", "error")
-                    _meta_set(conn, f"store_{row['id']}_sycm_error", str(exc)[:300])
-                _meta_set(conn, f"store_{row['id']}_sycm_checked_at", _fmt(_now()))
+                    _record_sycm_status(conn, row["id"], status="error", error=str(exc))
         _meta_set(conn, "stores_last_inspect", _fmt(_now()))
         conn.commit()
         return updated
@@ -205,6 +219,7 @@ def sync_store_row(db, row) -> dict:
         (row["id"], data_date),
     ).fetchone()
     _meta_set(db, f"store_{row['id']}_last_sync", _fmt(_now()))
+    _record_sycm_status(db, row["id"], status="ok")
     return {
         "store_id": row["id"],
         "store_name": row["name"],
@@ -231,6 +246,7 @@ def sync_all_stores(db, user=None) -> dict:
                 {"store_id": item["store_id"], "store_name": item["store_name"], "ok": True, "data_date": item["data_date"]}
             )
         except Exception as exc:  # noqa: BLE001
+            _record_login_error(db, row["id"], exc)
             results.append({"store_id": row["id"], "store_name": row["name"], "ok": False, "error": str(exc)})
     return {"results": results, "total": len(rows), "ok": sum(1 for r in results if r["ok"])}
 
@@ -374,13 +390,10 @@ def test_store_sycm(
     try:
         check_sycm_login(dict(row), force=True)
     except SycmError as exc:
-        _meta_set(db, f"store_{store_id}_sycm_status", "error")
-        _meta_set(db, f"store_{store_id}_sycm_error", str(exc)[:300])
-        _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
+        _record_sycm_status(db, store_id, status="error", error=str(exc))
+        db.commit()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    _meta_set(db, f"store_{store_id}_sycm_status", "ok")
-    _meta_set(db, f"store_{store_id}_sycm_error", "")
-    _meta_set(db, f"store_{store_id}_sycm_checked_at", _fmt(_now()))
+    _record_sycm_status(db, store_id, status="ok")
     return {"ok": True}
 
 
@@ -475,6 +488,8 @@ def sync_store(
     try:
         item = sync_store_row(db, row)
     except SycmError as exc:
+        _record_login_error(db, store_id, exc)
+        db.commit()
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     _log(db, user, "同步生意参谋", row["name"], f"同步 {item['data_date']}")
     return {"item": item}
@@ -543,8 +558,18 @@ def backfill_store_daily(db, days: int = 3) -> dict:
                 )
                 total += 1
             except SycmError as exc:
+                _record_login_error(db, store["id"], exc)
                 err = str(exc)
                 break
+            except Exception as exc:  # noqa: BLE001 - 空响应/结构变化不能打断其它店铺
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                err = f"{target}：同步异常：{str(exc) or exc.__class__.__name__}"
+                break
+            else:
+                db.commit()
         results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total, "error": err})
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
@@ -555,9 +580,53 @@ def sync_history(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
-    """补拉最近 N 天（不含今天）的店铺每日数据到 store_daily_data。"""
+    """补拉历史日档，并同时补齐昨日实时分时数据。
+
+    历史页的环比和昨日对比依赖 ``store_hourly_data``。过去这个入口只写
+    ``store_daily_data``，因此日档补成功后，昨日实时分时仍可能为空。这里
+    复用现有的今日/昨日分时接口，把两类数据放在同一次手动补数里执行。
+    """
     result = backfill_store_daily(db, days)
-    _log(db, user, "补拉历史数据", "全部店铺", f"近 {result['days']} 天 成功 {result['ok']} / {result['total']} 家")
+    try:
+        from backend.app.api.promotions import sync_promo_realtime_all
+
+        yesterday = (date_cls.today() - timedelta(days=1)).isoformat()
+        promo_realtime = sync_promo_realtime_all(db, target_date=yesterday)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - 日档成功时仍返回可读的推广失败结果
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        promo_realtime = {
+            "results": [{"store_name": "昨日推广实时", "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"}],
+            "total": 1,
+            "ok": 0,
+        }
+    try:
+        hourly = sync_hourly_all(db)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - 日档成功时仍返回可读的分时失败结果
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        hourly = {
+            "results": [{"store_name": "昨日实时分时", "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"}],
+            "total": 1,
+            "ok": 0,
+        }
+    result["realtime"] = hourly
+    result["promo_realtime"] = promo_realtime
+    _log(
+        db,
+        user,
+        "补拉历史数据",
+        "全部店铺",
+        f"近 {result['days']} 天日档成功 {result['ok']} / {result['total']} 家；"
+        f"昨日实时分时成功 {hourly['ok']} / {hourly['total']} 家；"
+        f"昨日推广实时成功 {promo_realtime['ok']} / {promo_realtime['total']} 家",
+    )
     return result
 
 
@@ -596,6 +665,7 @@ def sync_hourly_all(db) -> dict:
                 )
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
         except SycmError as exc:
+            _record_login_error(db, store["id"], exc)
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
@@ -659,8 +729,18 @@ def sync_items_daily_all(db, days: int = 7) -> dict:
                     )
                 total_rows += len(items)
             except SycmError as exc:
+                _record_login_error(db, store["id"], exc)
                 err = str(exc)
                 break
+            except Exception as exc:  # noqa: BLE001 - 空响应/结构变化不能打断其它店铺
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                err = f"{target}：同步异常：{str(exc) or exc.__class__.__name__}"
+                break
+            else:
+                db.commit()
         results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total_rows, "error": err})
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"]), "days": len(dates)}
 
@@ -738,6 +818,7 @@ def sync_items(
                     )
                 total_rows += len(items)
             except SycmError as exc:
+                _record_login_error(db, store["id"], exc)
                 err = str(exc)
                 break
         results.append({"store_id": store["id"], "store_name": store["name"], "ok": err is None, "rows": total_rows, "error": err})
@@ -765,6 +846,7 @@ def sync_flow_source_all(db) -> dict:
                 )
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
         except SycmError as exc:
+            _record_login_error(db, store["id"], exc)
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": str(exc)})
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
@@ -792,6 +874,7 @@ def sync_refund_all(db) -> dict:
             )
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": 1})
         except SycmError as exc:
+            _record_login_error(db, store["id"], exc)
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "rows": 0, "error": str(exc)})
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
@@ -808,7 +891,16 @@ def sync_items_realtime_all(db) -> dict:
             continue
         try:
             items = fetch_item_realtime(store)
+        except SycmError as exc:
+            _record_login_error(db, store["id"], exc)
+            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+            continue
+
+        savepoint = "replace_item_realtime_snapshot"
+        db.execute(f"SAVEPOINT {savepoint}")
+        try:
             now = _fmt(_now())
+            db.execute("DELETE FROM store_item_realtime WHERE store_id = ?", (store["id"],))
             for it in items:
                 db.execute(
                     "INSERT INTO store_item_realtime (store_id, item_id, item_title, image, visitors, pv, buyers, orders, sales, conversion_rate, add_cart, refund_amount, pay_pct, item_clt_byr_cnt, uv_avg_value, stay_time_avg, itm_bounce_rate, se_guide_uv, se_guide_pay_byr_cnt, se_guide_pay_rate, visitors_cycle, pv_cycle, buyers_cycle, orders_cycle, sales_cycle, conversion_cycle, add_cart_cycle, updated_at) "
@@ -828,9 +920,12 @@ def sync_items_realtime_all(db) -> dict:
                     "add_cart_cycle = excluded.add_cart_cycle, updated_at = excluded.updated_at",
                     (store["id"], it["item_id"], it["item_title"], it.get("image", ""), it["visitors"], it["pv"], it["buyers"], it["orders"], it["sales"], it["conversion_rate"], it.get("add_cart", 0), it.get("refund_amount", 0), it.get("pay_pct", 0), it.get("item_clt_byr_cnt", 0), it.get("uv_avg_value", 0), it.get("stay_time_avg", 0), it.get("itm_bounce_rate", 0), it.get("se_guide_uv", 0), it.get("se_guide_pay_byr_cnt", 0), it.get("se_guide_pay_rate", 0), it.get("visitors_cycle", 0), it.get("pv_cycle", 0), it.get("buyers_cycle", 0), it.get("orders_cycle", 0), it.get("sales_cycle", 0), it.get("conversion_cycle", 0), it.get("add_cart_cycle", 0), now),
                 )
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
-        except SycmError as exc:
-            results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
+            db.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            db.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            db.execute(f"RELEASE SAVEPOINT {savepoint}")
+            raise
+        results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": len(items)})
     return {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
 
 

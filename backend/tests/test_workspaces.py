@@ -38,7 +38,7 @@ def test_workspace_scaffolds_are_registered(client, admin_token):
 
     expected = {
         "/api/content": 6,
-        "/api/monitoring": 6,
+        "/api/monitoring": 4,
         "/api/market": 3,
         "/api/growth-lab": 5,
         "/api/ops-knowledge": 4,

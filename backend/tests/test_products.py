@@ -91,6 +91,94 @@ def test_product_list_api(client, admin_token):
     assert invalid.status_code == 400
 
 
+def test_product_alias_survives_sync_and_supports_product_and_review_search(client, admin_token):
+    conn = sqlite3.connect(os.environ["TAOBAO_DB_PATH"])
+    store_id = conn.execute(
+        "INSERT INTO stores (name, status, created_at) VALUES (?, 'active', ?)",
+        ("商品备注测试店", "2026-09-14T00:00:00"),
+    ).lastrowid
+    products_api._save_store_products(
+        conn,
+        store_id,
+        [_product("alias-product-1", "淘宝原始长标题")],
+        "2026-09-14T10:00:00",
+    )
+    conn.commit()
+    conn.close()
+    headers = {"Authorization": f"Bearer {admin_token}"}
+
+    saved = client.put(
+        "/api/products/aliases/alias-product-1",
+        headers=headers,
+        json={"store_id": store_id, "alias": "主推牙刷", "note": "绿盒装"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["item"]["original_title"] == "淘宝原始长标题"
+
+    listed = client.get(
+        f"/api/products?store_id={store_id}&q=主推牙刷",
+        headers=headers,
+    )
+    assert listed.status_code == 200, listed.text
+    item = listed.json()["items"][0]
+    assert item["title"] == "主推牙刷"
+    assert item["original_title"] == "淘宝原始长标题"
+    assert item["product_alias"] == "主推牙刷"
+    assert item["alias_note"] == "绿盒装"
+
+    synced_review = client.post(
+        "/api/customers/reviews/sync",
+        headers=headers,
+        json={
+            "store_id": store_id,
+            "items": [
+                {
+                    "review_id": "alias-review-1",
+                    "item_id": "alias-product-1",
+                    "item_title": "淘宝原始长标题",
+                    "content": "刷头有点硬",
+                }
+            ],
+        },
+    )
+    assert synced_review.status_code == 200, synced_review.text
+    review_search = client.get(
+        f"/api/customers/reviews?store_id={store_id}&q=主推牙刷",
+        headers=headers,
+    )
+    assert review_search.status_code == 200, review_search.text
+    assert [row["review_id"] for row in review_search.json()["items"]] == ["alias-review-1"]
+
+    conn = sqlite3.connect(os.environ["TAOBAO_DB_PATH"])
+    products_api._save_store_products(
+        conn,
+        store_id,
+        [_product("alias-product-1", "淘宝同步后的新标题")],
+        "2026-09-14T11:00:00",
+    )
+    conn.commit()
+    conn.close()
+
+    after_sync = client.get(
+        f"/api/products?store_id={store_id}&q=主推牙刷",
+        headers=headers,
+    ).json()["items"][0]
+    assert after_sync["title"] == "主推牙刷"
+    assert after_sync["original_title"] == "淘宝同步后的新标题"
+
+    cleared = client.delete(
+        f"/api/products/aliases/alias-product-1?store_id={store_id}",
+        headers=headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+    restored = client.get(
+        f"/api/products?store_id={store_id}&q=淘宝同步后的新标题",
+        headers=headers,
+    ).json()["items"][0]
+    assert restored["title"] == "淘宝同步后的新标题"
+    assert restored["product_alias"] is None
+
+
 def test_product_list_sorts_all_pages_by_shelf_time(client, admin_token):
     conn = sqlite3.connect(os.environ["TAOBAO_DB_PATH"])
     store_id = conn.execute(

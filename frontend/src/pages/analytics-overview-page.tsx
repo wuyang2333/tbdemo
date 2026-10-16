@@ -17,7 +17,7 @@ const { Text } = Typography;
 type TodayCompare = { sales: number | null; orders: number | null; visitors: number | null; conversion: number | null };
 type TodayOverview = {
   kpi: { sales: number; orders: number; visitors: number; conversion_rate: number; avg_order_value: number; buyers: number; compare: TodayCompare };
-  promo: { spend: number; sales: number; roi: number; real_roi: number | null; yesterday_real_roi: number | null; compare: { spend: number | null; sales: number | null }; scenes: { scene: string; scene_name: string; spend: number; sales: number; roi: number }[] };
+  promo: { spend: number; sales: number; roi: number; real_roi: number | null; yesterday_real_roi: number | null; compare: { spend: number | null; sales: number | null; real_roi: number | null }; scenes: { scene: string; scene_name: string; spend: number; sales: number; roi: number }[] };
   funnel: { visitors: number; collect: number; add_cart: number; buyers: number; collect_rate: number; cart_rate: number; pay_rate: number };
   flow: { search_uv: number; search_share: number | null; other_share: number | null; has_data: boolean; data_date: string | null; sources: { source: string; uv: number; rank: number }[] };
   refund: { amount: number; pay_amt: number; rate: number; ord_rate: number; cycle: number | null; yest_amount: number; yest_rate: number; data_date: string | null; updated_at: string };
@@ -62,8 +62,19 @@ export function AnalyticsOverviewPage() {
   const syncHistory = async (days: number) => {
     setSyncingHistory(true);
     try {
-      const { data } = await http.post<{ ok: number; total: number; days: number; results?: { store_name: string; ok: boolean; error?: string }[] }>(`/stores/sync-history?days=${days}`);
-      showSyncFeedback(`历史数据补拉（近 ${data.days} 天）`, [{ ok: data.ok, total: data.total, results: data.results ?? [] }]);
+      const { data } = await http.post<{
+        ok: number;
+        total: number;
+        days: number;
+        results?: { store_name: string; ok: boolean; error?: string }[];
+        realtime?: { ok: number; total: number; results?: { store_name: string; ok: boolean; error?: string }[] };
+        promo_realtime?: { ok: number; total: number; results?: { store_name: string; ok: boolean; error?: string }[] };
+      }>(`/stores/sync-history?days=${days}`);
+      showSyncFeedback(`历史数据补拉（近 ${data.days} 天 + 昨日实时）`, [
+        { ok: data.ok, total: data.total, results: data.results ?? [] },
+        ...(data.realtime ? [{ ok: data.realtime.ok, total: data.realtime.total, results: data.realtime.results ?? [] }] : []),
+        ...(data.promo_realtime ? [{ ok: data.promo_realtime.ok, total: data.promo_realtime.total, results: data.promo_realtime.results ?? [] }] : []),
+      ]);
       await load();
     } catch (error) {
       message.error(getApiErrorMessage(error));
@@ -73,6 +84,7 @@ export function AnalyticsOverviewPage() {
   };
 
   const salesChange = today?.kpi.compare.sales;
+  const realRoiChange = today?.promo.compare.real_roi;
   const decisionTitle = today
     ? salesChange == null
       ? `今日已成交 ¥${today.kpi.sales.toLocaleString()}，继续关注实时经营变化`
@@ -111,7 +123,7 @@ export function AnalyticsOverviewPage() {
                 onClick: ({ key }) => syncHistory(Number(key)),
               }}
             >
-              <Button icon={<HistoryOutlined />} loading={syncingHistory}>
+              <Button icon={<HistoryOutlined />} loading={syncingHistory} title="补历史日档，并补齐昨天的实时分时和推广数据">
                 补历史数据
               </Button>
             </Dropdown>
@@ -133,7 +145,13 @@ export function AnalyticsOverviewPage() {
                   { label: "今日买家数", value: (today.kpi.buyers ?? today.funnel.buyers).toLocaleString(), hint: "支付买家数（实时）" },
                   { label: "今日访客", value: today.kpi.visitors.toLocaleString(), hint: today.kpi.compare.visitors == null ? "暂无昨日对比" : `较昨日同时段 ${today.kpi.compare.visitors >= 0 ? "+" : ""}${today.kpi.compare.visitors}%` },
                   { label: "今日转化率", value: `${today.kpi.conversion_rate}%`, hint: `客单价 ¥${today.kpi.avg_order_value.toLocaleString()}` },
-                  { label: "今日真实 ROI", value: today.promo.real_roi?.toFixed(2) ?? "—", hint: today.promo.yesterday_real_roi != null ? `昨日同时段 ${today.promo.yesterday_real_roi.toFixed(2)}` : "昨日无推广数据" },
+                  {
+                    label: "今日真实 ROI",
+                    value: today.promo.real_roi?.toFixed(2) ?? "—",
+                    hint: today.promo.yesterday_real_roi == null
+                      ? "昨日无推广数据"
+                      : `${realRoiChange == null ? "暂无涨跌幅" : `较昨日同时段${realRoiChange >= 0 ? "上涨" : "下降"} ${Math.abs(realRoiChange)}%`} · 昨日同时段 ${today.promo.yesterday_real_roi.toFixed(2)}`,
+                  },
                   { label: "今日退款", value: `¥${today.refund.amount.toLocaleString()}`, hint: `较昨日同时段 ${today.refund.cycle == null ? "—" : `${today.refund.cycle >= 0 ? "+" : ""}${today.refund.cycle}%`} · 退款率 ${today.refund.rate}%`, tone: "var(--ops-danger)" },
                   { label: "今日净支付金额", value: `¥${(today.kpi.sales - today.refund.amount).toLocaleString()}`, hint: "成交金额扣除退款" },
                   { label: "今日客单价", value: `¥${today.kpi.avg_order_value.toLocaleString()}`, hint: "销售额 ÷ 买家数" },

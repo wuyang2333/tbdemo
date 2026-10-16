@@ -114,7 +114,6 @@ def set_tencent_docs_config(body: TencentDocsConfigIn, actor: dict = Depends(req
         values["client_secret"] = ""
     if body.access_token.strip():
         values["access_token"] = body.access_token.strip()
-        values["token_expires_at"] = ""
     if body.open_id.strip():
         values["open_id"] = body.open_id.strip()
     try:

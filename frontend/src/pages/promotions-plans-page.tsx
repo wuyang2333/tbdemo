@@ -35,6 +35,7 @@ const PLAN_DETAIL_FIELDS: { key: string; label: string; fmt: "money" | "percent"
   { key: "refundDirAmt", label: "直接退款金额", fmt: "money" },
   { key: "refundIndirAmt", label: "间接退款金额", fmt: "money" },
   { key: "roi", label: "ROI(站内)", fmt: "num" },
+  { key: "real_roi", label: "真实ROI", fmt: "num" },
   { key: "retainedRoi", label: "净实际投产比", fmt: "num" },
   { key: "adPv", label: "展现量", fmt: "int" },
   { key: "click", label: "点击", fmt: "int" },
@@ -52,7 +53,7 @@ const PLAN_DETAIL_FIELDS: { key: string; label: string; fmt: "money" | "percent"
   { key: "refundIndirNum", label: "间接退款笔数", fmt: "int" },
   { key: "retainedAlipayInshopNum", label: "留存成交件数", fmt: "int" },
 ];
-const BUILTIN_COL_ORDER = ["channel", "scene_name", "plan_name", "item", "status", "delivery", "day_budget", "bid", "spend", "sales", "roi", "diag", "clicks", "op", "tag", "note"];
+const BUILTIN_COL_ORDER = ["channel", "scene_name", "plan_name", "item", "status", "delivery", "day_budget", "bid", "spend", "sales", "roi", "real_roi", "diag", "clicks", "op", "tag", "note"];
 
 function ChangeBadge({ change, unit = "%", comparison = "上期", detail }: { change: number | null | undefined; unit?: string; comparison?: string; detail?: string }) {
   if (change == null) return <span style={{ color: "var(--ops-text-3)", fontSize: 11 }}>—</span>;
@@ -80,6 +81,10 @@ function parseSuccessCriteria(value: string | null): Record<string, number> {
 function successCriteriaText(criteria: Record<string, number>): string {
   const labels: Record<string, string> = { target_roi_min: "最终 ROI≥", roi_change_min: "ROI 提升≥", sales_change_pct_min: "日均成交变化≥", spend_change_pct_max: "日均花费变化≤" };
   return Object.entries(criteria).map(([key, value]) => `${labels[key] || key}${value}${key.includes("pct") ? "%" : ""}`).join("；");
+}
+
+function planIsPlatformMissing(plan: PromoPlan) {
+  return plan.platform_presence === "missing" || plan.status === "平台已失效";
 }
 
 
@@ -782,7 +787,7 @@ export function PromotionsPlansPage() {
                   <div className="ops-plan-name-cell__product">{itemTitle}</div>
                 </Tooltip>
                 <div className="ops-plan-name-cell__meta">
-                  <Tag color={row.status === "在投" ? "green" : "default"}>{row.status || "—"}</Tag>
+                  <Tag color={row.status === "在投" ? "green" : "default"}>{planIsPlatformMissing(row) ? "平台已失效" : row.status || "—"}</Tag>
                   <span>计划 ID {row.campaign_id || "未同步"}</span>
                   <span>宝贝 ID {item?.item_id || "未同步"}</span>
                   <span>{row.scene_name || "未分类"}</span>
@@ -821,7 +826,7 @@ export function PromotionsPlansPage() {
         );
       },
     },
-    { title: "状态", key: "status", dataIndex: "status", width: 72, sorter: (a, b) => a.status.localeCompare(b.status, "zh"), render: (status: string) => (status === "在投" ? <Tag color="green">在投</Tag> : <Tag>暂停</Tag>) },
+    { title: "状态", key: "status", dataIndex: "status", width: 96, sorter: (a, b) => a.status.localeCompare(b.status, "zh"), render: (_: string, row) => (row.status === "在投" ? <Tag color="green">在投</Tag> : <Tag>{planIsPlatformMissing(row) ? "平台已失效" : row.status || "状态未知"}</Tag>) },
     {
       title: "投放设置",
       key: "delivery",
@@ -866,6 +871,22 @@ export function PromotionsPlansPage() {
       },
     },
     {
+      title: "真实ROI",
+      key: "real_roi",
+      dataIndex: "real_roi",
+      align: "right",
+      width: 92,
+      sorter: (a, b) => (a.real_roi ?? -1) - (b.real_roi ?? -1),
+      render: (v: number | null | undefined, row: PromoPlan) => (
+        <Tooltip title="该宝贝实际成交额 ÷ 该计划推广花费；— 表示对应时间范围的宝贝成交数据尚未同步">
+          <div style={{ textAlign: "right" }}>
+            <div style={{ color: v == null ? "var(--ops-text-3)" : "var(--ops-accent)", fontWeight: 600 }}>{v == null ? "—" : v.toFixed(2)}</div>
+            {v != null && row.spend ? <Text type="secondary" style={{ fontSize: 11 }}>店铺实际口径</Text> : null}
+          </div>
+        </Tooltip>
+      ),
+    },
+    {
       title: "诊断",
       key: "diag",
       width: 90,
@@ -880,7 +901,9 @@ export function PromotionsPlansPage() {
       key: "op",
       width: 118,
       render: (_, row: PromoPlan) =>
-        row.scene === "content" ? (
+        planIsPlatformMissing(row) ? (
+          <Tooltip title="平台当前计划列表已不再返回此计划，历史数据仅供复盘"><Text type="secondary" style={{ fontSize: 12 }}>仅历史</Text></Tooltip>
+        ) : row.scene === "content" ? (
           <Text type="secondary" style={{ fontSize: 12 }}>不支持</Text>
         ) : row.status === "在投" ? (
           <Space size={4} wrap>
@@ -1685,7 +1708,7 @@ export function PromotionsPlansPage() {
                 </div>
               </Col>
               {PLAN_DETAIL_FIELDS.map((f) => {
-                const full: Record<string, number> = {
+                const full: Record<string, number | null | undefined> = {
                   ...(detailPlan.extra ?? {}),
                   spend: detailPlan.spend,
                   sales: detailPlan.sales,
@@ -1694,6 +1717,7 @@ export function PromotionsPlansPage() {
                   charge: detailPlan.extra?.charge ?? detailPlan.spend,
                   alipayInshopAmt: detailPlan.extra?.alipayInshopAmt ?? detailPlan.sales,
                   retainedRoi: detailPlan.extra?.retainedRoi ?? detailPlan.retained_roi ?? 0,
+                  real_roi: detailPlan.real_roi,
                 };
                 const v = full[f.key];
                 if (v == null || v === undefined) return null;

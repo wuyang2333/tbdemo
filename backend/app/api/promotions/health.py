@@ -302,7 +302,7 @@ def promotion_health_payload(db, user: dict, store_id: int | None = None) -> dic
     where, params = _scope(user, store_id)
     stores_where, stores_params = _scope(user, store_id, "id")
     visible_stores = int(db.execute("SELECT COUNT(*) AS c FROM stores" + stores_where, stores_params).fetchone()["c"] or 0)
-    active_plans = int(db.execute("SELECT COUNT(*) AS c FROM promo_plans" + where + (" AND" if where else " WHERE") + " status = '在投'", params).fetchone()["c"] or 0)
+    active_plans = int(db.execute("SELECT COUNT(*) AS c FROM promo_plans" + where + (" AND" if where else " WHERE") + " status = '在投' AND COALESCE(platform_presence, 'active') != 'missing'", params).fetchone()["c"] or 0)
     stats_where, stats_params = _scope(user, store_id)
     realtime_stats = int(db.execute("SELECT COUNT(DISTINCT store_id || ':' || campaign_id) AS c FROM promo_plan_stats" + stats_where + (" AND" if stats_where else " WHERE") + " mode = 'realtime'", stats_params).fetchone()["c"] or 0)
     today = date.today()

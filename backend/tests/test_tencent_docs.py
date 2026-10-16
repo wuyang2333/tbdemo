@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -47,6 +48,44 @@ def test_layout_assignments_leaves_three_blank_rows_between_dates():
     ]
 
 
+def test_layout_assignments_orders_same_date_by_order_time():
+    assignments = tencent_docs._layout_assignments(
+        [
+            {"id": 198, "order_time": "2026-09-09 10:00:00"},
+            {"id": 199, "order_time": "2026-09-09 11:30:00"},
+            {"id": 200, "order_time": "2026-09-09 11:00:00"},
+        ]
+    )
+
+    assert [(row_number, gift["id"]) for row_number, gift in assignments] == [
+        (2, 198),
+        (3, 200),
+        (4, 199),
+    ]
+
+
+def test_layout_assignments_groups_by_date_then_owner_then_order_time():
+    assignments = tencent_docs._layout_assignments(
+        [
+            {"id": 1, "owner_nickname": "家禾", "order_time": "2026-09-15 10:00:00"},
+            {"id": 2, "owner_nickname": "西米", "order_time": "2026-09-15 09:00:00"},
+            {"id": 3, "owner_nickname": "家禾", "order_time": "2026-09-15 11:00:00"},
+            {"id": 4, "owner_nickname": "", "order_time": "2026-09-15 08:00:00"},
+            {"id": 5, "owner_nickname": "西米", "order_time": "2026-09-16 08:30:00"},
+            {"id": 6, "owner_nickname": "家禾", "order_time": "2026-09-16 09:30:00"},
+        ]
+    )
+
+    assert [(row_number, gift["id"]) for row_number, gift in assignments] == [
+        (2, 1),
+        (3, 3),
+        (5, 2),
+        (7, 4),
+        (11, 6),
+        (13, 5),
+    ]
+
+
 def test_tencent_docs_config_masks_secret_and_builds_oauth_url(client, admin_token):
     saved = client.put(
         "/api/settings/tencent-docs",
@@ -93,6 +132,9 @@ def test_tencent_docs_accepts_manual_access_credentials(client, admin_token):
     assert saved.status_code == 200, saved.text
     assert saved.json()["authorized"] is True
     assert saved.json()["access_token_configured"] is True
+    assert saved.json()["token_source"] == "manual"
+    assert saved.json()["auto_refresh_enabled"] is False
+    assert saved.json()["auth_required"] is False
     assert saved.json()["poll_minutes"] == 15
     assert "access_token" not in saved.json()
     assert "open_id" not in saved.json()
@@ -102,7 +144,150 @@ def test_tencent_docs_accepts_manual_access_credentials(client, admin_token):
         configured = tencent_docs.TencentDocsClient(conn)
         assert configured.config["access_token"] == "manual-access-token"
         assert configured.config["open_id"] == "manual-open-id"
+        expires_at = datetime.fromisoformat(configured.config["token_expires_at"])
+        remaining = expires_at - datetime.now(timezone.utc)
+        assert timedelta(days=29, hours=23) < remaining <= timedelta(days=30)
     finally:
+        conn.close()
+
+
+def test_auth_error_refreshes_token_and_retries_request_once(monkeypatch):
+    conn = connect_db()
+    try:
+        tencent_docs.update_config(
+            conn,
+            {
+                "enabled": True,
+                "client_id": "client-test",
+                "client_secret": "secret-test",
+                "access_token": "expired-token",
+                "open_id": "open-id",
+            },
+        )
+        tencent_docs.update_config(
+            conn,
+            {
+                "refresh_token": "refresh-token",
+                "token_source": "oauth",
+                "token_expires_at": (tencent_docs._now() + timedelta(days=1)).isoformat(),
+            },
+        )
+        conn.commit()
+
+        request_headers = []
+
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        def fake_request(method, url, headers, timeout, **kwargs):
+            request_headers.append(headers)
+            if len(request_headers) == 1:
+                return FakeResponse({"code": 1, "message": "Authentication Internal Error"})
+            return FakeResponse({"code": 0, "data": {"properties": [{"sheetId": "sheet-1"}]}})
+
+        monkeypatch.setattr(tencent_docs.httpx, "request", fake_request)
+        monkeypatch.setattr(
+            tencent_docs.httpx,
+            "get",
+            lambda *args, **kwargs: FakeResponse(
+                {
+                    "access_token": "renewed-token",
+                    "refresh_token": "renewed-refresh-token",
+                    "open_id": "open-id",
+                    "expires_in": 3600,
+                }
+            ),
+        )
+
+        sheets = tencent_docs.TencentDocsClient(conn).get_sheets()
+
+        assert sheets == [{"sheetId": "sheet-1"}]
+        assert len(request_headers) == 2
+        assert request_headers[0]["Access-Token"] == "expired-token"
+        assert request_headers[1]["Access-Token"] == "renewed-token"
+        config = tencent_docs._load_config(conn)
+        assert config["refresh_token"] == "renewed-refresh-token"
+        assert config["auth_required"] is False
+    finally:
+        conn.close()
+
+
+def test_failed_refresh_marks_authorization_required_and_pauses_background_sync(monkeypatch):
+    conn = connect_db()
+    try:
+        tencent_docs.update_config(
+            conn,
+            {
+                "enabled": True,
+                "client_id": "client-test",
+                "client_secret": "secret-test",
+                "access_token": "expired-token",
+                "open_id": "open-id",
+            },
+        )
+        tencent_docs.update_config(
+            conn,
+            {
+                "refresh_token": "expired-refresh-token",
+                "token_source": "oauth",
+                "token_expires_at": (tencent_docs._now() + timedelta(days=1)).isoformat(),
+            },
+        )
+        conn.commit()
+
+        class FakeResponse:
+            status_code = 200
+
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self.payload
+
+        request_count = 0
+
+        def fake_request(*args, **kwargs):
+            nonlocal request_count
+            request_count += 1
+            return FakeResponse({"code": 1, "message": "Authentication Internal Error"})
+
+        monkeypatch.setattr(tencent_docs.httpx, "request", fake_request)
+        monkeypatch.setattr(
+            tencent_docs.httpx,
+            "get",
+            lambda *args, **kwargs: FakeResponse({"error_description": "refresh token expired"}),
+        )
+
+        with pytest.raises(tencent_docs.TencentDocsError, match="请重新填写 Access Token"):
+            tencent_docs.TencentDocsClient(conn).get_sheets()
+
+        status = tencent_docs.public_config(conn)
+        assert status["auth_required"] is True
+        assert status["authorized"] is False
+        assert status["last_error"] == tencent_docs.AUTH_REQUIRED_MESSAGE
+
+        paused = tencent_docs.sync_gifts(conn)
+        assert paused["skipped"] is True
+        assert paused["requires_authorization"] is True
+        assert request_count == 1
+    finally:
+        tencent_docs.update_config(
+            conn,
+            {"enabled": False, "auth_required": False, "auth_failure_at": "", "auth_error_detail": "", "last_error": ""},
+        )
+        conn.commit()
         conn.close()
 
 
@@ -404,6 +589,123 @@ def test_sync_uses_cached_sheet_and_skips_write_when_values_match():
 
         assert result["errors"] == []
         assert fake.writes == 0
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_sync_refreshes_stale_row_capacity_before_failing():
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        tencent_docs.update_config(
+            conn,
+            {
+                "enabled": True,
+                "sheet_id": "sheet-1",
+                "sheet_title": "工作表1",
+                "sheet_row_count": 2,
+                "sheet_row_total": 3,
+                "sheet_metadata_refreshed_at": tencent_docs._now_text(),
+            },
+        )
+        for day in ("2026-09-14", "2026-09-15"):
+            conn.execute(
+                """INSERT INTO gifts
+                (store_id, store_name, order_no, recipient, gift_name, quantity, price, status, created_at,
+                 keyword, spec, commission, wangwang, review_status, settle_status, order_time, image, owner_nickname)
+                VALUES (0, '测试店铺', '', '', '', 1, 9.9, 'pending', ?,
+                        '测试关键词', '测试规格', 2.5, '', 'none', 'unsettled', ?, '', '系统负责人')""",
+                (f"{day}T10:00:00+00:00", f"{day} 10:00:00"),
+            )
+        conn.commit()
+
+        class RefreshingClient:
+            def __init__(self):
+                self.ranges = []
+                self.requests = []
+
+            def get_sheets(self):
+                return [{"sheetId": "sheet-1", "title": "工作表1", "rowCount": 3, "rowTotal": 10}]
+
+            def get_range(self, sheet_id: str, range_a1: str):
+                self.ranges.append(range_a1)
+                return {"startRow": 0, "rows": [_cells(tencent_docs.HEADERS)]}
+
+            def batch_update(self, requests: list[dict]):
+                self.requests.extend(requests)
+
+        fake = RefreshingClient()
+        result = tencent_docs.sync_gifts(conn, client=fake)
+
+        assert result["pushed"] == 2
+        assert "A1:M3" in fake.ranges
+        assert "A1:M10" in fake.ranges
+        assert fake.requests
+        assert tencent_docs._load_config(conn)["sheet_row_total"] == 10
+    finally:
+        conn.rollback()
+        conn.close()
+
+
+def test_sync_automatically_adds_rows_when_capacity_is_insufficient():
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        tencent_docs.update_config(
+            conn,
+            {
+                "enabled": True,
+                "sheet_id": "sheet-1",
+                "sheet_title": "工作表1",
+                "sheet_row_count": 2,
+                "sheet_row_total": 3,
+                "sheet_metadata_refreshed_at": tencent_docs._now_text(),
+            },
+        )
+        conn.execute(
+            """INSERT INTO gifts
+            (store_id, store_name, order_no, recipient, gift_name, quantity, price, status, created_at,
+             keyword, spec, commission, wangwang, review_status, settle_status, order_time, image, owner_nickname)
+            VALUES (0, '测试店铺', '', '', '', 1, 9.9, 'pending',
+                    '2026-09-14T10:00:00+00:00', '测试关键词', '测试规格', 2.5, '', 'none',
+                    'unsettled', '2026-09-14 10:00:00', '', '系统负责人')"""
+        )
+        conn.execute(
+            """INSERT INTO gifts
+            (store_id, store_name, order_no, recipient, gift_name, quantity, price, status, created_at,
+             keyword, spec, commission, wangwang, review_status, settle_status, order_time, image, owner_nickname)
+            VALUES (0, '测试店铺', '', '', '', 1, 9.9, 'pending',
+                    '2026-09-15T10:00:00+00:00', '测试关键词', '测试规格', 2.5, '', 'none',
+                    'unsettled', '2026-09-15 10:00:00', '', '系统负责人')"""
+        )
+        conn.commit()
+
+        class AutoExpandClient:
+            def __init__(self):
+                self.ranges = []
+                self.requests = []
+                self.capacity_calls = []
+
+            def get_range(self, sheet_id: str, range_a1: str):
+                self.ranges.append(range_a1)
+                return {"startRow": 0, "rows": [_cells(tencent_docs.HEADERS)]}
+
+            def ensure_row_capacity(self, sheet_id: str, current_total: int, required_total: int) -> int:
+                self.capacity_calls.append((sheet_id, current_total, required_total))
+                return required_total
+
+            def batch_update(self, requests: list[dict]):
+                self.requests.extend(requests)
+
+        fake = AutoExpandClient()
+        result = tencent_docs.sync_gifts(conn, client=fake)
+
+        assert result["pushed"] == 2
+        assert fake.capacity_calls == [("sheet-1", 3, 56)]
+        assert "A1:M3" in fake.ranges
+        assert "A1:M56" in fake.ranges
+        assert tencent_docs._load_config(conn)["sheet_row_total"] == 56
     finally:
         conn.rollback()
         conn.close()
@@ -767,6 +1069,61 @@ def test_sync_clears_replaced_keyword_image_before_inserting_new_one():
         conn.rollback()
         conn.close()
         image_path.unlink(missing_ok=True)
+
+
+def test_sync_stops_relayout_before_clearing_when_local_image_is_missing():
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        tencent_docs.update_config(conn, {"enabled": True, "sheet_id": "sheet-1"})
+        created = conn.execute(
+            """INSERT INTO gifts
+            (store_id, store_name, order_no, recipient, gift_name, quantity, price, status, created_at,
+             keyword, spec, commission, wangwang, review_status, settle_status, order_time, image,
+             tencent_image_synced, owner_nickname)
+            VALUES (0, '测试店铺', '', '', '', 1, 9.9, 'pending', '2026-09-16T09:00:00+00:00',
+                    '', '测试规格', 2.5, '', 'none', 'unsettled', '2026-09-16 09:00:00',
+                    '/api/images/missing-source.png', '/api/images/missing-source.png#cell-r3-c5', '测试负责人')"""
+        )
+        gift_id = int(created.lastrowid)
+        conn.commit()
+
+        class MissingImageClient:
+            def __init__(self):
+                self.writes = 0
+                self.clears = 0
+
+            def get_sheets(self):
+                return [{"sheetId": "sheet-1", "title": "工作表1", "rowCount": 3, "rowTotal": 200}]
+
+            def get_range(self, sheet_id: str, range_a1: str):
+                return {
+                    "startRow": 0,
+                    "rows": [
+                        _cells(tencent_docs.HEADERS),
+                        _cells([""] * len(tencent_docs.HEADERS)),
+                        _cells([str(gift_id)] + [""] * 11 + ["测试负责人"]),
+                    ],
+                }
+
+            def batch_update(self, requests: list[dict]):
+                self.writes += 1
+
+            def convert_file_id(self):
+                return "300000000$FILE"
+
+            def clear_range(self, file_id: str, range_a1: str):
+                self.clears += 1
+
+        fake = MissingImageClient()
+        with pytest.raises(tencent_docs.TencentDocsError, match="为避免清除腾讯文档中的原图片"):
+            tencent_docs.sync_gifts(conn, client=fake)
+
+        assert fake.writes == 0
+        assert fake.clears == 0
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def test_sync_is_noop_until_enabled():

@@ -17,7 +17,7 @@ MODULES: list[dict[str, str]] = [
     {"id": "analytics", "name": "数据洞察", "description": "流量、转化、销售趋势分析", "icon": "analytics"},
     {"id": "promotions", "name": "推广管理", "description": "直通车/引力魔方/万相台推广计划", "icon": "promotion"},
     {"id": "content", "name": "内容运营", "description": "素材库、内容创作、AI 图文/短视频", "icon": "content"},
-    {"id": "monitoring", "name": "竞品监控", "description": "关键词/店铺/商品监控与快照", "icon": "monitor"},
+    {"id": "monitoring", "name": "竞品监控", "description": "竞店新品发现与竞品起量监控", "icon": "monitor"},
     {"id": "market", "name": "市场洞察", "description": "选品机会、关键词运营与机会雷达", "icon": "market"},
     {"id": "growth-lab", "name": "增长实验室", "description": "商品策略、价格促销、沙盘与营销实验", "icon": "experiment"},
     {"id": "ops-knowledge", "name": "运营知识库", "description": "经营复盘、决策档案、SOP 与自动化", "icon": "knowledge"},

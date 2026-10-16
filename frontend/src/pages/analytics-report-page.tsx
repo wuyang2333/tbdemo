@@ -1,5 +1,5 @@
 import { CopyOutlined, DownloadOutlined, RobotOutlined, ReloadOutlined, SendOutlined, SettingOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Descriptions, Drawer, Empty, Input, Modal, Row, Spin, Switch, Tag, Typography, message } from "antd";
+import { Button, Card, Col, DatePicker, Descriptions, Empty, Input, Modal, Row, Spin, Switch, Tag, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { useCallback, useEffect, useState } from "react";
 
@@ -29,9 +29,6 @@ export function AnalyticsReportPage() {
   const [storeId, setStoreId] = useState<number | undefined>(undefined);
   const [syncing, setSyncing] = useState(false);
   const [date, setDate] = useState<string | null>(dayjs().subtract(1, "day").format("YYYY-MM-DD"));
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiReply, setAiReply] = useState("");
   const [pushOpen, setPushOpen] = useState(false);
   const [pushCfg, setPushCfg] = useState({ enabled: false, webhook: "", hour: 9, minute: 0 });
   const [pushSaving, setPushSaving] = useState(false);
@@ -136,23 +133,6 @@ export function AnalyticsReportPage() {
       message.success("日报已复制，可粘贴到群/文档");
     } catch {
       message.error("复制失败，请手动选择复制");
-    }
-  };
-
-  const runAI = async () => {
-    setAiOpen(true);
-    setAiLoading(true);
-    setAiReply("");
-    try {
-      const params = new URLSearchParams();
-      if (date) params.set("date", date);
-      if (storeId) params.set("store_id", String(storeId));
-      const { data: res } = await http.post<{ reply: string }>(`/analytics/report/ai?${params.toString()}`, undefined, { timeout: 240000 });
-      setAiReply(res.reply);
-    } catch (error) {
-      message.error(getApiErrorMessage(error));
-    } finally {
-      setAiLoading(false);
     }
   };
 
@@ -316,7 +296,6 @@ export function AnalyticsReportPage() {
         />
         <StoreScopeSelect value={storeId} onChange={setStoreId} />
         <Text className="ops-filter-bar__meta" type="secondary">最近更新 {lastUpdated || "—"}</Text>
-        <Button icon={<RobotOutlined />} onClick={runAI} disabled={!data}>AI 总结</Button>
         <Button icon={<SettingOutlined />} onClick={openPush}>推送设置</Button>
         <HourlyPushButton scope="report" />
         <Button icon={<CopyOutlined />} onClick={copyReport} disabled={!data}>复制日报</Button>
@@ -433,21 +412,6 @@ export function AnalyticsReportPage() {
           </Card>
         </>
       )}
-
-      <Drawer title="AI 日报总结" size="large" open={aiOpen} onClose={() => setAiOpen(false)} destroyOnHidden>
-        {aiLoading ? (
-          <div style={{ textAlign: "center", padding: 60 }}><Spin description="AI 正在生成总结…" /></div>
-        ) : aiReply ? (
-          <div>
-            <Text style={{ fontSize: 14, lineHeight: 1.9, whiteSpace: "pre-wrap" }}>{aiReply}</Text>
-            <div style={{ marginTop: 16 }}>
-              <Button icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(aiReply); message.success("总结已复制"); }}>复制总结</Button>
-            </div>
-          </div>
-        ) : (
-          <Empty description="生成失败或暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }} />
-        )}
-      </Drawer>
 
       <Modal
         title="日报定时推送设置"

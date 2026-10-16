@@ -127,6 +127,21 @@ def _get_gift_or_404(db, gift_id: int):
     return row
 
 
+def _delete_local_image_if_unreferenced(db, image: str) -> None:
+    """Delete an uploaded image only after the last gift stops referencing it."""
+    image = str(image or "").strip()
+    if not image.startswith("/api/images/"):
+        return
+    remaining = db.execute("SELECT 1 FROM gifts WHERE image = ? LIMIT 1", (image,)).fetchone()
+    if remaining:
+        return
+    image_path = DB_PATH.parent / "images" / Path(image.rsplit("/", 1)[-1]).name
+    try:
+        image_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _payload(row) -> dict:
     return {
         "id": row["id"],
@@ -160,6 +175,7 @@ def _payload(row) -> dict:
         "remark_attempted_at": row["remark_attempted_at"],
         "remarked_at": row["remarked_at"],
         "remark_error": row["remark_error"],
+        "remark_next_retry_at": row["remark_next_retry_at"],
         "qianniu_price": row["qianniu_price"],
         "price_before_qianniu": row["price_before_qianniu"],
         "price_synced_at": row["price_synced_at"],
@@ -757,17 +773,11 @@ async def upload_gift_image(
     name = f"g{gift_id}_{uuid.uuid4().hex[:12]}{ext}"
     (qr_dir / name).write_bytes(content)
     old = row["image"]
-    if old and old.startswith("/api/images/"):
-        old_path = qr_dir / Path(old.rsplit("/", 1)[-1])
-        if old_path.exists() and old_path.name != name:
-            try:
-                old_path.unlink()
-            except OSError:
-                pass
     db.execute("UPDATE gifts SET image = ? WHERE id = ?", (f"/api/images/{name}", gift_id))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "image", row["order_no"], "上传图片")
     db.commit()
+    _delete_local_image_if_unreferenced(db, old)
     background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 
@@ -782,17 +792,11 @@ def clear_gift_image(
     row = _get_gift_or_404(db, gift_id)
     _ensure_gift_access(user, row)
     old = row["image"]
-    if old and old.startswith("/api/images/"):
-        old_path = DB_PATH.parent / "images" / Path(old.rsplit("/", 1)[-1])
-        if old_path.exists():
-            try:
-                old_path.unlink()
-            except OSError:
-                pass
     db.execute("UPDATE gifts SET image = '' WHERE id = ?", (gift_id,))
     item = _payload(_get_gift_or_404(db, gift_id))
     log_op(db, user, "gifts", "image", row["order_no"], "移除图片")
     db.commit()
+    _delete_local_image_if_unreferenced(db, old)
     background_tasks.add_task(_sync_tencent_docs_background)
     return {"item": item}
 

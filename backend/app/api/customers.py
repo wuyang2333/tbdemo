@@ -19,7 +19,7 @@ from backend.app.core.db import get_db
 
 router = APIRouter()
 
-PROCESS_STATUSES = {"pending", "contacted", "resolved", "ignored"}
+PROCESS_STATUSES = {"pending", "replied", "ignored"}
 POSITIVE_WORDS = {"满意", "喜欢", "推荐", "不错", "很好", "超值", "正品", "漂亮", "给力", "回购", "五星", "惊喜", "好用", "实惠", "快"}
 NEGATIVE_WORDS = {"差", "失望", "破损", "破了", "漏", "坏", "假", "慢", "薄", "臭", "掉", "退款", "退货", "不值", "不满意", "态度差", "不回复", "色差", "质量问题", "开胶", "瑕疵", "难用", "不推荐", "太小", "太大", "发错", "少件", "脏"}
 POSITIVE_PHRASES = {"效果明显", "口气清新", "温和不刺激", "不刺激牙龈", "不会刺激牙龈", "不酸牙", "不辣嘴", "不刺痛牙龈", "不易炸毛", "不掉毛", "没有异味", "贴合稳固", "干净透亮", "性价比高", "值得回购", "物流很快"}
@@ -42,6 +42,12 @@ ASPECT_WORDS = {
 
 
 class ReviewProcessIn(BaseModel):
+    status: str
+    note: str = Field(default="", max_length=500)
+
+
+class ReviewBatchProcessIn(BaseModel):
+    review_ids: list[int] = Field(min_length=1, max_length=100)
     status: str
     note: str = Field(default="", max_length=500)
 
@@ -76,8 +82,21 @@ class ReviewReplyDraftIn(BaseModel):
     template_id: int | None = None
 
 
+class ReviewBatchReplyDraftIn(BaseModel):
+    review_ids: list[int] = Field(min_length=1, max_length=20)
+    template_id: int | None = None
+
+
+class ReviewKnowledgeSuggestionDecisionIn(BaseModel):
+    status: str = Field(pattern="^(approved|rejected)$")
+
+
 class ReviewReplyApproveIn(BaseModel):
     content: str = Field(min_length=1, max_length=500)
+
+
+class ReviewReplySampleIn(BaseModel):
+    enabled: bool
 
 
 class ReviewReplyTemplateIn(BaseModel):
@@ -119,6 +138,45 @@ class ReviewKnowledgeIn(BaseModel):
     solution: str = Field(min_length=1, max_length=2000)
     reply_template: str = Field(default="", max_length=1000)
     enabled: bool = True
+
+
+IMPROVEMENT_ACTION_STATUSES = {"pending", "diagnosed", "implemented", "observing", "improved", "ignored"}
+IMPROVEMENT_ACTION_STATUS_PATTERN = "^(pending|diagnosed|implemented|observing|improved|ignored)$"
+IMPROVEMENT_ACTION_QUERY_STATUS_PATTERN = "^(|pending|diagnosed|implemented|observing|improved|ignored)$"
+
+
+class ReviewImprovementActionIn(BaseModel):
+    store_id: int
+    item_id: str = Field(default="", max_length=120)
+    item_title: str = Field(default="", max_length=300)
+    topic: str = Field(default="", max_length=80)
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    owner: str = Field(default="", max_length=80)
+    plan: str = Field(default="", max_length=2000)
+    status: str = Field(default="pending", pattern=IMPROVEMENT_ACTION_STATUS_PATTERN)
+    started_at: str | None = Field(default=None, max_length=40)
+    due_at: str | None = Field(default=None, max_length=40)
+    before_negative_rate: float | None = Field(default=None, ge=0, le=100)
+    after_negative_rate: float | None = Field(default=None, ge=0, le=100)
+    note: str = Field(default="", max_length=2000)
+
+
+class ReviewImprovementActionUpdateIn(BaseModel):
+    store_id: int | None = None
+    item_id: str | None = Field(default=None, max_length=120)
+    item_title: str | None = Field(default=None, max_length=300)
+    topic: str | None = Field(default=None, max_length=80)
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    owner: str | None = Field(default=None, max_length=80)
+    plan: str | None = Field(default=None, max_length=2000)
+    status: str | None = Field(default=None, pattern=IMPROVEMENT_ACTION_STATUS_PATTERN)
+    started_at: str | None = Field(default=None, max_length=40)
+    due_at: str | None = Field(default=None, max_length=40)
+    before_negative_rate: float | None = Field(default=None, ge=0, le=100)
+    after_negative_rate: float | None = Field(default=None, ge=0, le=100)
+    note: str | None = Field(default=None, max_length=2000)
 
 
 def _now() -> str:
@@ -207,6 +265,7 @@ def _upsert_review(db, store_id: int, row: dict, source: str, now: str) -> tuple
     review = db.execute("SELECT id FROM product_reviews WHERE store_id = ? AND review_id = ?", (store_id, review_id)).fetchone()
     _analyse_and_save(db, review["id"], store_id, content, append_content)
     _ensure_review_alert(db, store_id, review["id"], content, append_content, now)
+    _refresh_review_knowledge_suggestions(db, store_id)
     return ("updated" if before else "imported"), None
 
 
@@ -660,7 +719,152 @@ def _match_review_knowledge(db, review: dict, *, persist: bool = True, limit: in
     return matches
 
 
-def _review_query(user: dict, store_id: int | None, item_id: str, sentiment: str, process_status: str, q: str, days: int | None, reply_status: str = "") -> tuple[str, list]:
+def _reply_sample_payload(row) -> dict:
+    item = dict(row)
+    try:
+        item["knowledge_ids"] = json.loads(item.get("knowledge_ids") or "[]")
+    except (TypeError, ValueError):
+        item["knowledge_ids"] = []
+    item["enabled"] = bool(item.get("enabled"))
+    return item
+
+
+def _find_reply_samples(db, review: dict, limit: int = 3) -> list[dict]:
+    """Find published, approved examples for the same store/product and similar words."""
+    text_words = {word for word in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9]{3,}", f"{review.get('content') or ''} {review.get('append_content') or ''}")}
+    rows = db.execute(
+        "SELECT * FROM review_reply_samples WHERE store_id = ? AND enabled = 1 ORDER BY datetime(updated_at) DESC LIMIT 80",
+        (review["store_id"],),
+    ).fetchall()
+    scored = []
+    for row in rows:
+        sample = _reply_sample_payload(row)
+        score = 0
+        if sample["item_id"] and sample["item_id"] == review.get("item_id"):
+            score += 3
+        sample_words = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9]{3,}", sample.get("review_content") or ""))
+        score += min(4, len(text_words.intersection(sample_words)))
+        scored.append((score, sample))
+    scored.sort(key=lambda item: (item[0], item[1]["updated_at"]), reverse=True)
+    return [item[1] for item in scored if item[0] > 0][:limit]
+
+
+def _save_reply_sample(db, row, final_reply: str) -> None:
+    review = dict(row)
+    category = "已发布回复"
+    now = _now()
+    db.execute(
+        """INSERT INTO review_reply_samples
+        (review_id, store_id, item_id, item_title, review_content, category, knowledge_ids, ai_draft, final_reply, enabled, created_at, updated_at, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        ON CONFLICT(review_id) DO UPDATE SET category = excluded.category,
+        review_content = excluded.review_content, knowledge_ids = excluded.knowledge_ids, ai_draft = excluded.ai_draft,
+        final_reply = excluded.final_reply, enabled = 1, updated_at = excluded.updated_at,
+        published_at = excluded.published_at""",
+        (review["id"], review["store_id"], review.get("item_id") or "", review.get("item_title") or "", review.get("content") or "",
+         category, "[]", review.get("reply_ai_draft") or "",
+         final_reply.strip(), now, now, review.get("reply_published_at") or now),
+    )
+
+
+def _knowledge_suggestion_payload(row) -> dict:
+    item = dict(row)
+    for field in ("problem_terms", "sample_review_ids"):
+        try:
+            item[field] = json.loads(item.get(field) or "[]")
+        except (TypeError, ValueError):
+            item[field] = []
+    return item
+
+
+def _refresh_review_knowledge_suggestions(db, store_id: int, days: int = 30) -> int:
+    """从重复差评中生成待确认建议，不直接写入可用知识库。"""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    rows = db.execute(
+        """SELECT r.id, r.item_title, r.content, r.append_content, a.aspects_json, a.keywords_json
+        FROM product_reviews r JOIN review_analysis a ON a.review_id = r.id
+        WHERE r.store_id = ? AND a.sentiment = 'negative' AND datetime(r.review_time) >= datetime(?)
+        ORDER BY datetime(r.review_time) DESC, r.id DESC LIMIT 1000""",
+        (store_id, since),
+    ).fetchall()
+    groups: dict[str, dict] = {}
+    for row in rows:
+        try:
+            aspects = json.loads(row["aspects_json"] or "[]")
+            keywords = json.loads(row["keywords_json"] or "[]")
+        except (TypeError, ValueError):
+            aspects, keywords = [], []
+        names = [str(item.get("aspect") or "").strip() for item in aspects if isinstance(item, dict)]
+        names = [name for name in names if name and name != "其他"]
+        if not names:
+            names = [str(term).strip() for term in keywords if len(str(term).strip()) >= 2][:2]
+        for name in dict.fromkeys(names):
+            group = groups.setdefault(name, {"ids": [], "terms": set()})
+            if row["id"] not in group["ids"]:
+                group["ids"].append(int(row["id"]))
+            group["terms"].add(name)
+    created_or_updated = 0
+    now = _now()
+    solutions = {
+        "质量": "核对具体故障、使用场景和图片证据，排查同批次商品；符合售后条件时优先提供退换货方案。",
+        "包装": "核对评价图片和订单包装批次，确认商品是否受损，并登记包装改进。",
+        "物流": "查询物流轨迹和异常节点，主动同步预计送达时间并持续跟进。",
+        "客服": "查询会话记录和响应时长，由专人回访并复盘服务话术和排班。",
+        "性价比": "核对商品成本、同类竞品和买家实际使用反馈，明确价值差距并同步优化卖点或规格。",
+        "舒适度": "结合使用场景和具体不适表现，核对材质、尺寸和结构设计，整理改进项并安排复测。",
+        "柔软度": "核对材质、厚薄和加工工艺，结合样品与同批次记录定位差异，推动材质或工艺调整。",
+        "清洁力": "核对使用方法、适用场景和产品配方，补充正确用法说明，并将效果反馈给产品团队评估。",
+        "尺寸": "核对买家选择的规格、实测尺寸与页面尺码表，修正标注并补充选购提示。",
+        "尺码": "核对买家选择的规格、实测尺寸与页面尺码表，修正标注并补充选购提示。",
+        "刷毛": "核对刷毛材质、软硬度和掉毛情况，抽查同批次样品并推动供应商改进。",
+        "不好用": "还原买家的具体使用场景和预期差异，核对说明与产品表现，补充使用指引并记录改进项。",
+        "材质": "核对材质成分、触感和同批次样品，结合使用场景定位差异并推动材料或工艺优化。",
+        "颜色": "核对实物与页面展示的色差、拍摄光线和批次差异，优化图片说明并复核产品批次。",
+    }
+    replies = {
+        "质量": "很抱歉给您带来不好的使用体验。我们很重视您反馈的问题，请联系在线客服，我们会尽快核实并提供售后方案。",
+        "包装": "很抱歉包装问题影响了您的体验。请联系在线客服提供订单信息，我们会尽快核实并协助处理。",
+        "物流": "很抱歉物流时效没有达到预期。请联系在线客服提供订单信息，我们会立即核查并持续跟进。",
+        "客服": "很抱歉我们的服务响应给您带来困扰。请联系在线客服提供订单信息，我们会安排专人跟进。",
+        "性价比": "感谢您的真实反馈，很抱歉这次体验没有达到您的预期。请联系在线客服，我们会进一步了解具体使用感受。",
+        "舒适度": "很抱歉产品舒适度没有达到您的预期。请联系在线客服告知具体使用情况，我们会认真核实并改进。",
+        "柔软度": "很抱歉产品的柔软度没有达到您的预期。请联系在线客服告知具体情况，我们会尽快核实并记录改进。",
+        "清洁力": "很抱歉产品效果没有达到您的预期。请联系在线客服告知使用方式和具体情况，我们会协助核实。",
+        "尺寸": "很抱歉尺寸没有达到您的预期。请联系在线客服提供订单和实测信息，我们会协助处理并优化说明。",
+        "尺码": "很抱歉尺码没有达到您的预期。请联系在线客服提供订单和实测信息，我们会协助处理并优化说明。",
+        "刷毛": "很抱歉刷毛体验没有达到您的预期。请联系在线客服告知具体情况，我们会尽快核实并改进。",
+        "不好用": "很抱歉这次使用体验没有达到您的预期。请联系在线客服告知具体使用情况，我们会认真核实并协助处理。",
+        "材质": "很抱歉材质触感没有达到您的预期。请联系在线客服告知具体情况，我们会尽快核实并记录改进。",
+        "颜色": "很抱歉颜色效果没有达到您的预期。请联系在线客服提供订单和实物情况，我们会协助核实。",
+    }
+    for name, group in groups.items():
+        if len(group["ids"]) < 3:
+            continue
+        title = f"{name}问题处理建议"
+        existing = db.execute(
+            "SELECT id FROM review_knowledge_articles WHERE store_id IN (0, ?) AND title = ?",
+            (store_id, title),
+        ).fetchone()
+        if existing:
+            continue
+        terms = list(group["terms"])
+        sample_ids = group["ids"][:8]
+        db.execute(
+            """INSERT INTO review_knowledge_suggestions
+            (store_id, title, category, problem_terms, solution, reply_template, evidence_count, sample_review_ids, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            ON CONFLICT(store_id, title) DO UPDATE SET
+                category = excluded.category, problem_terms = excluded.problem_terms, solution = excluded.solution,
+                reply_template = excluded.reply_template, evidence_count = excluded.evidence_count,
+                sample_review_ids = excluded.sample_review_ids, updated_at = excluded.updated_at
+            WHERE review_knowledge_suggestions.status = 'pending'""",
+            (store_id, title, name, json.dumps(terms, ensure_ascii=False), solutions.get(name, "汇总具体问题、核对证据并同步改进责任人，形成可追踪的处理闭环。"), replies.get(name, "很抱歉给您带来不好的体验。请联系在线客服提供订单信息，我们会尽快核实并妥善处理。"), len(group["ids"]), json.dumps(sample_ids), now, now),
+        )
+        created_or_updated += 1
+    return created_or_updated
+
+
+def _review_query(user: dict, store_id: int | None, item_id: str, sentiment: str, process_status: str, q: str, days: int | None, reply_status: str = "", review_status: str = "") -> tuple[str, list]:
     clauses, params = _visible_clause(user)
     if store_id is not None:
         clauses.append("r.store_id = ?")
@@ -677,10 +881,13 @@ def _review_query(user: dict, store_id: int | None, item_id: str, sentiment: str
     if reply_status:
         clauses.append("r.reply_status = ?")
         params.append(reply_status)
+    if review_status:
+        clauses.append("a.review_status = ?")
+        params.append(review_status)
     if q.strip():
         like = f"%{q.strip()}%"
-        clauses.append("(r.review_id LIKE ? OR r.content LIKE ? OR r.append_content LIKE ? OR r.item_title LIKE ? OR r.item_id LIKE ?)")
-        params.extend([like, like, like, like, like])
+        clauses.append("(r.review_id LIKE ? OR r.content LIKE ? OR r.append_content LIKE ? OR r.item_title LIKE ? OR r.item_id LIKE ? OR EXISTS (SELECT 1 FROM product_aliases pa WHERE pa.store_id = r.store_id AND pa.item_id = r.item_id AND pa.alias LIKE ?))")
+        params.extend([like, like, like, like, like, like])
     if days:
         clauses.append("datetime(r.review_time) >= datetime(?)")
         params.append((datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
@@ -697,20 +904,27 @@ def list_reviews(
     store_id: int | None = None,
     item_id: str = "",
     sentiment: str = Query("", pattern="^(|positive|neutral|negative)$"),
-    process_status: str = Query("", pattern="^(|pending|contacted|resolved|ignored)$"),
+    process_status: str = Query("", pattern="^(|pending|replied|ignored)$"),
     reply_status: str = Query("", pattern="^(|draft|approved|published|failed)$"),
+    review_status: str = Query("", pattern="^(|auto|needs_review|confirmed)$"),
     q: str = "",
     days: int | None = Query(None, ge=1, le=3650),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     order_by: str = Query("priority", pattern="^(priority|recent)$"),
+    order_dir: str = Query("desc", pattern="^(asc|desc)$"),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     if store_id is not None:
         _ensure_store_access(user, store_id, db)
-    where, params = _review_query(user, store_id, item_id.strip(), sentiment, process_status, q, days, reply_status)
+    where, params = _review_query(user, store_id, item_id.strip(), sentiment, process_status, q, days, reply_status, review_status)
     total = db.execute("SELECT COUNT(*) AS c FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id" + where, params).fetchone()["c"]
+    if order_by == "recent":
+        direction = "ASC" if order_dir == "asc" else "DESC"
+        order_clause = f"ORDER BY datetime(r.review_time) {direction}, r.id {direction}"
+    else:
+        order_clause = "ORDER BY priority_score DESC, datetime(r.review_time) DESC, r.id DESC"
     rows = db.execute(
         """
         SELECT r.*, a.sentiment, a.confidence, a.aspects_json, a.keywords_json, a.severity,
@@ -726,7 +940,7 @@ def list_reviews(
         LEFT JOIN review_analysis a ON a.review_id = r.id
         LEFT JOIN stores s ON s.id = r.store_id
         LEFT JOIN store_item_realtime rt ON rt.store_id = r.store_id AND rt.item_id = r.item_id
-        """ + where + (" ORDER BY priority_score DESC, datetime(r.review_time) DESC, r.id DESC" if order_by == "priority" else " ORDER BY datetime(r.review_time) DESC, r.id DESC") + " LIMIT ? OFFSET ?",
+        """ + where + " " + order_clause + " LIMIT ? OFFSET ?",
         [*params, page_size, (page - 1) * page_size],
     ).fetchall()
     return {"items": [_review_payload(row) for row in rows], "total": total, "page": page, "page_size": page_size}
@@ -736,24 +950,25 @@ def list_reviews(
 def review_summary(
     store_id: int | None = None,
     item_id: str = "",
+    q: str = "",
     days: int = Query(30, ge=1, le=3650),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
     if store_id is not None:
         _ensure_store_access(user, store_id, db)
-    where, params = _review_query(user, store_id, item_id.strip(), "", "", "", days)
-    rows = db.execute("SELECT r.item_id, r.item_title, r.review_time, r.process_status, a.sentiment, a.aspects_json, a.severity, a.review_status FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id" + where, params).fetchall()
+    where, params = _review_query(user, store_id, item_id.strip(), "", "", q, days)
+    rows = db.execute("SELECT r.store_id, r.item_id, r.item_title, r.review_time, r.process_status, a.sentiment, a.aspects_json, a.severity, a.review_status FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id" + where, params).fetchall()
     total = len(rows)
     sentiments = Counter((row["sentiment"] or "neutral") for row in rows)
     aspects: Counter[str] = Counter()
-    negative_items: Counter[str] = Counter()
+    negative_items: Counter[tuple[int, str, str]] = Counter()
     trend: dict[str, dict] = {}
     pending = 0
     needs_review = 0
     for row in rows:
         if row["sentiment"] == "negative":
-            negative_items[row["item_title"] or row["item_id"] or "未命名商品"] += 1
+            negative_items[(row["store_id"], row["item_id"] or "", row["item_title"] or row["item_id"] or "未命名商品")] += 1
         if row["process_status"] == "pending" and (row["sentiment"] == "negative" or row["severity"] in ("medium", "high")):
             pending += 1
         needs_review += int(row["review_status"] == "needs_review")
@@ -762,7 +977,7 @@ def review_summary(
         except (TypeError, ValueError):
             parsed = []
         for aspect in parsed:
-            if aspect.get("sentiment") == "negative":
+            if _is_negative_topic_mention(row["sentiment"], aspect):
                 aspects[aspect.get("aspect", "其他")] += 1
         day = str(row["review_time"] or "")[:10]
         if day:
@@ -775,7 +990,10 @@ def review_summary(
         "negative_rate": round(sentiments["negative"] / total * 100, 1) if total else 0,
         "pending_count": pending, "needs_review_count": needs_review,
         "top_aspects": [{"aspect": key, "count": value} for key, value in aspects.most_common(8)],
-        "negative_items": [{"item_title": key, "count": value} for key, value in negative_items.most_common(8)],
+        "negative_items": [
+            {"store_id": key[0], "item_id": key[1], "item_title": key[2], "count": value}
+            for key, value in negative_items.most_common(8)
+        ],
         "trend": [trend[key] for key in sorted(trend)],
     }
 
@@ -791,12 +1009,285 @@ def review_product_summary(
         _ensure_store_access(user, store_id, db)
     where, params = _review_query(user, store_id, "", "", "", "", days)
     rows = db.execute(
-        """SELECT r.item_id, r.item_title, COUNT(*) AS total,
+        """SELECT r.store_id, r.item_id, r.item_title, COUNT(*) AS total,
         SUM(CASE WHEN a.sentiment = 'positive' THEN 1 ELSE 0 END) AS positive,
         SUM(CASE WHEN a.sentiment = 'negative' THEN 1 ELSE 0 END) AS negative
         FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id""" + where +
         " GROUP BY r.store_id, r.item_id, r.item_title ORDER BY negative DESC, total DESC LIMIT 100", params).fetchall()
-    return {"days": days, "items": [{"item_id": row["item_id"], "item_title": row["item_title"], "total": row["total"], "positive": row["positive"] or 0, "negative": row["negative"] or 0, "negative_rate": round((row["negative"] or 0) / row["total"] * 100, 1) if row["total"] else 0} for row in rows]}
+    return {"days": days, "items": [{"store_id": row["store_id"], "item_id": row["item_id"], "item_title": row["item_title"], "total": row["total"], "positive": row["positive"] or 0, "negative": row["negative"] or 0, "negative_rate": round((row["negative"] or 0) / row["total"] * 100, 1) if row["total"] else 0} for row in rows]}
+
+
+def _quality_product_risk(total: int, negative: int, negative_rate: float, negative_rate_change: float) -> str:
+    """将评论信号压缩成商品经营看板可读的风险等级。
+
+    规则刻意保持确定性，并把样本量提示单独返回，避免把小样本的高比例
+    直接当成已确认的质量问题。
+    """
+    if not total or not negative:
+        return "normal"
+    if total < 5:
+        return "medium" if negative_rate >= 50 else "low"
+    if negative >= 5 or negative_rate >= 30 or (negative >= 3 and negative_rate_change >= 15):
+        return "high"
+    if negative >= 2 or negative_rate >= 15 or negative_rate_change >= 10:
+        return "medium"
+    return "low"
+
+
+def _quality_review_rows(db, where: str, params: list) -> list[dict]:
+    rows = db.execute(
+        """
+        SELECT r.id, r.store_id, r.item_id, r.item_title, r.content, r.append_content,
+               r.review_time, a.sentiment, a.aspects_json, a.keywords_json
+        FROM product_reviews r
+        LEFT JOIN review_analysis a ON a.review_id = r.id
+        """ + where + " ORDER BY datetime(r.review_time) DESC, r.id DESC",
+        params,
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _is_negative_topic_mention(review_sentiment: str | None, aspect: dict) -> bool:
+    """A problem-topic mention must belong to a negative review and be negative itself.
+
+    The review-level sentiment is authoritative after manual confirmation. This
+    prevents stale aspect labels from putting a manually confirmed positive or
+    neutral review back into problem evidence and product rankings.
+    """
+    if str(review_sentiment or "").strip().lower() != "negative":
+        return False
+    aspect_sentiment = str(aspect.get("sentiment") or "").strip().lower()
+    return not aspect_sentiment or aspect_sentiment == "negative"
+
+
+@router.get("/reviews/quality-overview")
+def review_quality_overview(
+    store_id: int | None = None,
+    days: int = Query(30, ge=1, le=3650),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    """商品经营/质量改进看板的只读聚合数据。
+
+    当前窗口与紧邻的等长上周期分别统计，商品风险和主题证据只使用当前窗口，
+    这样看板中的代表评价不会混入旧周期数据。
+    """
+    if store_id is not None:
+        _ensure_store_access(user, store_id, db)
+
+    base_where, base_params = _review_query(user, store_id, "", "", "", "", None)
+    now = datetime.now(timezone.utc)
+    current_start = now - timedelta(days=days)
+    previous_start = current_start - timedelta(days=days)
+    current_where = base_where + (" AND " if base_where else " WHERE ") + "datetime(r.review_time) >= datetime(?)"
+    previous_where = (
+        base_where
+        + (" AND " if base_where else " WHERE ")
+        + "datetime(r.review_time) >= datetime(?) AND datetime(r.review_time) < datetime(?)"
+    )
+    current_rows = _quality_review_rows(db, current_where, [*base_params, current_start.isoformat()])
+    previous_rows = _quality_review_rows(
+        db,
+        previous_where,
+        [*base_params, previous_start.isoformat(), current_start.isoformat()],
+    )
+
+    def product_key(row: dict) -> tuple:
+        return (row.get("store_id"), row.get("item_id") or "", row.get("item_title") or "")
+
+    def aggregate(rows: list[dict]) -> dict[tuple, dict]:
+        result: dict[tuple, dict] = {}
+        for row in rows:
+            key = product_key(row)
+            item = result.setdefault(key, {"total": 0, "negative": 0})
+            item["total"] += 1
+            item["negative"] += int(row.get("sentiment") == "negative")
+        return result
+
+    current_products = aggregate(current_rows)
+    previous_products = aggregate(previous_rows)
+    product_rows = []
+    for key, stats in current_products.items():
+        store_key, item_id, item_title = key
+        previous = previous_products.get(key, {"total": 0, "negative": 0})
+        total = stats["total"]
+        negative = stats["negative"]
+        previous_total = previous["total"]
+        previous_negative = previous["negative"]
+        negative_rate = round(negative / total * 100, 1) if total else 0
+        previous_negative_rate = round(previous_negative / previous_total * 100, 1) if previous_total else 0
+        negative_rate_change = round(negative_rate - previous_negative_rate, 1)
+
+        aspects: Counter[str] = Counter()
+        for row in current_rows:
+            if product_key(row) != key:
+                continue
+            try:
+                parsed_aspects = json.loads(row.get("aspects_json") or "[]")
+            except (TypeError, ValueError):
+                parsed_aspects = []
+            for aspect in parsed_aspects:
+                if _is_negative_topic_mention(row.get("sentiment"), aspect):
+                    aspects[str(aspect.get("aspect") or "其他")] += 1
+
+        product_rows.append(
+            {
+                "store_id": store_key,
+                "item_id": item_id,
+                "item_title": item_title or item_id or "未命名商品",
+                "total": total,
+                "negative": negative,
+                "negative_rate": negative_rate,
+                "previous_total": previous_total,
+                "previous_negative": previous_negative,
+                "previous_negative_rate": previous_negative_rate,
+                "total_change": total - previous_total,
+                "negative_change": negative - previous_negative,
+                "negative_rate_change": negative_rate_change,
+                "top_aspects": [{"aspect": name, "count": count} for name, count in aspects.most_common(5)],
+                "risk_level": _quality_product_risk(total, negative, negative_rate, negative_rate_change),
+                "sample_warning": "样本较少，暂不建议单独判断" if total < 5 else "",
+            }
+        )
+
+    product_rows.sort(
+        key=lambda item: (
+            {"high": 3, "medium": 2, "low": 1, "normal": 0}[item["risk_level"]],
+            item["negative"],
+            item["negative_rate_change"],
+            item["total"],
+        ),
+        reverse=True,
+    )
+    topics = _topic_data(current_rows)
+    current_negative = sum(int(row.get("sentiment") == "negative") for row in current_rows)
+    previous_negative = sum(int(row.get("sentiment") == "negative") for row in previous_rows)
+    current_total = len(current_rows)
+    previous_total = len(previous_rows)
+    current_rate = round(current_negative / current_total * 100, 1) if current_total else 0
+    previous_rate = round(previous_negative / previous_total * 100, 1) if previous_total else 0
+
+    return {
+        "days": days,
+        "current_window": {"start": current_start.isoformat(), "end": now.isoformat()},
+        "previous_window": {"start": previous_start.isoformat(), "end": current_start.isoformat()},
+        "summary": {
+            "total": current_total,
+            "negative": current_negative,
+            "negative_rate": current_rate,
+            "previous_total": previous_total,
+            "previous_negative": previous_negative,
+            "previous_negative_rate": previous_rate,
+            "total_change": current_total - previous_total,
+            "negative_change": current_negative - previous_negative,
+            "negative_rate_change": round(current_rate - previous_rate, 1),
+            "product_count": len(product_rows),
+            "high_risk_product_count": sum(item["risk_level"] == "high" for item in product_rows),
+        },
+        "products": product_rows[:100],
+        "topics": topics["items"],
+        "emerging_terms": topics["emerging_terms"],
+    }
+
+
+def _improvement_action_values(data: dict) -> dict:
+    values = dict(data)
+    for field in ("item_id", "item_title", "topic", "title", "description", "owner", "plan", "note"):
+        if field in values and values[field] is not None:
+            values[field] = values[field].strip()
+    if "title" in values and not values["title"]:
+        raise HTTPException(status_code=400, detail="改进事项标题不能为空")
+    if "status" in values and values["status"] not in IMPROVEMENT_ACTION_STATUSES:
+        raise HTTPException(status_code=400, detail="改进事项状态不正确")
+    return values
+
+
+@router.get("/reviews/improvement-actions")
+def list_review_improvement_actions(
+    store_id: int | None = None,
+    status: str = Query("", pattern=IMPROVEMENT_ACTION_QUERY_STATUS_PATTERN),
+    item_id: str = "",
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    if store_id is not None:
+        _ensure_store_access(user, store_id, db)
+    clauses, params = _visible_clause(user)
+    if store_id is not None:
+        clauses.append("r.store_id = ?")
+        params.append(store_id)
+    if status:
+        clauses.append("r.status = ?")
+        params.append(status)
+    if item_id.strip():
+        clauses.append("r.item_id = ?")
+        params.append(item_id.strip())
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    rows = db.execute(
+        "SELECT r.* FROM review_improvement_actions r" + where + " ORDER BY datetime(r.updated_at) DESC, r.id DESC LIMIT 500",
+        params,
+    ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": len(rows)}
+
+
+@router.post("/reviews/improvement-actions")
+def create_review_improvement_action(
+    body: ReviewImprovementActionIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    _ensure_store_access(user, body.store_id, db)
+    values = _improvement_action_values(body.model_dump())
+    now = _now()
+    cursor = db.execute(
+        """
+        INSERT INTO review_improvement_actions
+        (store_id, item_id, item_title, topic, title, description, owner, plan, status,
+         started_at, due_at, before_negative_rate, after_negative_rate, note, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            values["store_id"], values["item_id"], values["item_title"], values["topic"],
+            values["title"], values["description"], values["owner"], values["plan"], values["status"],
+            values["started_at"], values["due_at"], values["before_negative_rate"],
+            values["after_negative_rate"], values["note"], now, now,
+        ),
+    )
+    row = db.execute("SELECT * FROM review_improvement_actions WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return {"item": dict(row)}
+
+
+@router.put("/reviews/improvement-actions/{action_id}")
+def update_review_improvement_action(
+    action_id: int,
+    body: ReviewImprovementActionUpdateIn,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+) -> dict:
+    row = db.execute("SELECT * FROM review_improvement_actions WHERE id = ?", (action_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="改进事项不存在")
+    _ensure_store_access(user, row["store_id"], db)
+    values = _improvement_action_values(body.model_dump(exclude_unset=True))
+    if "store_id" in values:
+        if values["store_id"] is None:
+            raise HTTPException(status_code=400, detail="目标店铺不能为空")
+        _ensure_store_access(user, values["store_id"], db)
+    if not values:
+        return {"item": dict(row)}
+    allowed_fields = {
+        "store_id", "item_id", "item_title", "topic", "title", "description", "owner", "plan",
+        "status", "started_at", "due_at", "before_negative_rate", "after_negative_rate", "note",
+    }
+    values = {field: value for field, value in values.items() if field in allowed_fields}
+    values["updated_at"] = _now()
+    assignments = ", ".join(f"{field} = ?" for field in values)
+    db.execute(
+        f"UPDATE review_improvement_actions SET {assignments} WHERE id = ?",
+        [*values.values(), action_id],
+    )
+    updated = db.execute("SELECT * FROM review_improvement_actions WHERE id = ?", (action_id,)).fetchone()
+    return {"item": dict(updated)}
 
 
 @router.get("/reviews/alerts")
@@ -1057,10 +1548,10 @@ def _generate_negative_reply_drafts(db, store_id: int, limit: int = 30) -> dict:
         review_id = int(row["id"])
         reply = ai_replies.get(review_id) or fallback_replies[review_id]
         cur = db.execute(
-            """UPDATE product_reviews SET reply_status = 'draft', reply_content = ?, reply_error = '',
+            """UPDATE product_reviews SET reply_status = 'draft', reply_content = ?, reply_ai_draft = ?, reply_error = '',
             reply_approved_at = NULL, updated_at = ?
             WHERE id = ? AND reply_status = 'none' AND trim(reply_content) = ''""",
-            (reply, now, review_id),
+            (reply, reply, now, review_id),
         )
         if cur.rowcount:
             generated += 1
@@ -1194,17 +1685,22 @@ def _topic_data(rows: list[dict]) -> dict:
             name = str(aspect.get("aspect") or "其他")
             item = topics.setdefault(name, {"topic": name, "count": 0, "negative": 0, "products": Counter(), "examples": []})
             item["count"] += 1
-            item["negative"] += int(aspect.get("sentiment") == "negative" or row.get("sentiment") == "negative")
-            product = row.get("item_title") or row.get("item_id") or "未关联商品"
-            item["products"][product] += 1
+            is_negative = _is_negative_topic_mention(row.get("sentiment"), aspect)
+            item["negative"] += int(is_negative)
+            if not is_negative:
+                continue
+            store_id = row.get("store_id")
+            product_id = row.get("item_id") or ""
+            product = row.get("item_title") or product_id or "未关联商品"
+            item["products"][(store_id, product_id, product)] += 1
             if len(item["examples"]) < 3:
-                item["examples"].append({"id": row["id"], "content": (row.get("content") or row.get("append_content") or "")[:100], "item_title": product})
+                item["examples"].append({"id": row["id"], "store_id": store_id, "content": (row.get("content") or row.get("append_content") or "")[:100], "item_id": product_id, "item_title": product})
     result = []
     for item in topics.values():
         result.append({
             "topic": item["topic"], "count": item["count"], "negative": item["negative"],
             "negative_rate": round(item["negative"] / item["count"] * 100, 1) if item["count"] else 0,
-            "products": [{"name": key, "count": value} for key, value in item["products"].most_common(3)],
+            "products": [{"store_id": key[0], "item_id": key[1], "name": key[2], "count": value} for key, value in item["products"].most_common(3)],
             "examples": item["examples"],
         })
     result.sort(key=lambda item: (item["negative"], item["count"]), reverse=True)
@@ -1217,7 +1713,7 @@ def review_topics(store_id: int | None = None, days: int = Query(30, ge=1, le=36
         _ensure_store_access(user, store_id, db)
     where, params = _review_query(user, store_id, "", "", "", "", days)
     rows = [dict(row) for row in db.execute(
-        "SELECT r.id, r.item_id, r.item_title, r.content, r.append_content, a.sentiment, a.aspects_json, a.keywords_json FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id" + where,
+        "SELECT r.id, r.store_id, r.item_id, r.item_title, r.content, r.append_content, a.sentiment, a.aspects_json, a.keywords_json FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id" + where,
         params,
     ).fetchall()]
     return {"days": days, "total": len(rows), **_topic_data(rows)}
@@ -1322,10 +1818,11 @@ def review_accuracy(store_id: int | None = None, days: int = Query(90, ge=1, le=
 def _build_weekly_report(rows: list[dict], week_start: str, week_end: str) -> dict:
     sentiments = Counter(row.get("sentiment") or "neutral" for row in rows)
     topics = _topic_data(rows)
-    products: dict[str, dict] = {}
+    products: dict[tuple[int | None, str, str], dict] = {}
     for row in rows:
         name = row.get("item_title") or row.get("item_id") or "未关联商品"
-        item = products.setdefault(name, {"item_title": name, "total": 0, "negative": 0})
+        key = (row.get("store_id"), row.get("item_id") or "", name)
+        item = products.setdefault(key, {"store_id": key[0], "item_id": key[1], "item_title": name, "total": 0, "negative": 0})
         item["total"] += 1
         item["negative"] += int(row.get("sentiment") == "negative")
     top_products = sorted(products.values(), key=lambda item: (item["negative"], item["total"]), reverse=True)[:5]
@@ -1346,7 +1843,7 @@ def _generate_weekly_report(db, store_id: int) -> dict:
     today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=today.weekday())
     rows = [dict(row) for row in db.execute(
-        """SELECT r.id, r.item_id, r.item_title, r.content, r.append_content, a.sentiment, a.aspects_json, a.keywords_json
+        """SELECT r.id, r.store_id, r.item_id, r.item_title, r.content, r.append_content, a.sentiment, a.aspects_json, a.keywords_json
         FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id
         WHERE r.store_id = ? AND date(r.review_time) >= date(?) AND date(r.review_time) <= date(?)""",
         (store_id, start.isoformat(), today.isoformat()),
@@ -1378,7 +1875,7 @@ def review_weekly_report(store_id: int | None = None, user: dict = Depends(get_c
     start = today - timedelta(days=today.weekday())
     clauses.extend(["date(r.review_time) >= date(?)", "date(r.review_time) <= date(?)"]); params.extend([start.isoformat(), today.isoformat()])
     rows = [dict(row) for row in db.execute(
-        "SELECT r.id, r.item_id, r.item_title, r.content, r.append_content, a.sentiment, a.aspects_json, a.keywords_json FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id WHERE " + " AND ".join(clauses),
+        "SELECT r.id, r.store_id, r.item_id, r.item_title, r.content, r.append_content, a.sentiment, a.aspects_json, a.keywords_json FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id WHERE " + " AND ".join(clauses),
         params,
     ).fetchall()]
     return _build_weekly_report(rows, start.isoformat(), today.isoformat())
@@ -1414,6 +1911,102 @@ def list_review_knowledge(store_id: int | None = None, user: dict = Depends(get_
     else:
         rows = db.execute("SELECT * FROM review_knowledge_articles WHERE store_id = 0 ORDER BY category, id").fetchall()
     return {"items": [_knowledge_payload(row) for row in rows]}
+
+
+@router.get("/reviews/reply-samples")
+def list_review_reply_samples(store_id: int | None = None, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    if store_id is not None:
+        _ensure_store_access(user, store_id, db)
+        rows = db.execute("SELECT * FROM review_reply_samples WHERE store_id = ? ORDER BY datetime(published_at) DESC", (store_id,)).fetchall()
+    else:
+        visible = visible_store_ids(user)
+        if visible is None:
+            rows = db.execute("SELECT * FROM review_reply_samples ORDER BY datetime(published_at) DESC").fetchall()
+        elif visible:
+            rows = db.execute(f"SELECT * FROM review_reply_samples WHERE store_id IN ({','.join('?' for _ in visible)}) ORDER BY datetime(published_at) DESC", sorted(visible)).fetchall()
+        else:
+            rows = []
+    return {"items": [_reply_sample_payload(row) for row in rows], "total": len(rows)}
+
+
+@router.put("/reviews/reply-samples/{sample_id}")
+def update_review_reply_sample(sample_id: int, body: ReviewReplySampleIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    row = db.execute("SELECT * FROM review_reply_samples WHERE id = ?", (sample_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="回复学习样本不存在")
+    _ensure_store_access(user, row["store_id"], db)
+    db.execute("UPDATE review_reply_samples SET enabled = ?, updated_at = ? WHERE id = ?", (int(body.enabled), _now(), sample_id))
+    return {"item": _reply_sample_payload(db.execute("SELECT * FROM review_reply_samples WHERE id = ?", (sample_id,)).fetchone())}
+
+
+@router.delete("/reviews/reply-samples/{sample_id}")
+def delete_review_reply_sample(sample_id: int, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    row = db.execute("SELECT * FROM review_reply_samples WHERE id = ?", (sample_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="回复学习样本不存在")
+    _ensure_store_access(user, row["store_id"], db)
+    db.execute("DELETE FROM review_reply_samples WHERE id = ?", (sample_id,))
+    return {"ok": True}
+
+
+@router.get("/reviews/knowledge-suggestions")
+def list_review_knowledge_suggestions(store_id: int | None = None, status: str = Query("pending", pattern="^(pending|approved|rejected|all)$"), user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    if store_id is not None:
+        _ensure_store_access(user, store_id, db)
+    visible = visible_store_ids(user)
+    clauses, params = [], []
+    if store_id is not None:
+        clauses.append("store_id = ?")
+        params.append(store_id)
+    elif visible is not None:
+        if not visible:
+            return {"items": [], "total": 0}
+        clauses.append(f"store_id IN ({','.join('?' for _ in visible)})")
+        params.extend(sorted(visible))
+    if status != "all":
+        clauses.append("status = ?")
+        params.append(status)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    rows = db.execute("SELECT * FROM review_knowledge_suggestions" + where + " ORDER BY evidence_count DESC, datetime(updated_at) DESC", params).fetchall()
+    return {"items": [_knowledge_suggestion_payload(row) for row in rows], "total": len(rows)}
+
+
+@router.post("/reviews/knowledge-suggestions/refresh")
+def refresh_review_knowledge_suggestions(store_id: int | None = None, days: int = Query(30, ge=1, le=365), user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    if store_id is not None:
+        _ensure_store_access(user, store_id, db)
+        store_ids = [store_id]
+    else:
+        visible = visible_store_ids(user)
+        store_ids = sorted(visible) if visible is not None else [row["id"] for row in db.execute("SELECT id FROM stores ORDER BY id").fetchall()]
+    generated = sum(_refresh_review_knowledge_suggestions(db, item, days) for item in store_ids)
+    return {"ok": True, "generated": generated}
+
+
+@router.put("/reviews/knowledge-suggestions/{suggestion_id}")
+def decide_review_knowledge_suggestion(suggestion_id: int, body: ReviewKnowledgeSuggestionDecisionIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    row = db.execute("SELECT * FROM review_knowledge_suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="知识库建议不存在")
+    _ensure_store_access(user, row["store_id"], db)
+    if body.status == "rejected":
+        db.execute("UPDATE review_knowledge_suggestions SET status = 'rejected', updated_at = ? WHERE id = ?", (_now(), suggestion_id))
+        return {"ok": True, "status": "rejected"}
+    try:
+        db.execute(
+            """INSERT INTO review_knowledge_articles
+            (store_id, title, category, problem_terms, solution, reply_template, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(store_id, title) DO UPDATE SET category = excluded.category,
+            problem_terms = excluded.problem_terms, solution = excluded.solution,
+            reply_template = excluded.reply_template, enabled = 1, updated_at = excluded.updated_at""",
+            (row["store_id"], row["title"], row["category"], row["problem_terms"], row["solution"], row["reply_template"], _now(), _now()),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"知识条目保存失败：{exc}") from exc
+    db.execute("UPDATE review_knowledge_suggestions SET status = 'approved', updated_at = ? WHERE id = ?", (_now(), suggestion_id))
+    article = db.execute("SELECT * FROM review_knowledge_articles WHERE store_id = ? AND title = ?", (row["store_id"], row["title"])).fetchone()
+    return {"ok": True, "status": "approved", "item": _knowledge_payload(article)}
 
 
 @router.post("/reviews/knowledge")
@@ -1612,8 +2205,9 @@ async def import_reviews(
             errors.append({"row": index, "error": str(exc)[:160]})
     _evaluate_trend_alert(db, store_id)
     _generate_weekly_report(db, store_id)
+    knowledge_suggestions = _refresh_review_knowledge_suggestions(db, store_id)
     drafts = _generate_negative_reply_drafts(db, store_id)
-    return {"ok": True, "imported": imported, "updated": updated, "errors": errors[:20], "error_count": len(errors), "auto_reply_drafts": drafts}
+    return {"ok": True, "imported": imported, "updated": updated, "errors": errors[:20], "error_count": len(errors), "knowledge_suggestions": knowledge_suggestions, "auto_reply_drafts": drafts}
 
 
 @router.post("/reviews/sync")
@@ -1658,6 +2252,7 @@ def sync_reviews(
             errors.append({"index": index, "error": str(exc)[:160]})
     _evaluate_trend_alert(db, body.store_id)
     _generate_weekly_report(db, body.store_id)
+    knowledge_suggestions = _refresh_review_knowledge_suggestions(db, body.store_id)
     drafts = _generate_negative_reply_drafts(db, body.store_id)
     return {
         "ok": not errors or imported > 0 or updated > 0,
@@ -1667,6 +2262,7 @@ def sync_reviews(
         "errors": errors[:20],
         "source": body.source,
         "auto_reply_drafts": drafts,
+        "knowledge_suggestions": knowledge_suggestions,
         "capabilities": {"review_text": True, "item": True},
     }
 
@@ -1702,6 +2298,7 @@ def sync_reviews_auto(
             result.setdefault("diagnostics", []).append(f"AI 复核失败：{exc}")
             result["ai_reviewed"] = 0
         result["auto_reply_drafts"] = _generate_negative_reply_drafts(db, row["id"])
+        result["knowledge_suggestions"] = _refresh_review_knowledge_suggestions(db, row["id"])
         results.append(result)
     successful = sum(1 for result in results if result.get("ok"))
     content_available = any(result.get("content_available") for result in results)
@@ -1742,6 +2339,7 @@ def sync_reviews_auto_all(db, days: int = 2) -> dict:
             result.setdefault("diagnostics", []).append(f"AI 复核失败：{exc}")
             result["ai_reviewed"] = 0
         result["auto_reply_drafts"] = _generate_negative_reply_drafts(db, row["id"])
+        result["knowledge_suggestions"] = _refresh_review_knowledge_suggestions(db, row["id"])
         results.append(result)
     return {"total": len(results), "ok": sum(1 for result in results if result.get("ok")), "results": results}
 
@@ -1754,6 +2352,7 @@ def analyze_review(review_id: int, user: dict = Depends(get_current_user), db=De
     _ensure_store_access(user, row["store_id"], db)
     _analyse_and_save(db, review_id, row["store_id"], row["content"], row["append_content"])
     _ensure_review_alert(db, row["store_id"], review_id, row["content"], row["append_content"], _now())
+    _refresh_review_knowledge_suggestions(db, row["store_id"])
     _generate_negative_reply_drafts(db, row["store_id"])
     result = db.execute("SELECT r.*, a.sentiment, a.confidence, a.aspects_json, a.keywords_json, a.severity, a.review_status, a.analysis_reason, a.analysis_source, a.routing_reason, s.name AS store_name FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id LEFT JOIN stores s ON s.id = r.store_id WHERE r.id = ?", (review_id,)).fetchone()
     return {"item": _review_payload(result)}
@@ -1780,6 +2379,7 @@ def confirm_review_sentiment(review_id: int, body: ReviewSentimentIn, user: dict
         (review_id, row["store_id"], _content_hash(row["content"], row["append_content"]), before["sentiment"] if before else current["sentiment"], body.sentiment, body.reason.strip() or "人工确认", now, now),
     )
     if body.sentiment == "negative":
+        _refresh_review_knowledge_suggestions(db, row["store_id"])
         _generate_negative_reply_drafts(db, row["store_id"])
     result = db.execute("SELECT r.*, a.sentiment, a.confidence, a.aspects_json, a.keywords_json, a.severity, a.review_status, a.analysis_reason, a.analysis_source, a.routing_reason, s.name AS store_name FROM product_reviews r LEFT JOIN review_analysis a ON a.review_id = r.id LEFT JOIN stores s ON s.id = r.store_id WHERE r.id = ?", (review_id,)).fetchone()
     return {"item": _review_payload(result)}
@@ -1793,8 +2393,32 @@ def process_review(review_id: int, body: ReviewProcessIn, user: dict = Depends(g
     if not row:
         raise HTTPException(status_code=404, detail="评论不存在")
     _ensure_store_access(user, row["store_id"], db)
+    if row["reply_status"] == "published" and body.status != "replied":
+        raise HTTPException(status_code=400, detail="该评论的回复已发布，处理状态固定为已回复")
+    if body.status == "replied" and row["reply_status"] != "published":
+        raise HTTPException(status_code=400, detail="只有回复已成功发布到淘宝后，处理状态才会自动变为已回复")
     db.execute("UPDATE product_reviews SET process_status = ?, updated_at = ? WHERE id = ?", (body.status, _now(), review_id))
+    db.commit()
     return {"ok": True, "status": body.status, "note": body.note}
+
+
+@router.post("/reviews/batch-process")
+def batch_process_reviews(body: ReviewBatchProcessIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    if body.status not in {"pending", "ignored"}:
+        raise HTTPException(status_code=400, detail="批量处理只支持待处理或已忽略")
+    review_ids = list(dict.fromkeys(body.review_ids))
+    placeholders = ",".join("?" for _ in review_ids)
+    rows = db.execute(f"SELECT id, store_id, reply_status FROM product_reviews WHERE id IN ({placeholders})", review_ids).fetchall()
+    if len(rows) != len(review_ids):
+        raise HTTPException(status_code=404, detail="部分评论不存在或已被删除，请刷新后重试")
+    for row in rows:
+        _ensure_store_access(user, row["store_id"], db)
+        if row["reply_status"] == "published":
+            raise HTTPException(status_code=400, detail="已发布回复的评论不能批量修改，请保留为已回复")
+    now = _now()
+    db.execute(f"UPDATE product_reviews SET process_status = ?, updated_at = ? WHERE id IN ({placeholders})", [body.status, now, *review_ids])
+    db.commit()
+    return {"ok": True, "updated": len(review_ids), "status": body.status, "note": body.note}
 
 
 @router.post("/reviews/{review_id}/reply-draft")
@@ -1811,31 +2435,86 @@ def review_reply_draft(review_id: int, body: ReviewReplyDraftIn | None = None, u
         template = db.execute("SELECT * FROM review_reply_templates WHERE id = ?", (body.template_id,)).fetchone()
         if not template:
             raise HTTPException(status_code=400, detail="选择的回复模板不存在")
+    try:
+        reply, knowledge = _create_review_reply_draft(db, row, cfg, template)
+    except AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"reply": reply, "knowledge": knowledge, "learning_samples_used": len(_find_reply_samples(db, dict(row), limit=3))}
+
+
+def _create_review_reply_draft(db, row, cfg: dict, template=None) -> tuple[str, list[dict]]:
+    """Generate and persist one review reply draft, shared by single/batch actions."""
     knowledge = _match_review_knowledge(db, dict(row))
     knowledge_context = ""
     if knowledge:
-        knowledge_context = "\n可参考的问题处理知识：\n" + "\n".join(
-            f"- {item['title']}：处理建议：{item['solution']}；推荐话术：{item['reply_template']}"
-            for item in knowledge[:3]
+        knowledge_context = "\n问题知识库仅用于确定问题和处理重点：\n" + "\n".join(
+            f"- {item['title']}：{item['solution']}；参考内容：{item['reply_template']}" for item in knowledge[:3]
+        )
+    samples = _find_reply_samples(db, dict(row), limit=3)
+    samples_context = ""
+    if samples:
+        samples_context = "\n以下是同类评论中已审核并成功发布的历史回复，仅用于参考表达方式，不要机械照抄：\n" + "\n".join(
+            f"- 原评论：{item['item_title'] or item['item_id']}；最终回复：{item['final_reply']}" for item in samples
         )
     prompt = (
         "你是电商客服，请为下面这条买家评价生成一段真诚、简短、可直接修改后发送的中文回复。"
-        "不要承诺无法兑现的补偿，不要暴露内部信息；差评先道歉并提出解决方式，好评表达感谢。"
-        + (f"\n请参考下面的回复模板进行改写，不要机械照抄：{template['content']}" if template else "")
+        "只能根据当前评价和提供的资料回答；不要承诺无法兑现的补偿，不要暴露内部信息；"
+        "差评先道歉并回应具体问题，再提出可执行的解决方式；好评表达感谢。不要机械照抄历史回复。"
+        + (f"\n以下是人工选择的回复模板，代表表达风格和语气，请参考其风格但不要机械照抄：{template['content']}" if template else "")
         + knowledge_context
+        + samples_context
         + f"\n商品：{row['item_title'] or row['item_id']}\n评价：{row['content']}\n追评：{row['append_content']}"
     )
-    try:
-        reply = chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0)
-    except AIError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    reply = reply.strip()[:500]
+    reply = str(chat_completion(cfg, [{"role": "user", "content": prompt}], timeout=120.0) or "").strip()[:500]
+    if not reply:
+        raise AIError("模型没有返回有效的回复草稿")
     db.execute(
-        """UPDATE product_reviews SET reply_status = 'draft', reply_content = ?, reply_error = '',
+        """UPDATE product_reviews SET reply_status = 'draft', reply_content = ?, reply_ai_draft = ?, reply_error = '',
         reply_approved_at = NULL, updated_at = ? WHERE id = ?""",
-        (reply, _now(), review_id),
+        (reply, reply, _now(), row["id"]),
     )
-    return {"reply": reply, "knowledge": knowledge}
+    return reply, knowledge
+
+
+@router.post("/reviews/batch-reply-draft")
+def batch_review_reply_draft(body: ReviewBatchReplyDraftIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    review_ids = list(dict.fromkeys(body.review_ids))
+    cfg = get_default_config(db)
+    if not cfg or not cfg["api_key"]:
+        raise HTTPException(status_code=400, detail="还没有配置 AI 模型，请先到「模型配置」页面添加模型并填写 API Key")
+    template = None
+    if body.template_id:
+        template = db.execute("SELECT * FROM review_reply_templates WHERE id = ?", (body.template_id,)).fetchone()
+        if not template:
+            raise HTTPException(status_code=400, detail="选择的回复模板不存在")
+
+    placeholders = ",".join("?" for _ in review_ids)
+    rows = db.execute(f"SELECT * FROM product_reviews WHERE id IN ({placeholders})", review_ids).fetchall()
+    rows_by_id = {int(row["id"]): row for row in rows}
+    results = []
+    generated = failed = skipped = 0
+    for review_id in review_ids:
+        row = rows_by_id.get(review_id)
+        if not row:
+            failed += 1
+            results.append({"id": review_id, "status": "failed", "reason": "评论不存在或已被删除"})
+            continue
+        try:
+            _ensure_store_access(user, row["store_id"], db)
+        except HTTPException:
+            raise
+        if row["reply_status"] == "published":
+            skipped += 1
+            results.append({"id": review_id, "status": "skipped", "reason": "回复已发布，不能覆盖"})
+            continue
+        try:
+            reply, _ = _create_review_reply_draft(db, row, cfg, template)
+            generated += 1
+            results.append({"id": review_id, "status": "generated", "reply": reply})
+        except AIError as exc:
+            failed += 1
+            results.append({"id": review_id, "status": "failed", "reason": str(exc)})
+    return {"ok": True, "requested": len(review_ids), "generated": generated, "failed": failed, "skipped": skipped, "results": results}
 
 
 @router.put("/reviews/{review_id}/reply")
@@ -1884,9 +2563,13 @@ def publish_review_reply(review_id: int, user: dict = Depends(get_current_user),
     published_at = _now()
     db.execute(
         """UPDATE product_reviews SET reply_status = 'published', reply_error = '', reply_published_at = ?,
-        reply_platform_response = ?, process_status = CASE WHEN process_status = 'pending' THEN 'contacted' ELSE process_status END,
+        reply_platform_response = ?, process_status = 'replied',
         updated_at = ? WHERE id = ?""",
         (published_at, json.dumps(payload, ensure_ascii=False)[:4000], published_at, review_id),
     )
     db.commit()
+    updated_row = db.execute("SELECT * FROM product_reviews WHERE id = ?", (review_id,)).fetchone()
+    if updated_row:
+        _save_reply_sample(db, updated_row, updated_row["reply_content"])
+        db.commit()
     return {"ok": True, "status": "published", "published_at": published_at}

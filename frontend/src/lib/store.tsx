@@ -51,6 +51,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const refreshLoginStatus = () => void refresh();
+    window.addEventListener("tb-sycm-login-invalid", refreshLoginStatus);
+    return () => window.removeEventListener("tb-sycm-login-invalid", refreshLoginStatus);
+  }, [refresh]);
+
   const setCurrent = useCallback(
     async (storeId: number | null) => {
       await http.post("/stores/current", { store_id: storeId });

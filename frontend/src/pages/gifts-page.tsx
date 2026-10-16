@@ -100,9 +100,9 @@ const GIFT_COL_DEFS: ColDef[] = [
   { key: "commission", title: "佣金" },
   { key: "wangwang", title: "旺旺号" },
   { key: "order_no", title: "订单编号" },
+  { key: "remark_status", title: "备注状态" },
   { key: "review_status", title: "评论状态" },
   { key: "settle_status", title: "结款状态" },
-  { key: "remark_status", title: "备注状态" },
 ];
 
 const MIN_COL_WIDTH = 60;
@@ -166,6 +166,7 @@ export function GiftsPage() {
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [storeFilter, setStoreFilter] = useState<string | undefined>();
+  const [ownerFilter, setOwnerFilter] = useState<string | undefined>();
   const [reviewFilter, setReviewFilter] = useState<GiftReviewStatus | undefined>();
   const [settleFilter, setSettleFilter] = useState<GiftSettleStatus | undefined>();
   const [remarkFilter, setRemarkFilter] = useState<GiftRemarkStatus | undefined>(
@@ -188,7 +189,7 @@ export function GiftsPage() {
   const [imageTarget, setImageTarget] = useState<Gift | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [formImage, setFormImage] = useState("");
-  const [tencentStatus, setTencentStatus] = useState<{ enabled: boolean; authorized: boolean; last_sync_at: string; last_error: string } | null>(null);
+  const [tencentStatus, setTencentStatus] = useState<{ enabled: boolean; authorized: boolean; auth_required: boolean; last_sync_at: string; last_error: string } | null>(null);
   const [tencentSyncing, setTencentSyncing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formFileInputRef = useRef<HTMLInputElement>(null);
@@ -243,7 +244,7 @@ export function GiftsPage() {
 
   const loadTencentStatus = useCallback(async () => {
     try {
-      const { data } = await http.get<{ enabled: boolean; authorized: boolean; last_sync_at: string; last_error: string }>("/gifts/tencent-docs/status");
+      const { data } = await http.get<{ enabled: boolean; authorized: boolean; auth_required: boolean; last_sync_at: string; last_error: string }>("/gifts/tencent-docs/status");
       setTencentStatus(data);
     } catch {
       setTencentStatus(null);
@@ -297,11 +298,19 @@ export function GiftsPage() {
     return Array.from(names.values()).map((name) => ({ value: name, label: name }));
   }, [stores, items]);
 
+  const ownerFilterOptions = useMemo(() => {
+    const owners = Array.from(
+      new Set(items.map((item) => item.owner_nickname.trim()).filter(Boolean))
+    ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+    return owners.map((owner) => ({ value: owner, label: owner }));
+  }, [items]);
+
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((item) => {
       if (todoStoreId && item.store_id !== todoStoreId) return false;
       if (storeFilter && item.store_name !== storeFilter) return false;
+      if (ownerFilter && item.owner_nickname.trim() !== ownerFilter) return false;
       if (reviewFilter && item.review_status !== reviewFilter) return false;
       if (settleFilter && item.settle_status !== settleFilter) return false;
       if (remarkFilter && item.remark_status !== remarkFilter) return false;
@@ -320,7 +329,7 @@ export function GiftsPage() {
         item.spec.toLowerCase().includes(kw)
       );
     });
-  }, [items, keyword, storeFilter, reviewFilter, settleFilter, remarkFilter, syncErrorOnly, todoStoreId, dateRange]);
+  }, [items, keyword, storeFilter, ownerFilter, reviewFilter, settleFilter, remarkFilter, syncErrorOnly, todoStoreId, dateRange]);
 
   const filteredAmount = filtered.reduce((sum, row) => sum + Number(row.price), 0);
   const filteredCommission = filtered.reduce((sum, row) => sum + Number(row.commission), 0);
@@ -335,11 +344,12 @@ export function GiftsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [keyword, storeFilter, reviewFilter, settleFilter, remarkFilter, syncErrorOnly, dateRange]);
+  }, [keyword, storeFilter, ownerFilter, reviewFilter, settleFilter, remarkFilter, syncErrorOnly, dateRange]);
 
   const resetFilters = () => {
     setKeyword("");
     setStoreFilter(undefined);
+    setOwnerFilter(undefined);
     setReviewFilter(undefined);
     setSettleFilter(undefined);
     setRemarkFilter(undefined);
@@ -909,6 +919,8 @@ export function GiftsPage() {
             row.remark_error
               ? row.remark_status === "awaiting_payment"
                 ? "订单仍在等待买家付款，系统会自动重试"
+                : row.remark_status === "order_closed" && row.remark_next_retry_at
+                  ? "原订单已关闭，系统会继续按旺旺号查找新订单"
                 : `千牛自动备注：${row.remark_error}`
               : row.remark_auto_pending
                 ? "等待千牛自动插红旗并备注 SD"
@@ -974,9 +986,9 @@ export function GiftsPage() {
         }
       />
 
-      {tencentStatus?.enabled ? <Alert type={tencentStatus.last_error ? "warning" : "success"} showIcon title={tencentStatus.last_error || "腾讯文档自动同步已启用"} description={tencentStatus.last_sync_at ? `最近同步：${dayjs(tencentStatus.last_sync_at).format("YYYY-MM-DD HH:mm:ss")}` : "等待首次同步"} style={{ marginBottom: 16 }} /> : null}
+      {tencentStatus?.enabled ? <Alert type={tencentStatus.auth_required ? "error" : tencentStatus.last_error ? "warning" : "success"} showIcon title={tencentStatus.auth_required ? "腾讯文档需要重新授权" : tencentStatus.last_error || "腾讯文档自动同步已启用"} description={tencentStatus.auth_required ? "后台已暂停官方接口请求，请前往设置更新 Access Token 或完成 OAuth 自动授权。" : tencentStatus.last_sync_at ? `最近同步：${dayjs(tencentStatus.last_sync_at).format("YYYY-MM-DD HH:mm:ss")}` : "等待首次同步"} style={{ marginBottom: 16 }} /> : null}
 
-      <WorkspaceToolbar>
+      <WorkspaceToolbar className="gifts-filter-bar">
           <Input
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
@@ -992,6 +1004,14 @@ export function GiftsPage() {
             allowClear
             options={storeFilterOptions}
             style={{ width: 180 }}
+          />
+          <Select
+            value={ownerFilter}
+            onChange={setOwnerFilter}
+            placeholder="按负责人筛选"
+            allowClear
+            options={ownerFilterOptions}
+            style={{ width: 150 }}
           />
           <Select
             value={reviewFilter}
@@ -1067,7 +1087,7 @@ export function GiftsPage() {
         { label: "当前状态", value: selectedKeys.length ? `已选 ${selectedKeys.length} 单` : "待处理", hint: selectedKeys.length ? "可执行批量操作" : "从列表选择订单" },
       ]} />
 
-      <Card variant="borderless">
+      <Card className="gifts-table-card" variant="borderless">
         {selectedKeys.length > 0 && (
           <div
             style={{

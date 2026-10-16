@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 import sqlite3
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -65,6 +66,10 @@ DATA_RETENTION_DAYS = 90
 BACKUP_KEEP = 7
 LOG_RETENTION_DAYS = 7
 REVIEW_SYNC_INTERVAL_SECONDS = 3600
+COMPETITOR_MONITOR_INTERVAL_SECONDS = 900
+
+# 避免长时间同步任务同时持有 SQLite 写锁。
+_DATA_SYNC_LOCK = threading.Lock()
 
 
 def _run_db_backup_once() -> dict:
@@ -251,33 +256,36 @@ def _run_realtime_sync() -> None:
 
     单点隔离：5 类数据各自 try/commit，单个失败不影响其他 4 类。
     """
-    conn = connect_db()
-    steps = [
-        ("店铺日数据", lambda: _sync_store_daily_step(conn)),
-        ("分时数据", lambda: sync_hourly_all(conn)),
-        ("推广实时分时", lambda: sync_promo_realtime_all(conn)),
-        ("商品实时", lambda: sync_items_realtime_all(conn)),
-        ("商品级推广", lambda: sync_promo_items_realtime_all(conn)),
-        ("千牛经营状态", lambda: sync_operational_status_all(conn)),
-        ("推广计划统计", lambda: sync_plans(mode="realtime", store_id=None, user=None, db=conn)),
-        ("流量来源", lambda: sync_flow_source_all(conn)),
-        ("今日退款", lambda: sync_refund_all(conn)),
-    ]
-    errors: list[str] = []
-    for step_name, fn in steps:
+    with _DATA_SYNC_LOCK:
+        conn = connect_db()
+        steps = [
+            ("店铺日数据", lambda: _sync_store_daily_step(conn)),
+            ("分时数据", lambda: sync_hourly_all(conn)),
+            ("推广实时分时", lambda: sync_promo_realtime_all(conn)),
+            ("商品实时", lambda: sync_items_realtime_all(conn)),
+            ("商品级推广", lambda: sync_promo_items_realtime_all(conn)),
+            ("千牛经营状态", lambda: sync_operational_status_all(conn)),
+            ("推广计划统计", lambda: sync_plans(mode="realtime", store_id=None, user=None, db=conn)),
+            ("流量来源", lambda: sync_flow_source_all(conn)),
+            ("今日退款", lambda: sync_refund_all(conn)),
+        ]
+        errors: list[str] = []
         try:
-            result = fn()
-            conn.commit()
-            partial_error = _sync_result_error(result)
-            if partial_error:
-                errors.append(f"{step_name}: {partial_error}")
-        except Exception as e:
-            errors.append(f"{step_name}: {e}")
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-    conn.close()
+            for step_name, fn in steps:
+                try:
+                    result = fn()
+                    conn.commit()
+                    partial_error = _sync_result_error(result)
+                    if partial_error:
+                        errors.append(f"{step_name}: {partial_error}")
+                except Exception as e:
+                    errors.append(f"{step_name}: {e}")
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+        finally:
+            conn.close()
     if errors:
         raise RuntimeError("; ".join(errors)[:300])
 
@@ -326,6 +334,27 @@ async def _product_catalog_loop() -> None:
         except Exception as exc:
             loops.record_error("product_catalog_sync", exc, time.monotonic() - started)
         await asyncio.sleep(900)
+
+
+async def _competitor_monitoring_loop() -> None:
+    """按竞品店铺监控频率自动采集公开商品页。"""
+    await asyncio.sleep(90)
+    while True:
+        started = time.monotonic()
+        loops.mark_running("competitor_monitoring")
+        conn = connect_db()
+        try:
+            shop_result = await asyncio.to_thread(monitoring.scan_due_shops, conn)
+            result = await asyncio.to_thread(monitoring.collect_due_products, conn)
+            conn.commit()
+            loops.record_success("competitor_monitoring", time.monotonic() - started)
+            loops.log_event("competitor_monitoring", f"自动扫描竞店：成功 {shop_result.get('ok', 0)}，发现新品 {shop_result.get('new_products', 0)}；采集商品成功 {result.get('ok', 0)}，失败 {result.get('failed', 0)}")
+        except Exception as exc:
+            conn.rollback()
+            loops.record_error("competitor_monitoring", exc, time.monotonic() - started)
+        finally:
+            conn.close()
+        await asyncio.sleep(COMPETITOR_MONITOR_INTERVAL_SECONDS)
 
 
 async def _review_sync_loop() -> None:
@@ -492,24 +521,25 @@ async def _hourly_push_loop() -> None:
 
 def _run_promo_daily_once() -> None:
     """每日补数：推广按天（日报推广数据）+ 商品按天（日报 TOP 商品），各同步近 7 天。"""
-    conn = connect_db()
-    try:
-        sync_promo_daily_all(conn, days=7)
-        conn.commit()
-        sync_items_daily_all(conn, days=7)
-        conn.commit()
-        # 店铺日数据：补昨日 + 近 2 天（按天接口权威完整日），修正凌晨实时快照可能留下的错误行
-        backfill_store_daily(conn, days=3)
-        conn.commit()
-        # 推广计划统计（昨日/近7天）与商品级推广（昨日/7/14/30天）：此前只靠手动同步，这里纳入每日自动补数
-        for _m in ("yesterday", "7d"):
-            sync_plans(mode=_m, store_id=None, user=None, db=conn)
+    with _DATA_SYNC_LOCK:
+        conn = connect_db()
+        try:
+            sync_promo_daily_all(conn, days=7)
             conn.commit()
-        for _m in ("yesterday", "7", "14", "30"):
-            sync_items(mode=_m, user=None, db=conn)
+            sync_items_daily_all(conn, days=7)
             conn.commit()
-    finally:
-        conn.close()
+            # 店铺日数据：补昨日 + 近 2 天（按天接口权威完整日），修正凌晨实时快照可能留下的错误行
+            backfill_store_daily(conn, days=3)
+            conn.commit()
+            # 推广计划统计（昨日/近7天）与商品级推广（昨日/7/14/30天）：此前只靠手动同步，这里纳入每日自动补数
+            for _m in ("yesterday", "7d"):
+                sync_plans(mode=_m, store_id=None, user=None, db=conn)
+                conn.commit()
+            for _m in ("yesterday", "7", "14", "30"):
+                sync_items(mode=_m, user=None, db=conn)
+                conn.commit()
+        finally:
+            conn.close()
 
 
 async def _promo_daily_loop() -> None:
@@ -576,11 +606,12 @@ async def _maintenance_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "review_sync", "tencent_docs_sync", "gift_remark", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
+    for _name in ("inspect", "realtime_sync", "product_catalog_sync", "competitor_monitoring", "review_sync", "tencent_docs_sync", "gift_remark", "report_push", "hourly_push", "promo_daily", "backup", "data_cleanup", "log_rotate"):
         loops.register(_name)
     task = asyncio.create_task(_inspect_loop())
     realtime_task = asyncio.create_task(_realtime_sync_loop())
     product_catalog_task = asyncio.create_task(_product_catalog_loop())
+    competitor_monitoring_task = asyncio.create_task(_competitor_monitoring_loop())
     review_sync_task = asyncio.create_task(_review_sync_loop())
     tencent_docs_sync_task = asyncio.create_task(_tencent_docs_sync_loop())
     gift_remark_task = asyncio.create_task(_gift_remark_loop())
@@ -595,6 +626,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     realtime_task.cancel()
     product_catalog_task.cancel()
+    competitor_monitoring_task.cancel()
     review_sync_task.cancel()
     tencent_docs_sync_task.cancel()
     gift_remark_task.cancel()

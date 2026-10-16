@@ -2,6 +2,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
   ExportOutlined,
   EyeOutlined,
   LinkOutlined,
@@ -38,10 +39,10 @@ import { useSearchParams } from "react-router-dom";
 import { ColumnSettings } from "../components/ui/column-settings";
 import { PageHeader } from "../components/ui/page-header";
 import { MetricRail, WorkspaceToolbar } from "../components/ui/workspace-template";
-import http, { getApiErrorMessage } from "../lib/api";
+import http, { getApiErrorMessage, refreshProductAliases } from "../lib/api";
 import { useStores } from "../lib/store";
 
-const { Text, Title } = Typography;
+const { Text, Title, Paragraph } = Typography;
 
 type ProductItem = {
   store_id: number;
@@ -49,6 +50,9 @@ type ProductItem = {
   item_id: string;
   category_id: string;
   title: string;
+  original_title: string;
+  product_alias: string | null;
+  alias_note: string | null;
   image: string;
   price: number;
   stock: number;
@@ -132,6 +136,10 @@ export function ProductsPage() {
   const [savedViews, setSavedViews] = useState<SavedView[]>(() => readJson(VIEW_STORAGE_KEY, []));
   const [saveViewOpen, setSaveViewOpen] = useState(false);
   const [viewName, setViewName] = useState("");
+  const [aliasProduct, setAliasProduct] = useState<ProductItem | null>(null);
+  const [aliasValue, setAliasValue] = useState("");
+  const [aliasNote, setAliasNote] = useState("");
+  const [aliasSaving, setAliasSaving] = useState(false);
   const [columnConfig, setColumnConfig] = useState<ColumnConfig>(() => readJson(COLUMN_STORAGE_KEY, { hidden: [], order: [] }));
 
   const loadProducts = useCallback(async () => {
@@ -299,6 +307,53 @@ export function ProductsPage() {
     message.success(`已复制 ${selectedProducts.length} 个商品 ID`);
   };
 
+  const openAliasEditor = (product: ProductItem) => {
+    setAliasProduct(product);
+    setAliasValue(product.product_alias || "");
+    setAliasNote(product.alias_note || "");
+  };
+
+  const saveAlias = async () => {
+    if (!aliasProduct || !aliasValue.trim()) {
+      message.warning("请输入商品备注名");
+      return;
+    }
+    setAliasSaving(true);
+    try {
+      await http.put(`/products/aliases/${aliasProduct.item_id}`, {
+        store_id: aliasProduct.store_id,
+        alias: aliasValue.trim(),
+        note: aliasNote.trim(),
+      });
+      await refreshProductAliases();
+      setDetail((current) => current?.item_id === aliasProduct.item_id ? { ...current, title: aliasValue.trim(), product_alias: aliasValue.trim(), alias_note: aliasNote.trim() } : current);
+      setAliasProduct(null);
+      await loadProducts();
+      message.success("商品备注名已保存，系统内将优先显示这个名称");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAliasSaving(false);
+    }
+  };
+
+  const clearAlias = async () => {
+    if (!aliasProduct) return;
+    setAliasSaving(true);
+    try {
+      await http.delete(`/products/aliases/${aliasProduct.item_id}?store_id=${aliasProduct.store_id}`);
+      await refreshProductAliases();
+      setDetail((current) => current?.item_id === aliasProduct.item_id ? { ...current, title: current.original_title, product_alias: "", alias_note: "" } : current);
+      setAliasProduct(null);
+      await loadProducts();
+      message.success("商品备注名已清除，已恢复显示淘宝原始标题");
+    } catch (error) {
+      message.error(getApiErrorMessage(error));
+    } finally {
+      setAliasSaving(false);
+    }
+  };
+
   const allColumns: TableColumnsType<ProductItem> = useMemo(() => [
     {
       key: "product",
@@ -316,8 +371,9 @@ export function ProductsPage() {
             </div>
           )}
           <div style={{ minWidth: 0 }}>
-            <Text ellipsis={{ tooltip: row.title }} strong style={{ maxWidth: 280 }}>{row.title || "未命名商品"}</Text>
-            <div style={{ marginTop: 5 }}><Text type="secondary" style={{ fontSize: 12 }}>ID {row.item_id}</Text></div>
+            <Space size={6}><Text ellipsis={{ tooltip: row.title }} strong style={{ maxWidth: 220 }}>{row.title || "未命名商品"}</Text>{row.product_alias ? <Tag color="blue">内部备注</Tag> : null}</Space>
+            {row.product_alias ? <Text type="secondary" ellipsis={{ tooltip: row.original_title }} style={{ display: "block", maxWidth: 280, fontSize: 12 }}>{row.original_title}</Text> : null}
+            <div style={{ marginTop: 3 }}><Text type="secondary" style={{ fontSize: 12 }}>ID {row.item_id}</Text></div>
           </div>
         </div>
       ),
@@ -343,10 +399,11 @@ export function ProductsPage() {
       key: "actions",
       title: "操作",
       fixed: "right",
-      width: 132,
+      width: 190,
       render: (_, row) => (
         <Space size={4}>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => setDetail(row)}>详情</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openAliasEditor(row)}>备注</Button>
           {row.edit_url ? <a href={row.edit_url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>编辑</a> : null}
         </Space>
       ),
@@ -397,7 +454,7 @@ export function ProductsPage() {
           <Select allowClear placeholder="全部店铺" value={storeId} onChange={async (value) => { await setCurrent(value ?? null); setStoreId(value); setPage(1); }} style={{ width: 180 }} options={stores.map((store) => ({ label: store.name, value: store.id }))} suffixIcon={<ShopOutlined />} />
           <Select value={stockStatus} onChange={(value) => { setStockStatus(value); setPage(1); }} style={{ width: 138 }} options={[{ label: "全部库存", value: "all" }, { label: "库存正常", value: "normal" }, { label: "低库存 ≤ 10", value: "low" }, { label: "零库存", value: "zero" }]} />
           <Select value={salesStatus} onChange={(value) => { setSalesStatus(value); setPage(1); }} style={{ width: 150 }} options={[{ label: "全部经营状态", value: "all" }, { label: "近月无销量", value: "no_sales" }, { label: "质量分低于 70", value: "low_quality" }]} />
-          <Input.Search className="ops-product-search" allowClear value={searchValue} onChange={(event) => setSearchValue(event.target.value)} onSearch={(value) => { setKeyword(value.trim()); setPage(1); }} placeholder="搜索商品标题或商品 ID" enterButton={<SearchOutlined aria-label="搜索" />} style={{ width: 300 }} />
+          <Input.Search className="ops-product-search" allowClear value={searchValue} onChange={(event) => setSearchValue(event.target.value)} onSearch={(value) => { setKeyword(value.trim()); setPage(1); }} placeholder="搜索备注名、商品标题或商品 ID" enterButton={<SearchOutlined aria-label="搜索" />} style={{ width: 320 }} />
           {filtersActive ? <Button type="text" onClick={resetFilters}>重置</Button> : null}
           <span className="ops-list-toolbar__meta">{summary?.last_sync ? `最近同步 ${dayjs(summary.last_sync).format("MM-DD HH:mm")}` : "尚未同步"}</span>
         </WorkspaceToolbar>
@@ -429,7 +486,8 @@ export function ProductsPage() {
           sticky
           rowSelection={{ selectedRowKeys: selectedKeys, preserveSelectedRowKeys: false, onChange: setSelectedKeys }}
           onRow={(row) => ({ onClick: (event) => { if (!(event.target as HTMLElement).closest("a,button,input,.ant-checkbox-wrapper")) setDetail(row); } })}
-          onChange={(_pagination, _filters, sorter) => {
+          onChange={(_pagination, _filters, sorter, extra) => {
+            if (extra.action !== "sort") return;
             const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
             setShelfSortOrder(activeSorter?.columnKey === "shelf" ? (activeSorter.order ?? null) : null);
             setPage(1);
@@ -445,7 +503,7 @@ export function ProductsPage() {
           <div className="ops-product-detail">
             <div className="ops-product-detail__hero">
               {detail.image ? <Image width={92} height={92} src={productImage(detail.image)} style={{ borderRadius: 10, objectFit: "cover" }} /> : null}
-              <div style={{ minWidth: 0 }}><Title level={5} style={{ marginTop: 0 }}>{detail.title}</Title><Text type="secondary" copyable={{ text: detail.item_id }}>商品 ID：{detail.item_id}</Text><div style={{ marginTop: 8 }}><Tag color="green">{detail.status || "出售中"}</Tag><Tag>{detail.store_name}</Tag></div></div>
+              <div style={{ minWidth: 0 }}><Title level={5} style={{ marginTop: 0 }}>{detail.title}</Title>{detail.product_alias ? <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>淘宝标题：{detail.original_title}</Text> : null}<Text type="secondary" copyable={{ text: detail.item_id }}>商品 ID：{detail.item_id}</Text><div style={{ marginTop: 8 }}><Tag color="green">{detail.status || "出售中"}</Tag><Tag>{detail.store_name}</Tag>{detail.product_alias ? <Tag color="blue">内部备注</Tag> : null}</div></div>
             </div>
             <div className="ops-product-detail__metrics">
               <div className="ops-product-detail__metric"><Statistic title="售价" value={detail.price} precision={2} prefix="¥" /></div>
@@ -460,10 +518,19 @@ export function ProductsPage() {
               { key: "shelf", label: "上架时间", children: detail.shelf_at || "—" },
               { key: "sync", label: "数据同步", children: dayjs(detail.synced_at).format("YYYY-MM-DD HH:mm:ss") },
             ]} />
-            <Space style={{ marginTop: 20 }} wrap>{detail.detail_url ? <Button icon={<LinkOutlined />} href={detail.detail_url} target="_blank">打开商品页</Button> : null}{detail.edit_url ? <Button icon={<ExportOutlined />} href={detail.edit_url} target="_blank">淘宝后台编辑</Button> : null}</Space>
+            <Space style={{ marginTop: 20 }} wrap><Button icon={<EditOutlined />} onClick={() => openAliasEditor(detail)}>{detail.product_alias ? "修改内部备注" : "设置内部备注"}</Button>{detail.detail_url ? <Button icon={<LinkOutlined />} href={detail.detail_url} target="_blank">打开商品页</Button> : null}{detail.edit_url ? <Button icon={<ExportOutlined />} href={detail.edit_url} target="_blank">淘宝后台编辑</Button> : null}</Space>
           </div>
         ) : null}
       </Drawer>
+
+      <Modal title={aliasProduct?.product_alias ? "修改商品内部备注" : "设置商品内部备注"} open={Boolean(aliasProduct)} onCancel={() => { if (!aliasSaving) setAliasProduct(null); }} footer={<Space>{aliasProduct?.product_alias ? <Button danger disabled={aliasSaving} onClick={() => void clearAlias()}>清除备注</Button> : null}<Button onClick={() => setAliasProduct(null)} disabled={aliasSaving}>取消</Button><Button type="primary" loading={aliasSaving} onClick={() => void saveAlias()}>保存备注</Button></Space>}>
+        <Space orientation="vertical" size={14} style={{ width: "100%" }}>
+          <Alert type="info" showIcon title="内部备注只在本系统展示" description="不会修改淘宝商品标题，也不会出现在给买家的 AI 回复中。商品同步后仍会保留。" />
+          <div><Text strong>淘宝原始标题</Text><Paragraph type="secondary" style={{ margin: "6px 0 0" }}>{aliasProduct?.original_title || aliasProduct?.title || "—"}</Paragraph></div>
+          <div><Text strong>内部备注名</Text><Input autoFocus value={aliasValue} onChange={(event) => setAliasValue(event.target.value)} onPressEnter={() => void saveAlias()} placeholder="例如：成人大头牙刷" maxLength={60} showCount style={{ marginTop: 6 }} /></div>
+          <div><Text strong>补充说明（可选）</Text><Input.TextArea value={aliasNote} onChange={(event) => setAliasNote(event.target.value)} placeholder="例如：主推款、绿盒装、适合12岁以上" rows={3} maxLength={200} showCount style={{ marginTop: 6 }} /></div>
+        </Space>
+      </Modal>
 
       <Modal title="保存筛选视图" open={saveViewOpen} onCancel={() => setSaveViewOpen(false)} onOk={saveCurrentView} okText="保存">
         <Input autoFocus value={viewName} onChange={(event) => setViewName(event.target.value)} onPressEnter={saveCurrentView} placeholder="例如：零库存商品、重点店铺" maxLength={30} />

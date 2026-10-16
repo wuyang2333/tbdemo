@@ -139,7 +139,7 @@ def test_closed_order_is_terminal_without_remark(client, monkeypatch):
     conn = connect_db()
     try:
         conn.execute("DELETE FROM gifts")
-        gift_id = _seed_pending_gift(conn)
+        gift_id = _seed_pending_gift(conn, wangwang="")
         gift_remark.update_config(conn, enabled=True)
 
         monkeypatch.setattr(
@@ -158,6 +158,42 @@ def test_closed_order_is_terminal_without_remark(client, monkeypatch):
         assert result["closed"] == 1
         assert row["remark_status"] == "order_closed"
         assert row["remark_auto_pending"] == 0
+    finally:
+        conn.close()
+
+
+def test_closed_order_keeps_querying_by_buyer_for_new_order(client, monkeypatch):
+    conn = connect_db()
+    try:
+        conn.execute("DELETE FROM gifts")
+        gift_id = _seed_pending_gift(conn, order_no="5127193587359094839", wangwang="后续下单旺旺")
+        gift_remark.update_config(conn, enabled=True)
+        calls = []
+
+        def closed(*args, **kwargs):
+            return {"ok": True, "changed": False, "outcome": "order_closed", "order_status": "交易关闭"}
+
+        def new_order(*args, **kwargs):
+            calls.append(args[2] if len(args) > 2 else kwargs.get("order_date"))
+            if len(calls) == 1:
+                raise gift_remark.qianniu.QianniuOrderNotFound("尚未重新下单")
+            return {"ok": True, "changed": True, "outcome": "remarked", "order_no": "9876543210123456", "actual_paid": 10}
+
+        monkeypatch.setattr(gift_remark.qianniu, "remark_sold_order", closed)
+        monkeypatch.setattr(gift_remark.qianniu, "remark_sold_order_by_buyer", new_order)
+        first = gift_remark.sync_pending(conn)
+        assert first["failed"] == 1
+        row = conn.execute("SELECT * FROM gifts WHERE id = ?", (gift_id,)).fetchone()
+        assert row["remark_status"] == "order_not_found"
+
+        conn.execute("UPDATE gifts SET remark_next_retry_at = NULL WHERE id = ?", (gift_id,))
+        conn.commit()
+        second = gift_remark.sync_pending(conn)
+        row = conn.execute("SELECT * FROM gifts WHERE id = ?", (gift_id,)).fetchone()
+        assert second["remarked"] == 1
+        assert row["remark_status"] == "remarked"
+        assert row["order_no"] == "9876543210123456"
+        assert calls == ["", ""]
     finally:
         conn.close()
 

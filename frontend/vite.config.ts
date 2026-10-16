@@ -17,6 +17,13 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
+    warmup: {
+      clientFiles: [
+        "./src/pages/customers-page.tsx",
+        "./src/components/reviews/product-quality-dashboard.tsx",
+        "./src/components/reviews/improvement-action-panel.tsx",
+      ],
+    },
     // 允许内网穿透域名（cpolar / ngrok 等）访问 dev server，公司可通过公网地址打开
     allowedHosts: [".cpolar.top", ".ngrok-free.app", ".lhr.life"],
     port: 5178,

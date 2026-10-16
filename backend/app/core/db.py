@@ -74,6 +74,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 "UPDATE promo_plans SET budget_type = CASE WHEN COALESCE(day_budget, 0) <= 0 THEN 'unlimited' ELSE 'normal' END "
                 "WHERE TRIM(COALESCE(budget_type, '')) = '' OR (budget_type = 'normal' AND COALESCE(day_budget, 0) <= 0)"
             )
+        if promo_cols and "platform_presence" not in promo_cols:
+            conn.execute("ALTER TABLE promo_plans ADD COLUMN platform_presence TEXT NOT NULL DEFAULT 'active'")
+        if promo_cols and "platform_last_seen_at" not in promo_cols:
+            conn.execute("ALTER TABLE promo_plans ADD COLUMN platform_last_seen_at TEXT")
+        if promo_cols and "platform_missing_at" not in promo_cols:
+            conn.execute("ALTER TABLE promo_plans ADD COLUMN platform_missing_at TEXT")
     except sqlite3.OperationalError:
         pass
     try:
@@ -519,6 +525,12 @@ def _migrate_reviews(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_published_at TEXT")
     if "reply_platform_response" not in review_cols:
         conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_platform_response TEXT NOT NULL DEFAULT ''")
+    if "reply_ai_draft" not in review_cols:
+        conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_ai_draft TEXT NOT NULL DEFAULT ''")
+    if "reply_template_id" not in review_cols:
+        conn.execute("ALTER TABLE product_reviews ADD COLUMN reply_template_id INTEGER")
+    conn.execute("UPDATE product_reviews SET process_status = 'replied' WHERE reply_status = 'published' AND process_status != 'replied'")
+    conn.execute("UPDATE product_reviews SET process_status = 'pending' WHERE process_status IN ('contacted', 'resolved') AND reply_status != 'published'")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS review_analysis (
@@ -688,6 +700,94 @@ def _migrate_reviews(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_reply_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id INTEGER NOT NULL UNIQUE,
+            store_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL DEFAULT '',
+            item_title TEXT NOT NULL DEFAULT '',
+            review_content TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT '通用',
+            knowledge_ids TEXT NOT NULL DEFAULT '[]',
+            ai_draft TEXT NOT NULL DEFAULT '',
+            final_reply TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            published_at TEXT NOT NULL
+        )
+        """
+    )
+    sample_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_reply_samples)")}
+    if "review_content" not in sample_cols:
+        conn.execute("ALTER TABLE review_reply_samples ADD COLUMN review_content TEXT NOT NULL DEFAULT ''")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_reply_samples_lookup ON review_reply_samples(store_id, enabled, updated_at)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_knowledge_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL DEFAULT 0,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT '通用',
+            problem_terms TEXT NOT NULL DEFAULT '[]',
+            solution TEXT NOT NULL DEFAULT '',
+            reply_template TEXT NOT NULL DEFAULT '',
+            evidence_count INTEGER NOT NULL DEFAULT 0,
+            sample_review_ids TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(store_id, title)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_knowledge_suggestions_store_status ON review_knowledge_suggestions(store_id, status, updated_at)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS review_improvement_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            store_id INTEGER NOT NULL,
+            item_id TEXT NOT NULL DEFAULT '',
+            item_title TEXT NOT NULL DEFAULT '',
+            topic TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            owner TEXT NOT NULL DEFAULT '',
+            plan TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending', 'diagnosed', 'implemented', 'observing', 'improved', 'ignored')),
+            started_at TEXT,
+            due_at TEXT,
+            before_negative_rate REAL,
+            after_negative_rate REAL,
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    improvement_cols = {row[1] for row in conn.execute("PRAGMA table_info(review_improvement_actions)")}
+    for column, definition in {
+        "item_id": "TEXT NOT NULL DEFAULT ''",
+        "item_title": "TEXT NOT NULL DEFAULT ''",
+        "topic": "TEXT NOT NULL DEFAULT ''",
+        "title": "TEXT NOT NULL DEFAULT ''",
+        "description": "TEXT NOT NULL DEFAULT ''",
+        "owner": "TEXT NOT NULL DEFAULT ''",
+        "plan": "TEXT NOT NULL DEFAULT ''",
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+        "started_at": "TEXT",
+        "due_at": "TEXT",
+        "before_negative_rate": "REAL",
+        "after_negative_rate": "REAL",
+        "note": "TEXT NOT NULL DEFAULT ''",
+        "created_at": "TEXT NOT NULL DEFAULT ''",
+        "updated_at": "TEXT NOT NULL DEFAULT ''",
+    }.items():
+        if column not in improvement_cols:
+            conn.execute(f"ALTER TABLE review_improvement_actions ADD COLUMN {column} {definition}")
     now = datetime.now(timezone.utc).isoformat()
     for name, category, content in (
         ("通用感谢", "好评", "感谢您的认可与支持！我们会继续做好产品和服务，期待再次为您服务。"),
@@ -718,6 +818,8 @@ def _migrate_reviews(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_review_knowledge_matches_review ON review_knowledge_matches(review_id, confidence)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_store_date ON product_reviews(store_id, review_time)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reviews_item ON product_reviews(store_id, item_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_improvement_store_status ON review_improvement_actions(store_id, status, updated_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_improvement_item ON review_improvement_actions(store_id, item_id, updated_at)")
     conn.commit()
 
 
@@ -1302,6 +1404,21 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS product_aliases (
+                store_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (store_id, item_id)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_product_aliases_item ON product_aliases(item_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_product_aliases_alias ON product_aliases(alias)")
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS gifts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,
@@ -1474,6 +1591,29 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS promo_item_daily (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_id INTEGER NOT NULL,
+                item_id TEXT NOT NULL,
+                item_title TEXT NOT NULL DEFAULT '',
+                data_date TEXT NOT NULL,
+                spend REAL NOT NULL DEFAULT 0,
+                sales REAL NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                orders INTEGER NOT NULL DEFAULT 0,
+                impressions INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'report',
+                updated_at TEXT NOT NULL,
+                UNIQUE(store_id, item_id, data_date)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_promo_item_daily ON promo_item_daily(store_id, data_date, item_id)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS promo_plans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 store_id INTEGER NOT NULL,
@@ -1493,11 +1633,179 @@ def init_db() -> None:
                 clicks INTEGER NOT NULL DEFAULT 0,
                 note TEXT NOT NULL DEFAULT '',
                 tag TEXT NOT NULL DEFAULT '',
+                platform_presence TEXT NOT NULL DEFAULT 'active',
+                platform_last_seen_at TEXT,
+                platform_missing_at TEXT,
                 updated_at TEXT NOT NULL,
                 UNIQUE(store_id, campaign_id)
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS competitor_shops (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
+                competitor_type TEXT NOT NULL DEFAULT 'direct',
+                priority TEXT NOT NULL DEFAULT '重点',
+                category TEXT NOT NULL DEFAULT '',
+                price_band TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                monitor_frequency TEXT NOT NULL DEFAULT '每日',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS competitor_products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shop_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
+                own_product TEXT NOT NULL DEFAULT '',
+                price REAL,
+                coupon_price REAL,
+                review_count INTEGER,
+                review_count_text TEXT NOT NULL DEFAULT '',
+                rating REAL,
+                good_rate REAL,
+                review_tags TEXT NOT NULL DEFAULT '[]',
+                review_samples TEXT NOT NULL DEFAULT '[]',
+                review_highlights TEXT NOT NULL DEFAULT '{}',
+                negative_keywords TEXT NOT NULL DEFAULT '[]',
+                negative_review_samples TEXT NOT NULL DEFAULT '[]',
+                sku_options TEXT NOT NULL DEFAULT '[]',
+                sku_prices TEXT NOT NULL DEFAULT '[]',
+                stock_status TEXT NOT NULL DEFAULT 'unknown',
+                promotion_tags TEXT NOT NULL DEFAULT '[]',
+                service_tags TEXT NOT NULL DEFAULT '[]',
+                selling_points TEXT NOT NULL DEFAULT '[]',
+                sales_text TEXT NOT NULL DEFAULT '',
+                image_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                last_snapshot_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (shop_id) REFERENCES competitor_shops(id)
+            )
+            """
+        )
+        shop_columns = {row[1] for row in conn.execute("PRAGMA table_info(competitor_shops)")}
+        for column, definition in (
+            ("last_scan_attempt_at", "TEXT"),
+            ("last_scanned_at", "TEXT"),
+            ("last_scan_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("last_scan_error", "TEXT NOT NULL DEFAULT ''"),
+            ("last_scan_product_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_new_product_count", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in shop_columns:
+                conn.execute(f"ALTER TABLE competitor_shops ADD COLUMN {column} {definition}")
+        product_columns = {row[1] for row in conn.execute("PRAGMA table_info(competitor_products)")}
+        for column, definition in (
+            ("alias", "TEXT NOT NULL DEFAULT ''"),
+            ("discovery_source", "TEXT NOT NULL DEFAULT 'manual'"),
+            ("platform_item_id", "TEXT NOT NULL DEFAULT ''"),
+            ("first_seen_at", "TEXT"),
+            ("last_seen_at", "TEXT"),
+            ("collection_status", "TEXT NOT NULL DEFAULT 'pending'"),
+            ("collection_error", "TEXT NOT NULL DEFAULT ''"),
+            ("last_collected_at", "TEXT"),
+            ("last_success_at", "TEXT"),
+            ("collection_source", "TEXT NOT NULL DEFAULT ''"),
+            ("review_count_text", "TEXT NOT NULL DEFAULT ''"),
+            ("rating", "REAL"),
+            ("good_rate", "REAL"),
+            ("review_tags", "TEXT NOT NULL DEFAULT '[]'"),
+            ("review_samples", "TEXT NOT NULL DEFAULT '[]'"),
+            ("review_highlights", "TEXT NOT NULL DEFAULT '{}'"),
+            ("negative_keywords", "TEXT NOT NULL DEFAULT '[]'"),
+            ("negative_review_samples", "TEXT NOT NULL DEFAULT '[]'"),
+            ("sku_options", "TEXT NOT NULL DEFAULT '[]'"),
+            ("sku_prices", "TEXT NOT NULL DEFAULT '[]'"),
+            ("stock_status", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ("promotion_tags", "TEXT NOT NULL DEFAULT '[]'"),
+            ("service_tags", "TEXT NOT NULL DEFAULT '[]'"),
+            ("selling_points", "TEXT NOT NULL DEFAULT '[]'"),
+        ):
+            if column not in product_columns:
+                conn.execute(f"ALTER TABLE competitor_products ADD COLUMN {column} {definition}")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS competitor_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                shop_id INTEGER,
+                product_id INTEGER,
+                event_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                severity TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'new',
+                observed_at TEXT NOT NULL,
+                FOREIGN KEY (shop_id) REFERENCES competitor_shops(id),
+                FOREIGN KEY (product_id) REFERENCES competitor_products(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS competitor_product_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                url TEXT NOT NULL DEFAULT '',
+                price REAL,
+                coupon_price REAL,
+                review_count INTEGER,
+                review_count_text TEXT NOT NULL DEFAULT '',
+                rating REAL,
+                good_rate REAL,
+                review_tags TEXT NOT NULL DEFAULT '[]',
+                review_samples TEXT NOT NULL DEFAULT '[]',
+                review_highlights TEXT NOT NULL DEFAULT '{}',
+                negative_keywords TEXT NOT NULL DEFAULT '[]',
+                negative_review_samples TEXT NOT NULL DEFAULT '[]',
+                sku_options TEXT NOT NULL DEFAULT '[]',
+                sku_prices TEXT NOT NULL DEFAULT '[]',
+                stock_status TEXT NOT NULL DEFAULT 'unknown',
+                promotion_tags TEXT NOT NULL DEFAULT '[]',
+                service_tags TEXT NOT NULL DEFAULT '[]',
+                selling_points TEXT NOT NULL DEFAULT '[]',
+                sales_text TEXT NOT NULL DEFAULT '',
+                image_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                observed_at TEXT NOT NULL,
+                FOREIGN KEY (product_id) REFERENCES competitor_products(id)
+            )
+            """
+        )
+        snapshot_columns = {row[1] for row in conn.execute("PRAGMA table_info(competitor_product_snapshots)")}
+        for column, definition in (
+            ("review_count_text", "TEXT NOT NULL DEFAULT ''"),
+            ("rating", "REAL"),
+            ("good_rate", "REAL"),
+            ("review_tags", "TEXT NOT NULL DEFAULT '[]'"),
+            ("review_samples", "TEXT NOT NULL DEFAULT '[]'"),
+            ("review_highlights", "TEXT NOT NULL DEFAULT '{}'"),
+            ("negative_keywords", "TEXT NOT NULL DEFAULT '[]'"),
+            ("negative_review_samples", "TEXT NOT NULL DEFAULT '[]'"),
+            ("sku_options", "TEXT NOT NULL DEFAULT '[]'"),
+            ("sku_prices", "TEXT NOT NULL DEFAULT '[]'"),
+            ("stock_status", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ("promotion_tags", "TEXT NOT NULL DEFAULT '[]'"),
+            ("service_tags", "TEXT NOT NULL DEFAULT '[]'"),
+            ("selling_points", "TEXT NOT NULL DEFAULT '[]'"),
+        ):
+            if column not in snapshot_columns:
+                conn.execute(f"ALTER TABLE competitor_product_snapshots ADD COLUMN {column} {definition}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_competitor_products_shop ON competitor_products(shop_id)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_competitor_products_shop_item ON competitor_products(shop_id, platform_item_id) WHERE platform_item_id != ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_competitor_events_observed ON competitor_events(observed_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_competitor_snapshots_product ON competitor_product_snapshots(product_id, observed_at DESC)")
         conn.commit()
         _migrate(conn)
         _migrate_model_configs(conn)

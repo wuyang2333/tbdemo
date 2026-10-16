@@ -41,6 +41,7 @@ def _ai_diagnostic_fingerprint(item: dict, diagnostics_config: dict | None = Non
         "confidence": item.get("confidence"),
         "possible_causes": item.get("possible_causes") or [],
         "unknown_dimensions": item.get("unknown_dimensions") or [],
+        "item_traffic": item.get("item_traffic") or {},
         "diagnostics_config": diagnostics_config or {},
         "context": context or {},
     }
@@ -55,17 +56,94 @@ def _find_diagnostic(payload: dict, body: AIDiagnosticIn) -> dict | None:
     return item
 
 
+def _item_traffic_context(db, store_id: int, item_id: str, stats_by_item: dict[tuple[int, str], list[dict]] | None = None) -> dict:
+    """Load the product-level promotion metrics available for a diagnostic.
+
+    ``promo_item_stats`` is currently keyed by store/item/mode, so this is
+    deliberately reported as product evidence rather than attributed to a
+    specific campaign when the source is the plan-allocation fallback.
+    """
+    item_id = str(item_id or "").strip()
+    if not item_id:
+        return {
+            "status": "missing",
+            "reason": "当前计划没有关联到具体商品",
+            "item_id": "",
+            "metrics": [],
+        }
+    if stats_by_item is None:
+        rows = db.execute(
+            "SELECT item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at "
+            "FROM promo_item_stats WHERE store_id = ? AND item_id = ? "
+            "ORDER BY CASE mode WHEN 'realtime' THEN 0 WHEN 'yesterday' THEN 1 WHEN '7' THEN 2 WHEN '14' THEN 3 WHEN '30' THEN 4 ELSE 9 END",
+            (store_id, item_id),
+        ).fetchall()
+        metrics = [dict(row) for row in rows]
+    else:
+        metrics = stats_by_item.get((store_id, item_id), [])
+    if not metrics:
+        return {
+            "status": "missing",
+            "reason": "商品级推广数据尚未同步",
+            "item_id": item_id,
+            "metrics": [],
+        }
+    # report 来源代表商品报表口径，即便订单为 0 也是真实的无转化结果；
+    # plan_scene/plan 是计划归因，可能只提供花费、成交、点击，不能把缺失字段当成真实 0。
+    has_full_traffic = any(str(row.get("source") or "") == "report" for row in metrics)
+    return {
+        "status": "complete" if has_full_traffic else "partial",
+        "reason": "已同步商品报表指标" if has_full_traffic else "当前主要来自计划归因，展现量或订单等字段可能缺失",
+        "item_id": item_id,
+        "metrics": metrics,
+    }
+
+
+def _plan_stat_context(row: dict) -> dict:
+    """Expose normalized plan metrics plus the complete raw report payload to AI."""
+    stat = dict(row)
+    raw = stat.pop("extra_json", "") or ""
+    try:
+        details = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        details = {}
+    if not isinstance(details, dict):
+        details = {}
+    def _percent(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return value
+        return round(number * 100, 2) if number <= 1 else number
+    stat["report_details"] = details
+    # Keep the names used by the UI alongside raw platform names so the model
+    # can reason about funnel metrics without guessing what adPv/cvr mean.
+    stat["funnel"] = {
+        "impressions": details.get("adPv"),
+        "clicks": details.get("click", stat.get("clicks")),
+        "ctr_percent": _percent(details.get("ctr")),
+        "conversion_rate_percent": _percent(details.get("cvr")),
+        "orders": details.get("alipayInshopNum"),
+        "direct_sales": details.get("alipayDirAmt", stat.get("alipay_dir")),
+        "indirect_sales": details.get("alipayIndirAmt", stat.get("alipay_indir")),
+        "retained_sales": details.get("retainedAlipayInshopAmt", stat.get("retained_sales")),
+        "add_cart_orders": details.get("cartInshopNum"),
+        "refund_amount": (details.get("refundDirAmt") or 0) + (details.get("refundIndirAmt") or 0) if details else stat.get("refund_amt"),
+    }
+    return stat
+
+
 def _build_ai_context(db, item: dict) -> dict:
-    """Collect the available plan-level context without pretending missing dimensions exist."""
+    """Collect plan and associated product evidence without pretending missing dimensions exist."""
     store_id = int(item["store_id"])
     plan_id = int(item["plan_id"])
     campaign_id = str(item.get("campaign_id") or "")
     plan_row = db.execute(
-        "SELECT id, store_id, scene, scene_name, campaign_id, plan_name, day_budget, budget_type, bid_type, bid_value, status, gmt_create, updated_at FROM promo_plans WHERE id = ? AND store_id = ?",
+        "SELECT * FROM promo_plans WHERE id = ? AND store_id = ?",
         (plan_id, store_id),
     ).fetchone()
     stats_rows = db.execute(
-        "SELECT mode, spend, sales, roi, clicks, prev_spend, prev_sales, prev_roi, prev_clicks, prev_scope, updated_at FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ? ORDER BY CASE mode WHEN 'realtime' THEN 0 WHEN 'yesterday' THEN 1 ELSE 2 END",
+        "SELECT * FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ? ORDER BY CASE mode WHEN 'realtime' THEN 0 WHEN 'yesterday' THEN 1 ELSE 2 END",
         (store_id, campaign_id),
     ).fetchall()
     daily_rows = db.execute(
@@ -80,6 +158,7 @@ def _build_ai_context(db, item: dict) -> dict:
         "SELECT name, action_type, evidence, outcome, success_count, use_count, min_roi, max_roi, updated_at FROM promo_strategies WHERE store_id = ? ORDER BY updated_at DESC LIMIT 5",
         (store_id,),
     ).fetchall()
+    item_traffic = _item_traffic_context(db, store_id, item.get("item_id") or "")
     return {
         "plan": dict(plan_row) if plan_row else {
             "id": plan_id,
@@ -91,6 +170,7 @@ def _build_ai_context(db, item: dict) -> dict:
             "item_id": item.get("item_id") or "",
             "item_title": item.get("item_title") or "",
         },
+        "item_traffic": item_traffic,
         "channel": {
             "code": item.get("channel") or "",
             "name": item.get("channel_name") or "",
@@ -113,7 +193,7 @@ def _build_ai_context(db, item: dict) -> dict:
             "spend_at_risk": item.get("spend_at_risk") or 0,
             "sales_gap": item.get("sales_gap") or 0,
         },
-        "stats": [dict(row) for row in stats_rows],
+        "stats": [_plan_stat_context(dict(row)) for row in stats_rows],
         "recent_daily": [dict(row) for row in daily_rows],
         "recent_actions": [dict(row) for row in action_rows],
         "learned_strategies": [dict(row) for row in strategy_rows],
@@ -439,6 +519,7 @@ def _diagnostic(
         "recommendations": recommendations,
         "recommendation": recommendations[0],
         "pacing": pacing or {},
+        "item_traffic": plan.get("item_traffic") or {"status": "missing", "reason": "商品未同步", "item_id": "", "metrics": []},
         "unknown_dimensions": ["商品库存与价格", "活动节奏", "素材与人群明细", "竞争环境变化"],
         "detected_at": detected_at,
     }
@@ -484,6 +565,18 @@ def detect_promotion_anomalies(
         ).fetchall()
     ]
     item_by_key = {(int(row["store_id"]), str(row["campaign_id"])): row for row in plan_items}
+    item_stats = [
+        dict(row)
+        for row in db.execute(
+            "SELECT store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at "
+            "FROM promo_item_stats WHERE 1=1" + scope_frag + " "
+            "ORDER BY CASE mode WHEN 'realtime' THEN 0 WHEN 'yesterday' THEN 1 WHEN '7' THEN 2 WHEN '14' THEN 3 WHEN '30' THEN 4 ELSE 9 END",
+            scope_params,
+        ).fetchall()
+    ]
+    stats_by_item: dict[tuple[int, str], list[dict]] = {}
+    for row in item_stats:
+        stats_by_item.setdefault((int(row["store_id"]), str(row.get("item_id") or "").strip()), []).append(row)
     store_ids = sorted({int(plan["store_id"]) for plan in plans})
     store_names: dict[int, str] = {}
     if store_ids:
@@ -505,7 +598,9 @@ def detect_promotion_anomalies(
     # 诊断渠道由设置控制；未配置的渠道保持兼容并默认启用。
     plans = [
         plan for plan in plans
-        if channel_for_scene(plan.get("scene"), plan.get("scene_name")) in enabled_channels
+        if plan.get("platform_presence") != "missing"
+        and plan.get("status") != "平台已失效"
+        and channel_for_scene(plan.get("scene"), plan.get("scene_name")) in enabled_channels
     ]
     diagnostic_rules = diagnostics_config.get("rules") or {}
     diagnostic_thresholds = diagnostics_config.get("thresholds") or {}
@@ -544,6 +639,7 @@ def detect_promotion_anomalies(
         plan["item_id"] = item.get("item_id") or ""
         plan["item_title"] = item.get("item_title") or ""
         plan["item_image"] = item.get("image") or ""
+        plan["item_traffic"] = _item_traffic_context(db, int(plan["store_id"]), plan["item_id"], stats_by_item)
         realtime = stat_by_key.get((*key, "realtime"))
         yesterday = stat_by_key.get((*key, "yesterday"))
         if realtime:
@@ -831,6 +927,14 @@ def detect_promotion_anomalies(
         categories[item["category"]] = categories.get(item["category"], 0) + 1
         channels[item["channel"]] = channels.get(item["channel"], 0) + 1
     active_plan_count = sum(1 for plan in plans if plan.get("status") == "在投")
+    item_traffic_coverage_count = sum(
+        1 for plan in plans
+        if plan.get("status") == "在投" and (plan.get("item_traffic") or {}).get("status") != "missing"
+    )
+    item_traffic_complete_count = sum(
+        1 for plan in plans
+        if plan.get("status") == "在投" and (plan.get("item_traffic") or {}).get("status") == "complete"
+    )
     return {
         "summary": {
             "total": len(diagnostics),
@@ -851,6 +955,9 @@ def detect_promotion_anomalies(
             "active_plan_count": active_plan_count,
             "realtime_coverage_count": realtime_coverage,
             "realtime_coverage_rate": round(realtime_coverage / active_plan_count * 100, 1) if active_plan_count else 0.0,
+            "item_traffic_coverage_count": item_traffic_coverage_count,
+            "item_traffic_complete_count": item_traffic_complete_count,
+            "item_traffic_coverage_rate": round(item_traffic_coverage_count / active_plan_count * 100, 1) if active_plan_count else 0.0,
         },
         "thresholds": {
             "budget_over": budget_over,
@@ -896,6 +1003,10 @@ def ai_diagnose_promotion(
                     "generated_at": cached["updated_at"],
                 }
 
+    # 模型请求可能持续几十秒；先释放本次诊断读取事务，避免 SQLite 长时间
+    # 持有读锁，阻塞后台同步或本接口稍后的诊断结果写入。
+    db.commit()
+
     from backend.app.api.model_configs import get_default_config
     from backend.app.core.ai_client import AIError, chat_completion
 
@@ -918,6 +1029,8 @@ def ai_diagnose_promotion(
         "recommended_variable（建议调整的唯一变量）、recommended_direction（提高/降低/收窄/扩大/暂停/不调整）、"
         "recommended_range（幅度范围或不建议直接调整）、observation_hours（1-168的整数）、"
         "success_criteria（可验证的成功标准数组，最多3条）、rollback_condition（回滚条件）、next_step（下一步动作）。\n\n"
+        "stats 中的 report_details 是万相台计划报表原始明细，adPv=展现量、click=点击、ctr/cvr 为比例、alipayInshopNum=成交件数；funnel 是已换算的可读漏斗指标。"
+        "请优先用 realtime 明细判断当前状态，再用 yesterday/7d 与历史趋势做对比；字段缺失时明确标注，不要把缺失当成 0。\n\n"
         "下面是当前可用数据，请先理解字段含义再作答：\n"
         f"{context_json}"
     )

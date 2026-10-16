@@ -66,8 +66,21 @@ from .health import build_dataset_metadata, record_sync_result
 router = APIRouter()
 
 
+def _plan_value(plan, key: str, default=None):
+    try:
+        return plan[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _plan_execution_guard(db, user: dict, plan) -> dict:
     """高风险平台写入守卫：关键实时指标缺失或计划同步过期时禁止执行。"""
+    if _plan_value(plan, "platform_presence") == "missing" or _plan_value(plan, "status") == "平台已失效":
+        return {
+            "can_execute": False,
+            "block_reason": "该计划已不在万相台当前计划列表中，不能执行调整。历史数据仍保留用于复盘。",
+            "data_metadata": build_dataset_metadata(db, "plans", user, int(plan["store_id"])),
+        }
     stat = db.execute(
         "SELECT updated_at FROM promo_plan_stats WHERE store_id = ? AND campaign_id = ? AND mode = 'realtime'",
         (plan["store_id"], plan["campaign_id"]),
@@ -1407,6 +1420,7 @@ def list_plans(
     channel: str = "",
     mode: str = "realtime",
     store_id: int | None = None,
+    include_invalid: bool = False,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ) -> dict:
@@ -1429,6 +1443,8 @@ def list_plans(
     )
     params: list = [mode]
     where_parts: list[str] = []
+    if not include_invalid:
+        where_parts.append("COALESCE(p.platform_presence, 'active') != 'missing'")
     visible = visible_store_ids(user)
     if visible is None:
         pass
@@ -1449,6 +1465,38 @@ def list_plans(
     query += " ORDER BY CASE p.status WHEN '在投' THEN 0 ELSE 1 END, stat_spend DESC, p.id ASC"
     rows = db.execute(query, params).fetchall()
     items = []
+    plan_item_keys = sorted({(int(row["store_id"]), str(row["linked_item_id"])) for row in rows if row["linked_item_id"]})
+
+    # 计划自身的 ROI 是万相台归因口径；真实 ROI 使用该计划关联宝贝的实际成交额作分子。
+    # 两者保持同一时间范围，按店铺和宝贝匹配，避免把同店其他宝贝的成交额算进来。
+    real_sales_by_item: dict[tuple[int, str], float | None] = {}
+    if plan_item_keys:
+        plan_store_ids = sorted({store_id for store_id, _ in plan_item_keys})
+        plan_item_ids = sorted({item_id for _, item_id in plan_item_keys})
+        store_placeholders = ",".join("?" for _ in plan_store_ids)
+        item_placeholders = ",".join("?" for _ in plan_item_ids)
+        if mode == "realtime":
+            real_sales_rows = db.execute(
+                "SELECT store_id, item_id, sales FROM store_item_realtime "
+                f"WHERE store_id IN ({store_placeholders}) AND item_id IN ({item_placeholders})",
+                [*plan_store_ids, *plan_item_ids],
+            ).fetchall()
+        else:
+            if mode == "yesterday":
+                sales_start = sales_end = date_cls.today() - timedelta(days=1)
+            else:
+                sales_start = date_cls.today() - timedelta(days=7)
+                sales_end = date_cls.today() - timedelta(days=1)
+            real_sales_rows = db.execute(
+                "SELECT store_id, item_id, SUM(sales) AS sales, COUNT(*) AS points "
+                "FROM store_item_daily WHERE data_date >= ? AND data_date <= ? "
+                f"AND store_id IN ({store_placeholders}) AND item_id IN ({item_placeholders}) GROUP BY store_id, item_id",
+                [sales_start.isoformat(), sales_end.isoformat(), *plan_store_ids, *plan_item_ids],
+            ).fetchall()
+        real_sales_by_item = {
+            (int(row["store_id"]), str(row["item_id"])): float(row["sales"] or 0) if mode == "realtime" or int(row["points"] or 0) else None
+            for row in real_sales_rows
+        }
     def _cycle(cur, prev, scope="unknown"):
         if prev and (mode != "realtime" or scope == "same_hour"):
             return round((cur - prev) / prev * 100, 2)
@@ -1467,6 +1515,8 @@ def list_plans(
         d["retained_sales"] = d.pop("stat_retained_sales", 0) or 0
         d["retained_roi"] = d.pop("stat_retained_roi", 0) or 0
         d["refund_amt"] = d.pop("stat_refund_amt", 0) or 0
+        real_sales = real_sales_by_item.get((int(d["store_id"]), str(d.get("linked_item_id") or "")))
+        d["real_roi"] = round(real_sales / d["spend"], 2) if real_sales is not None and d["spend"] else None
         d["item_id"] = d.pop("linked_item_id", "") or ""
         d["item_title"] = d.pop("linked_item_title", "") or ""
         d["item_image"] = d.pop("linked_item_image", "") or ""
@@ -1500,6 +1550,25 @@ def list_plans(
         "compare_note": compare_notes.get(mode, "按上期数据比较"),
         "data_metadata": build_dataset_metadata(db, "plans", user, store_id, expected_points=len(items), actual_points=sum(1 for item in items if item.get("updated_at"))),
     }
+
+
+def _mark_missing_platform_plans(db, store_id: int, current_campaign_ids: set[str], now: str) -> int:
+    """对账平台完整快照；归档本次未返回的计划，但保留历史数据和动作记录。"""
+    rows = db.execute(
+        "SELECT id, campaign_id FROM promo_plans WHERE store_id = ? AND COALESCE(platform_presence, 'active') != 'missing'",
+        (store_id,),
+    ).fetchall()
+    missing_ids = [int(row["id"]) for row in rows if str(row["campaign_id"]) not in current_campaign_ids]
+    if not missing_ids:
+        return 0
+    placeholders = ",".join("?" for _ in missing_ids)
+    db.execute(
+        f"UPDATE promo_plans SET platform_presence = 'missing', status = '平台已失效', "
+        f"platform_last_seen_at = COALESCE(platform_last_seen_at, updated_at), "
+        f"platform_missing_at = COALESCE(platform_missing_at, ?), updated_at = ? WHERE id IN ({placeholders})",
+        [now, now, *missing_ids],
+    )
+    return len(missing_ids)
 
 @router.post("/sync-plans")
 def sync_plans(
@@ -1552,12 +1621,13 @@ def sync_plans(
                 pass
             for p in snapshots:
                 db.execute(
-                    "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, budget_type, bid_type, bid_value, status, gmt_create, spend, sales, roi, clicks, note, tag, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, '', '', ?) "
+                    "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, day_budget, budget_type, bid_type, bid_value, status, gmt_create, spend, sales, roi, clicks, note, tag, platform_presence, platform_last_seen_at, platform_missing_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, '', '', 'active', ?, NULL, ?) "
                     "ON CONFLICT(store_id, campaign_id) DO UPDATE SET "
                     "scene = excluded.scene, scene_name = excluded.scene_name, plan_name = excluded.plan_name, "
                     "day_budget = excluded.day_budget, budget_type = excluded.budget_type, bid_type = excluded.bid_type, bid_value = excluded.bid_value, "
-                    "status = excluded.status, gmt_create = excluded.gmt_create, updated_at = excluded.updated_at",
+                    "status = excluded.status, gmt_create = excluded.gmt_create, platform_presence = 'active', "
+                    "platform_last_seen_at = excluded.platform_last_seen_at, platform_missing_at = NULL, updated_at = excluded.updated_at",
                     (
                         store["id"],
                         p["scene"],
@@ -1570,6 +1640,7 @@ def sync_plans(
                         p["bid_value"],
                         p["status"],
                         p["gmt_create"],
+                        now,
                         now,
                     ),
                 )
@@ -1610,9 +1681,19 @@ def sync_plans(
                             now,
                         ),
                     )
-            results.append(
-                {"store_id": store["id"], "store_name": store["name"], "ok": True, "plans": len(snapshots)}
+            missing_count = _mark_missing_platform_plans(
+                db,
+                int(store["id"]),
+                {str(plan["campaign_id"]) for plan in snapshots if plan.get("campaign_id")},
+                now,
             )
+            results.append({
+                "store_id": store["id"],
+                "store_name": store["name"],
+                "ok": True,
+                "plans": len(snapshots),
+                "invalidated": missing_count,
+            })
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
         except Exception as exc:  # noqa: BLE001 - 单店失败不能中断其他店铺同步
@@ -1629,6 +1710,8 @@ def sync_plans(
 @router.post("/sync-items")
 def sync_items(
     mode: str = "realtime",
+    start: str = "",
+    end: str = "",
     store_id: int | None = None,
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
@@ -1639,7 +1722,20 @@ def sync_items(
     商品报表为空或失败时退回方案B：宝贝↔计划映射 + 计划花费归因（单商品计划全额，多商品均摊）。
     """
     today = date_cls.today()
-    if mode == "realtime":
+    use_range = bool(start.strip() and end.strip())
+    if use_range:
+        try:
+            range_start = date_cls.fromisoformat(start.strip())
+            range_end = date_cls.fromisoformat(end.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="日期格式不正确（应为 YYYY-MM-DD）") from exc
+        if range_start > range_end:
+            range_start, range_end = range_end, range_start
+        start = range_start.isoformat()
+        end = range_end.isoformat()
+        realtime = False
+        db_mode = "range"
+    elif mode == "realtime":
         start = end = today.isoformat()
         realtime = True
         db_mode = "realtime"
@@ -1661,7 +1757,8 @@ def sync_items(
         db_mode = str(days)
     now = _now()
     results = []
-    visible = visible_store_ids(user)
+    # 后台定时补录没有登录用户；此时按系统任务处理全部店铺。
+    visible = visible_store_ids(user) if user is not None else None
     stores = _all_stores(db)
     if visible is not None:
         stores = [store for store in stores if store["id"] in visible]
@@ -1674,7 +1771,33 @@ def sync_items(
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
             continue
         try:
-            if realtime:
+            if use_range:
+                rows = []
+                source = "report_daily"
+                current = range_start
+                while current <= range_end:
+                    target = current.isoformat()
+                    day_rows = fetch_item_report(store, target, target, realtime=False)
+                    if not day_rows:
+                        day_rows = fetch_promo_item_fallback(store, target, target, realtime=False)
+                        day_source = "plan_daily"
+                    else:
+                        day_source = "report_daily"
+                    for it in day_rows:
+                        db.execute(
+                            "INSERT INTO promo_item_daily (store_id, item_id, item_title, data_date, spend, sales, roi, clicks, orders, impressions, source, updated_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                            "ON CONFLICT(store_id, item_id, data_date) DO UPDATE SET "
+                            "item_title=excluded.item_title, spend=excluded.spend, sales=excluded.sales, roi=excluded.roi, "
+                            "clicks=excluded.clicks, orders=excluded.orders, impressions=excluded.impressions, source=excluded.source, updated_at=excluded.updated_at",
+                            (store["id"], it["item_id"], it.get("item_title") or "", target,
+                             it.get("spend") or 0, it.get("sales") or 0, it.get("roi") or 0,
+                             it.get("clicks") or 0, it.get("orders") or 0, it.get("impressions") or 0,
+                             day_source, now),
+                        )
+                        rows.append(it)
+                    current += timedelta(days=1)
+            elif realtime:
                 # 实时：走推广「计划→商品」口径（全站推广+关键词+人群，不含内容营销），
                 # 与万相台各推广模块一致；实时商品报表混入大量短视频条目，不能用作商品推广数据
                 rows = fetch_item_promo_plan_based(store, start, end, realtime=True)
@@ -1688,7 +1811,7 @@ def sync_items(
                 if not rows:
                     rows = fetch_promo_item_fallback(store, start, end, realtime=False)
                     source = "plan"
-            for it in rows:
+            for it in ([] if use_range else rows):
                 db.execute(
                     "INSERT INTO promo_item_stats (store_id, item_id, item_title, mode, spend, sales, roi, clicks, orders, impressions, source, updated_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -2432,10 +2555,11 @@ def plan_trend(
     store = dict(store)
     today = date_cls.today()
     start = today - timedelta(days=days - 1)
-    try:
-        _ensure_plan_daily(db, store, start, today, user)
-    except Exception:  # noqa: BLE001
-        pass
+    if row["platform_presence"] != "missing" and row["status"] != "平台已失效":
+        try:
+            _ensure_plan_daily(db, store, start, today, user)
+        except Exception:  # noqa: BLE001
+            pass
     rows = db.execute(
         "SELECT data_date, spend, sales, roi, clicks FROM promo_plan_daily "
         "WHERE store_id = ? AND campaign_id = ? AND data_date >= ? AND data_date <= ? ORDER BY data_date ASC",

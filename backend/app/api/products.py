@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from backend.app.api.auth import get_current_user, visible_store_ids
 from backend.app.core.db import get_db
@@ -11,6 +12,12 @@ from backend.app.core.qianniu import fetch_on_sale_products
 from backend.app.core.sycm import PROFILE_MISSING_MSG, has_profile
 
 router = APIRouter()
+
+
+class ProductAliasIn(BaseModel):
+    store_id: int
+    alias: str = Field(min_length=1, max_length=60)
+    note: str = Field(default="", max_length=200)
 
 
 def _now() -> str:
@@ -32,6 +39,59 @@ def _ensure_store_access(user: dict, store_id: int) -> None:
     visible = visible_store_ids(user)
     if visible is not None and store_id not in visible:
         raise HTTPException(status_code=403, detail="无权查看该店铺商品")
+
+
+@router.get("/aliases")
+def list_product_aliases(user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    visible = visible_store_ids(user)
+    params: list[int] = []
+    where = ""
+    if visible is not None:
+        if not visible:
+            return {"items": [], "total": 0}
+        where = f" WHERE pa.store_id IN ({','.join('?' for _ in visible)})"
+        params.extend(sorted(visible))
+    rows = db.execute(
+        """SELECT pa.*, p.title AS original_title, s.name AS store_name
+        FROM product_aliases pa
+        LEFT JOIN store_products p ON p.store_id = pa.store_id AND p.item_id = pa.item_id
+        LEFT JOIN stores s ON s.id = pa.store_id""" + where + " ORDER BY datetime(pa.updated_at) DESC",
+        params,
+    ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": len(rows)}
+
+
+@router.put("/aliases/{item_id}")
+def save_product_alias(item_id: str, body: ProductAliasIn, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    _ensure_store_access(user, body.store_id)
+    product = db.execute("SELECT title FROM store_products WHERE store_id = ? AND item_id = ?", (body.store_id, item_id)).fetchone()
+    if not product:
+        raise HTTPException(status_code=404, detail="商品不存在，请先同步在售商品")
+    alias = body.alias.strip()
+    if not alias:
+        raise HTTPException(status_code=400, detail="请输入商品备注名")
+    now = _now()
+    db.execute(
+        """INSERT INTO product_aliases (store_id, item_id, alias, note, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(store_id, item_id) DO UPDATE SET alias = excluded.alias,
+        note = excluded.note, updated_at = excluded.updated_at""",
+        (body.store_id, item_id, alias, body.note.strip(), now, now),
+    )
+    row = db.execute(
+        """SELECT pa.*, p.title AS original_title, s.name AS store_name
+        FROM product_aliases pa JOIN store_products p ON p.store_id = pa.store_id AND p.item_id = pa.item_id
+        JOIN stores s ON s.id = pa.store_id WHERE pa.store_id = ? AND pa.item_id = ?""",
+        (body.store_id, item_id),
+    ).fetchone()
+    return {"item": dict(row)}
+
+
+@router.delete("/aliases/{item_id}")
+def delete_product_alias(item_id: str, store_id: int, user: dict = Depends(get_current_user), db=Depends(get_db)) -> dict:
+    _ensure_store_access(user, store_id)
+    db.execute("DELETE FROM product_aliases WHERE store_id = ? AND item_id = ?", (store_id, item_id))
+    return {"ok": True}
 
 
 def _save_store_products(db, store_id: int, products: list[dict], synced_at: str) -> None:
@@ -156,8 +216,8 @@ def list_products(
         params.append(store_id)
     keyword = q.strip()
     if keyword:
-        where += " AND (p.title LIKE ? OR p.item_id LIKE ?)"
-        params.extend([f"%{keyword}%", f"%{keyword}%"])
+        where += " AND (p.title LIKE ? OR p.item_id LIKE ? OR pa.alias LIKE ?)"
+        params.extend([f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"])
     summary_where = where
     if stock_status == "low":
         where += " AND p.stock BETWEEN 1 AND 10"
@@ -174,7 +234,7 @@ def list_products(
     elif sales_status != "all":
         raise HTTPException(status_code=400, detail="经营状态筛选不正确")
 
-    total = db.execute("SELECT COUNT(*) AS c FROM store_products p" + where, params).fetchone()["c"]
+    total = db.execute("SELECT COUNT(*) AS c FROM store_products p LEFT JOIN product_aliases pa ON pa.store_id = p.store_id AND pa.item_id = p.item_id" + where, params).fetchone()["c"]
     summary = db.execute(
         """
         SELECT COUNT(*) AS total,
@@ -183,6 +243,7 @@ def list_products(
                COALESCE(SUM(p.sold_quantity), 0) AS sold_quantity,
                MIN(p.synced_at) AS last_sync
         FROM store_products p
+        LEFT JOIN product_aliases pa ON pa.store_id = p.store_id AND pa.item_id = p.item_id
         """
         + summary_where,
         params,
@@ -196,9 +257,11 @@ def list_products(
         order_sql = f"p.sold_quantity {sort_order.upper()}, p.item_id DESC"
     rows = db.execute(
         """
-        SELECT p.*, s.name AS store_name
+        SELECT p.*, s.name AS store_name, pa.alias AS product_alias, pa.note AS alias_note,
+               p.title AS original_title
         FROM store_products p
         JOIN stores s ON s.id = p.store_id
+        LEFT JOIN product_aliases pa ON pa.store_id = p.store_id AND pa.item_id = p.item_id
         """
         + where
         + f" ORDER BY {order_sql} LIMIT ? OFFSET ?",
@@ -210,7 +273,7 @@ def list_products(
     except (TypeError, ValueError):
         stale = True
     return {
-        "items": [dict(row) for row in rows],
+        "items": [{**dict(row), "title": row["product_alias"] or row["title"]} for row in rows],
         "total": total,
         "page": page,
         "page_size": page_size,

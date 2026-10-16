@@ -122,10 +122,10 @@ export function StoresPage() {
   };
 
   const total = stores.length;
-  const normal = stores.filter((store) => store.display_status === "active").length;
   const loginErrorOnly = searchParams.get("login_status") === "error";
   const needsLoginAttention = (store: Store) => store.display_status === "active" && (!store.sycm_configured || store.sycm_status === "error");
   const attention = stores.filter(needsLoginAttention).length;
+  const normal = stores.filter((store) => store.display_status === "active" && !needsLoginAttention(store)).length;
   const visibleStores = loginErrorOnly ? stores.filter(needsLoginAttention) : stores;
 
   const openCreate = () => {
@@ -569,6 +569,7 @@ export function StoresPage() {
       refresh();
     } catch (error) {
       message.error(getApiErrorMessage(error));
+      await refresh();
     } finally {
       setSyncingId(null);
     }

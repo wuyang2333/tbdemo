@@ -83,7 +83,7 @@ def _load_cockpit_rows(db, user: dict, store_id: int | None) -> tuple[list[dict]
     plans = [
         dict(row)
         for row in db.execute(
-            "SELECT * FROM promo_plans WHERE 1=1" + scope_frag + " ORDER BY updated_at DESC LIMIT 2000",
+            "SELECT * FROM promo_plans WHERE COALESCE(platform_presence, 'active') != 'missing'" + scope_frag + " ORDER BY updated_at DESC LIMIT 2000",
             scope_params,
         ).fetchall()
     ]

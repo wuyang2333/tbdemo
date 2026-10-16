@@ -50,6 +50,128 @@ def test_plans_support_channel_filter_and_return_channel(client, admin_token):
     assert response.json()["items"][0]["item_image"] == "https://example.com/item-1001.png"
 
 
+def test_plans_return_real_roi_from_item_sales_for_realtime_mode(client, admin_token):
+    db_path = os.environ["TAOBAO_DB_PATH"]
+    now = datetime.now().astimezone()
+    now_text = now.isoformat(timespec="seconds")
+    today = now.date().isoformat()
+    current_hour = now.strftime("%H:00")
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO stores (name, status, created_at) VALUES ('真实ROI测试店', 'active', ?)", (now_text,))
+    store_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, status, updated_at) "
+        "VALUES (?, 'keyword', '关键词推广', 'real-roi-plan', '真实ROI计划', '在投', ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO promo_plan_items (store_id, campaign_id, item_id, item_title, updated_at) "
+        "VALUES (?, 'real-roi-plan', 'real-roi-item', '真实ROI宝贝', ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) "
+        "VALUES (?, 'real-roi-plan', 'realtime', 80, 40, 0.5, 12, ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO store_item_realtime (store_id, item_id, item_title, sales, updated_at) "
+        "VALUES (?, 'real-roi-item', '真实ROI宝贝', 96, ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO store_hourly_data (store_id, data_date, hour, sales, created_at) VALUES (?, ?, ?, ?, ?)",
+        (store_id, today, current_hour, 160, now_text),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get(
+        f"/api/promotions/plans?store_id={store_id}&mode=realtime",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == 200, response.text
+    item = next(item for item in response.json()["items"] if item["campaign_id"] == "real-roi-plan")
+    assert item["real_roi"] == 1.2
+
+
+def test_plans_return_null_real_roi_without_item_sales(client, admin_token):
+    db_path = os.environ["TAOBAO_DB_PATH"]
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO stores (name, status, created_at) VALUES ('真实ROI无数据店', 'active', ?)", (now,))
+    store_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, status, updated_at) "
+        "VALUES (?, 'keyword', '关键词推广', 'real-roi-empty', '无成交数据计划', '在投', ?)",
+        (store_id, now),
+    )
+    conn.execute(
+        "INSERT INTO promo_plan_items (store_id, campaign_id, item_id, item_title, updated_at) "
+        "VALUES (?, 'real-roi-empty', 'real-roi-empty-item', '无成交数据宝贝', ?)",
+        (store_id, now),
+    )
+    conn.execute(
+        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) "
+        "VALUES (?, 'real-roi-empty', 'realtime', 50, 20, 0.4, 4, ?)",
+        (store_id, now),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get(
+        f"/api/promotions/plans?store_id={store_id}&mode=realtime",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == 200, response.text
+    item = next(item for item in response.json()["items"] if item["campaign_id"] == "real-roi-empty")
+    assert item["real_roi"] is None
+
+
+def test_plans_return_real_roi_from_item_sales_for_yesterday_mode(client, admin_token):
+    db_path = os.environ["TAOBAO_DB_PATH"]
+    now = datetime.now().astimezone()
+    now_text = now.isoformat(timespec="seconds")
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO stores (name, status, created_at) VALUES ('真实ROI历史测试店', 'active', ?)", (now_text,))
+    store_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO promo_plans (store_id, scene, scene_name, campaign_id, plan_name, status, updated_at) "
+        "VALUES (?, 'keyword', '关键词推广', 'real-roi-yesterday', '历史真实ROI计划', '在投', ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO promo_plan_items (store_id, campaign_id, item_id, item_title, updated_at) "
+        "VALUES (?, 'real-roi-yesterday', 'real-roi-yesterday-item', '历史真实ROI宝贝', ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO promo_plan_stats (store_id, campaign_id, mode, spend, sales, roi, clicks, updated_at) "
+        "VALUES (?, 'real-roi-yesterday', 'yesterday', 100, 30, 0.3, 10, ?)",
+        (store_id, now_text),
+    )
+    conn.execute(
+        "INSERT INTO store_item_daily (store_id, item_id, item_title, data_date, sales, created_at) "
+        "VALUES (?, 'real-roi-yesterday-item', '历史真实ROI宝贝', ?, 250, ?)",
+        (store_id, yesterday, now_text),
+    )
+    conn.execute(
+        "INSERT INTO store_daily_data (store_id, data_date, sales, created_at) VALUES (?, ?, 999, ?)",
+        (store_id, yesterday, now_text),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get(
+        f"/api/promotions/plans?store_id={store_id}&mode=yesterday",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert response.status_code == 200, response.text
+    item = next(item for item in response.json()["items"] if item["campaign_id"] == "real-roi-yesterday")
+    assert item["real_roi"] == 2.5
+
+
 def test_promotion_data_supports_channel_filter_and_channel_groups(client, admin_token):
     db_path = os.environ["TAOBAO_DB_PATH"]
     target_date = (date.today() - timedelta(days=1)).isoformat()

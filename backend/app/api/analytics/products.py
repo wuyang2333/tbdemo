@@ -37,6 +37,12 @@ router = APIRouter()
 
 # ---------- 商品分析 ----------
 
+
+def _pct_change(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous is None or previous == 0:
+        return None
+    return round((current - previous) / previous * 100, 1)
+
 def _aggregate_item_rows(rows) -> list[dict]:
     """把商品每日明细按商品聚合（销售额/订单/买家/访客/转化/加购/退款）。"""
     prod_map: dict[str, dict] = {}
@@ -69,12 +75,20 @@ def _aggregate_item_rows(rows) -> list[dict]:
     return items
 
 
-def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
+def _attach_promo(db, items, promo_mode: str | None, sf, sp, start: date_cls | None = None, end: date_cls | None = None) -> None:
     """给商品列表附加推广数据（promo_spend/promo_sales/promo_roi/promo_share）。"""
-    rows = db.execute(
-        "SELECT item_id, spend, sales, roi FROM promo_item_stats WHERE mode = ?" + sf,
-        [promo_mode] + sp,
-    ).fetchall()
+    if start is not None and end is not None:
+        rows = db.execute(
+            "SELECT item_id, SUM(spend) AS spend, SUM(sales) AS sales, "
+            "CASE WHEN SUM(spend) > 0 THEN SUM(sales) / SUM(spend) ELSE 0 END AS roi "
+            "FROM promo_item_daily WHERE data_date >= ? AND data_date <= ?" + sf + " GROUP BY item_id",
+            [start.isoformat(), end.isoformat()] + sp,
+        ).fetchall()
+    else:
+        rows = db.execute(
+            "SELECT item_id, spend, sales, roi FROM promo_item_stats WHERE mode = ?" + sf,
+            [promo_mode] + sp,
+        ).fetchall()
     p_map = {r["item_id"]: r for r in rows}
     # 净实际投产比：商品→计划映射 + 计划留存成交/花费聚合（复用计划表，无需新字段）
     plan_mode = "realtime" if promo_mode == "realtime" else "yesterday" if promo_mode == "yesterday" else "7d"
@@ -92,6 +106,36 @@ def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
     for r in plan_rows:
         if r["spend"] and r["retained_sales"]:
             net_map[r["item_id"]] = round(r["retained_sales"] / r["spend"], 2)
+
+    compare_map: dict[str, object] = {}
+    compare_net_map: dict[str, float] = {}
+    compare_sales_map: dict[str, float] = {}
+    if promo_mode == "realtime":
+        compare_rows = db.execute(
+            "SELECT item_id, spend, sales, roi FROM promo_item_stats WHERE mode = 'yesterday'" + sf,
+            sp,
+        ).fetchall()
+        compare_map = {r["item_id"]: r for r in compare_rows}
+        compare_plan_rows = db.execute(
+            "SELECT pi.item_id, "
+            "COALESCE(SUM(ps.spend), 0) AS spend, "
+            "COALESCE(SUM(ps.retained_sales), 0) AS retained_sales "
+            "FROM promo_plan_items pi "
+            "JOIN promo_plan_stats ps ON ps.store_id = pi.store_id AND ps.campaign_id = pi.campaign_id AND ps.mode = 'yesterday' "
+            "WHERE 1=1" + plan_sf + " GROUP BY pi.item_id",
+            sp,
+        ).fetchall()
+        for r in compare_plan_rows:
+            if r["spend"] and r["retained_sales"]:
+                compare_net_map[r["item_id"]] = round(r["retained_sales"] / r["spend"], 2)
+        yesterday = (date_cls.today() - timedelta(days=1)).isoformat()
+        compare_sales_rows = db.execute(
+            "SELECT item_id, SUM(sales) AS sales FROM store_item_daily "
+            "WHERE data_date = ?" + sf + " GROUP BY item_id",
+            [yesterday] + sp,
+        ).fetchall()
+        compare_sales_map = {r["item_id"]: round(r["sales"] or 0, 2) for r in compare_sales_rows}
+
     for it in items:
         p = p_map.get(it["item_id"])
         if p:
@@ -101,17 +145,54 @@ def _attach_promo(db, items, promo_mode: str, sf, sp) -> None:
             it["promo_sales"] = sales
             it["promo_roi"] = round(p["roi"] or 0, 2)
             it["promo_share"] = round(min(sales / (it["sales"] or 1) * 100, 100.0), 1)
+            it["real_roi"] = round(it["sales"] / spend, 2) if spend else None
         else:
             it["promo_spend"] = None
             it["promo_sales"] = None
             it["promo_roi"] = None
             it["promo_share"] = None
+            it["real_roi"] = None
         it["promo_net_roi"] = net_map.get(it["item_id"])
+
+        previous = compare_map.get(it["item_id"])
+        previous_spend = round(previous["spend"] or 0, 2) if previous else None
+        previous_promo_sales = round(previous["sales"] or 0, 2) if previous else None
+        previous_promo_roi = round(previous["roi"] or 0, 2) if previous else None
+        previous_item_sales = compare_sales_map.get(it["item_id"])
+        previous_net_roi = compare_net_map.get(it["item_id"])
+        previous_real_roi = (
+            round(previous_item_sales / previous_spend, 2)
+            if previous_item_sales is not None and previous_spend
+            else None
+        )
+        previous_share = (
+            round(min(previous_promo_sales / previous_item_sales * 100, 100.0), 1)
+            if previous_promo_sales is not None and previous_item_sales
+            else None
+        )
+
+        it["promo_spend_previous"] = previous_spend
+        it["promo_roi_previous"] = previous_promo_roi
+        it["promo_net_roi_previous"] = previous_net_roi
+        it["real_roi_previous"] = previous_real_roi
+        it["promo_share_previous"] = previous_share
+        it["promo_spend_cycle"] = _pct_change(it["promo_spend"], previous_spend)
+        it["promo_roi_cycle"] = _pct_change(it["promo_roi"], previous_promo_roi)
+        it["promo_net_roi_cycle"] = _pct_change(it["promo_net_roi"], previous_net_roi)
+        it["real_roi_cycle"] = _pct_change(it["real_roi"], previous_real_roi)
+        it["promo_share_cycle"] = _pct_change(it["promo_share"], previous_share)
 
 
 def _realtime_product_items(db, sf, sp) -> list[dict]:
     """今日实时商品列表（实时快照，按销售额排序并算占比）。"""
-    rows = db.execute("SELECT * FROM store_item_realtime WHERE 1=1" + sf, sp).fetchall()
+    rows = db.execute(
+        "SELECT * FROM store_item_realtime "
+        "WHERE updated_at = ("
+        "SELECT MAX(snapshot.updated_at) FROM store_item_realtime AS snapshot "
+        "WHERE snapshot.store_id = store_item_realtime.store_id"
+        ")" + sf,
+        sp,
+    ).fetchall()
     items = []
     for r in rows:
         items.append(
@@ -201,7 +282,14 @@ def analytics_products(
         ).fetchone()
         for _it in items:
             _it["lifecycle"] = _lifecycle_of(_it)
-        return {"items": items, "total": len(items), "days": 0, "mode": "realtime", "fetched_at": fetched["m"] if fetched and fetched["m"] else None}
+        return {
+            "items": items,
+            "total": len(items),
+            "days": 0,
+            "mode": "realtime",
+            "fetched_at": fetched["m"] if fetched and fetched["m"] else None,
+            "promo_compare_label": "较昨日全天",
+        }
 
     if mode == "yesterday":
         sf, sp = _store_filter(store_id, user)
@@ -264,7 +352,15 @@ def analytics_products(
         _attach_promo(db, items, "realtime", sf, sp)
         for _it in items:
             _it["lifecycle"] = _lifecycle_of(_it)
-        return {"items": items[:50], "total": len(items), "days": 1, "mode": "days", "range": f"{s.isoformat()}~{e.isoformat()}", "today_fallback": True}
+        return {
+            "items": items[:50],
+            "total": len(items),
+            "days": 1,
+            "mode": "days",
+            "range": f"{s.isoformat()}~{e.isoformat()}",
+            "today_fallback": True,
+            "promo_compare_label": "较昨日全天",
+        }
     # 涨跌幅：与上一相同长度周期对比（昨日=较前日，7天=较前7天……）
     prev_rows = db.execute(
         "SELECT * FROM store_item_daily WHERE data_date >= ? AND data_date <= ?" + sf,
@@ -291,7 +387,7 @@ def analytics_products(
     total_sales = sum(x["sales"] for x in items) or 1
     for item in items[:20]:
         item["sales_share"] = round(item["sales"] / total_sales * 100, 1)
-    _attach_promo(db, items, _range_promo_mode(s, e), sf, sp)
+    _attach_promo(db, items, _range_promo_mode(s, e), sf, sp, s, e)
     return {"items": items[:50], "total": len(items), "days": (e - s).days + 1, "mode": "days", "range": f"{s.isoformat()}~{e.isoformat()}"}
 
 

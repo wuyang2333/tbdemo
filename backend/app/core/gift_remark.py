@@ -102,15 +102,19 @@ def _record_waiting_payment(db, gift_id: int, status_text: str) -> None:
     db.commit()
 
 
-def _record_closed(db, gift_id: int) -> None:
+def _record_closed(db, gift_id: int, *, continue_by_buyer: bool) -> None:
+    # 关闭可能只是用户下错单后的中间状态；只有存在旺旺号时才继续观察新订单。
+    next_retry = (_now() + timedelta(minutes=3)).isoformat() if continue_by_buyer else None
     db.execute(
         """
         UPDATE gifts
-        SET remark_status = 'order_closed', remark_auto_pending = 0,
-            remark_error = '', remark_next_retry_at = NULL
+        SET remark_status = 'order_closed', remark_auto_pending = ?,
+            remark_error = ?, remark_next_retry_at = ?
         WHERE id = ? AND remark_auto_pending = 1
         """,
-        (gift_id,),
+        (1 if continue_by_buyer else 0,
+         '原订单已关闭，系统将继续按旺旺号查找新订单' if continue_by_buyer else '',
+         next_retry, gift_id),
     )
     db.commit()
 
@@ -174,7 +178,7 @@ def sync_pending(db, limit: int = 10) -> dict:
     rows = db.execute(
         """
         SELECT g.id, g.store_id, g.order_no, g.wangwang, g.order_time, g.price,
-               g.remark_lookup_order_no, g.remark_match_source, s.name AS store_name
+               g.remark_status, g.remark_lookup_order_no, g.remark_match_source, s.name AS store_name
         FROM gifts g
         JOIN stores s ON s.id = g.store_id
         WHERE g.remark_auto_pending = 1
@@ -223,18 +227,28 @@ def sync_pending(db, limit: int = 10) -> dict:
             continue
         try:
             store = {"id": gift["store_id"], "name": gift["store_name"]}
-            if gift["order_no"]:
+            if gift["order_no"] and gift["remark_status"] != "order_closed":
                 remark_result = qianniu.remark_sold_order(
                     store,
                     gift["order_no"],
                     memo=config["memo"],
                     flag=config["flag"],
                 )
+                if remark_result.get("outcome") == "order_closed" and str(gift["wangwang"] or "").strip():
+                    # 原订单关闭后，不再限定原下单日期，按旺旺号继续寻找后续新单。
+                    remark_result = qianniu.remark_sold_order_by_buyer(
+                        store,
+                        gift["wangwang"],
+                        "",
+                        gift["price"],
+                        memo=config["memo"],
+                        flag=config["flag"],
+                    )
             else:
                 remark_result = qianniu.remark_sold_order_by_buyer(
                     store,
                     gift["wangwang"],
-                    str(gift["order_time"] or "")[:10],
+                    "" if gift["remark_status"] == "order_closed" else str(gift["order_time"] or "")[:10],
                     gift["price"],
                     memo=config["memo"],
                     flag=config["flag"],
@@ -261,14 +275,14 @@ def sync_pending(db, limit: int = 10) -> dict:
             result["errors"].append(message)
         else:
             matched_order_no = str(remark_result.get("order_no") or "")
-            if not gift["order_no"] and matched_order_no:
+            if matched_order_no and (not gift["order_no"] or matched_order_no != gift["order_no"]):
                 db.execute(
                     """
                     UPDATE gifts
-                    SET remark_lookup_order_no = ?, remark_match_source = 'wangwang'
+                    SET order_no = ?, remark_lookup_order_no = ?, remark_match_source = 'wangwang'
                     WHERE id = ?
                     """,
-                    (matched_order_no, gift["id"]),
+                    (matched_order_no, matched_order_no, gift["id"]),
                 )
                 db.commit()
                 result["matched_by_wangwang"] += 1
@@ -288,7 +302,11 @@ def sync_pending(db, limit: int = 10) -> dict:
                 _record_waiting_payment(db, gift["id"], str(remark_result.get("order_status") or ""))
                 result["deferred"] += 1
             elif outcome == "order_closed":
-                _record_closed(db, gift["id"])
+                _record_closed(
+                    db,
+                    gift["id"],
+                    continue_by_buyer=bool(str(gift["wangwang"] or "").strip()),
+                )
                 result["closed"] += 1
             else:
                 remarked_at = _now_text()

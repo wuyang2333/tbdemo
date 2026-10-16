@@ -177,7 +177,7 @@ def summary_today(
     cur_hour = f"{now.hour:02d}:00"
 
     def _pct(cur, prev):
-        if prev and prev > 0:
+        if cur is not None and prev and prev > 0:
             return round((cur - prev) / prev * 100, 1)
         return None
 
@@ -232,13 +232,19 @@ def summary_today(
         s["spend"] = round(s["spend"], 2)
         s["sales"] = round(s["sales"], 2)
         s["roi"] = round(s["sales"] / s["spend"], 2) if s["spend"] else 0
+    real_roi_raw = t["sales"] / pts["spend"] if pts["spend"] else None
+    yesterday_real_roi_raw = y["sales"] / pys["spend"] if pys["spend"] else None
     promo = {
         "spend": pts["spend"],
         "sales": pts["sales"],
         "roi": round(pts["sales"] / pts["spend"], 2) if pts["spend"] else 0,
-        "real_roi": round(t["sales"] / pts["spend"], 2) if pts["spend"] else None,
-        "yesterday_real_roi": round(y["sales"] / pys["spend"], 2) if pys["spend"] else None,
-        "compare": {"spend": _pct(pts["spend"], pys["spend"]), "sales": _pct(pts["sales"], pys["sales"])},
+        "real_roi": round(real_roi_raw, 2) if real_roi_raw is not None else None,
+        "yesterday_real_roi": round(yesterday_real_roi_raw, 2) if yesterday_real_roi_raw is not None else None,
+        "compare": {
+            "spend": _pct(pts["spend"], pys["spend"]),
+            "sales": _pct(pts["sales"], pys["sales"]),
+            "real_roi": _pct(real_roi_raw, yesterday_real_roi_raw),
+        },
         "scenes": sorted(scenes.values(), key=lambda x: x["spend"], reverse=True),
     }
 

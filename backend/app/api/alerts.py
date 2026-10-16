@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -91,6 +92,16 @@ def _norm_rule(r) -> dict | None:
         threshold = float(r.get("threshold") or 0)
     except (TypeError, ValueError):
         return None
+    conditions = []
+    if isinstance(r.get("conditions"), list):
+        for c in r["conditions"]:
+            if not isinstance(c, dict) or c.get("module") not in RULE_MODULES or c.get("operator") not in RULE_OPERATORS:
+                continue
+            try:
+                c_threshold = float(c.get("threshold") or 0)
+            except (TypeError, ValueError):
+                continue
+            conditions.append({"module": c["module"], "field": str(c.get("field") or ""), "operator": c["operator"], "threshold": c_threshold})
     return {
         "id": str(r.get("id") or ""),
         "module": r["module"],
@@ -98,6 +109,7 @@ def _norm_rule(r) -> dict | None:
         "operator": r["operator"],
         "threshold": threshold,
         "enabled": bool(r.get("enabled", True)),
+        "conditions": conditions or None,
     }
 
 
@@ -726,17 +738,39 @@ def _check_product_rules(db, rules: list[dict]) -> list[str]:
         return []
     rows = db.execute(
         """
-        SELECT store_id, item_id, item_title, sales, visitors, pv, buyers, orders, conversion_rate,
-               add_cart, refund_amount, sales_cycle, visitors_cycle, pv_cycle, buyers_cycle,
-               orders_cycle, conversion_cycle, add_cart_cycle
-        FROM store_item_realtime
-        ORDER BY sales DESC
+        SELECT r.store_id, r.item_id, r.item_title, pa.alias AS product_alias,
+               r.sales, r.visitors, r.pv, r.buyers, r.orders, r.conversion_rate,
+               r.add_cart, r.refund_amount, r.sales_cycle, r.visitors_cycle, r.pv_cycle,
+               r.buyers_cycle, r.orders_cycle, r.conversion_cycle, r.add_cart_cycle
+        FROM store_item_realtime r
+        LEFT JOIN product_aliases pa ON pa.store_id = r.store_id AND pa.item_id = r.item_id
+        ORDER BY r.sales DESC
         """
     ).fetchall()
     promo_rows = db.execute(
         "SELECT store_id, item_id, spend, sales, roi FROM promo_item_stats WHERE mode = 'realtime'"
     ).fetchall()
     promo_map = {(row["store_id"], row["item_id"]): dict(row) for row in promo_rows}
+    yesterday_promo_rows = db.execute(
+        "SELECT store_id, item_id, spend FROM promo_item_stats WHERE mode = 'yesterday'"
+    ).fetchall()
+    yesterday_promo_map = {
+        (row["store_id"], row["item_id"]): dict(row) for row in yesterday_promo_rows
+    }
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday_sales_rows = db.execute(
+        """
+        SELECT store_id, item_id, COALESCE(SUM(sales), 0) AS sales
+        FROM store_item_daily
+        WHERE data_date = ?
+        GROUP BY store_id, item_id
+        """,
+        (yesterday,),
+    ).fetchall()
+    yesterday_sales_map = {
+        (row["store_id"], row["item_id"]): float(row["sales"] or 0)
+        for row in yesterday_sales_rows
+    }
     net_rows = db.execute(
         """
         SELECT pi.store_id, pi.item_id, COALESCE(SUM(ps.spend), 0) AS spend,
@@ -762,6 +796,20 @@ def _check_product_rules(db, rules: list[dict]) -> list[str]:
         item["promo_net_roi"] = net_map.get((item["store_id"], item["item_id"]), 0.0)
         item["real_roi"] = round(item["sales"] / item["promo_spend"], 2) if item["promo_spend"] else None
         item["promo_share"] = round(item["promo_sales"] / item["sales"] * 100, 2) if item["sales"] else 0.0
+        item_key = (item["store_id"], item["item_id"])
+        yesterday_promo = yesterday_promo_map.get(item_key, {})
+        yesterday_spend = float(yesterday_promo.get("spend") or 0)
+        yesterday_sales = yesterday_sales_map.get(item_key)
+        yesterday_real_roi = (
+            round(yesterday_sales / yesterday_spend, 2)
+            if yesterday_sales is not None and yesterday_spend
+            else None
+        )
+        real_roi_cycle = (
+            _hpct(item["real_roi"], yesterday_real_roi)
+            if item["real_roi"] is not None and yesterday_real_roi is not None
+            else None
+        )
         cycles = {
             "sales": item.get("sales_cycle"),
             "visitors": item.get("visitors_cycle"),
@@ -770,8 +818,9 @@ def _check_product_rules(db, rules: list[dict]) -> list[str]:
             "orders": item.get("orders_cycle"),
             "conversion_rate": item.get("conversion_cycle"),
             "add_cart": item.get("add_cart_cycle"),
+            "real_roi": real_roi_cycle,
         }
-        name = f"商品「{item.get('item_title') or item.get('item_id')}」"
+        name = f"商品「{item.get('product_alias') or item.get('item_id')}」"
         for rule in rules:
             message = _row_rule_message(rule, item, cycles, name)
             if message:

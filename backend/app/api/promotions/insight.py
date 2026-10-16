@@ -508,6 +508,8 @@ def plan_ai_insight(
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
+    if row["platform_presence"] == "missing" or row["status"] == "平台已失效":
+        raise HTTPException(status_code=409, detail="该计划已不在万相台当前计划列表中，不能生成新的 AI 决策。历史数据仍可查看。")
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
     if not store:
         raise HTTPException(status_code=400, detail="店铺不存在")
@@ -544,6 +546,8 @@ def plan_ai_insight_chat(
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="推广计划不存在")
+    if row["platform_presence"] == "missing" or row["status"] == "平台已失效":
+        raise HTTPException(status_code=409, detail="该计划已不在万相台当前计划列表中，不能继续进行 AI 分析。历史数据仍可查看。")
     store = db.execute("SELECT * FROM stores WHERE id = ?", (row["store_id"],)).fetchone()
     if not store:
         raise HTTPException(status_code=400, detail="店铺不存在")

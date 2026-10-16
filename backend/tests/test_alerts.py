@@ -14,6 +14,24 @@ def test_norm_hourly_rule_defaults():
     assert rule["threshold"] == 100
 
 
+def test_custom_rule_keeps_multiple_and_conditions():
+    from backend.app.api.alerts import _norm_rule
+
+    rule = _norm_rule({
+        "id": "roi-and-sales",
+        "module": "product",
+        "field": "real_roi",
+        "operator": "lt",
+        "threshold": 2,
+        "conditions": [
+            {"module": "product", "field": "real_roi", "operator": "lt", "threshold": 2},
+            {"module": "product", "field": "sales", "operator": "gt", "threshold": 1000},
+        ],
+    })
+    assert rule is not None
+    assert len(rule["conditions"]) == 2
+
+
 def test_norm_hourly_rule_rejects_invalid_field():
     assert _norm_hourly_rule({"field": "not-a-field", "operator": "lt", "threshold": 1.0}) is None
     assert _norm_hourly_rule({"field": "sales", "operator": "bad-op", "threshold": 1.0}) is None
@@ -166,6 +184,13 @@ def test_legacy_hourly_push_config_migrates_to_hours_scope(client):
 def test_product_and_promotion_rules_use_their_own_data(client):
     conn = sqlite3.connect(os.environ["TAOBAO_DB_PATH"])
     conn.row_factory = sqlite3.Row
+    conn.execute("DELETE FROM product_aliases WHERE store_id = 1 AND item_id = 'scope-product'")
+    conn.execute(
+        """
+        INSERT INTO product_aliases (store_id, item_id, alias, note, created_at, updated_at)
+        VALUES (1, 'scope-product', '主推牙刷', '', '2026-08-23T00:00:00', '2026-08-23T00:00:00')
+        """
+    )
     conn.execute("DELETE FROM store_item_realtime WHERE item_id = 'scope-product'")
     conn.execute(
         """
@@ -182,6 +207,23 @@ def test_product_and_promotion_rules_use_their_own_data(client):
         INSERT INTO promo_item_stats
             (store_id, item_id, item_title, mode, spend, sales, roi, updated_at)
         VALUES (1, 'scope-product', '页面独立商品', 'realtime', 80, 40, 0.5, '2026-08-23T00:00:00')
+        """
+    )
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    conn.execute("DELETE FROM store_item_daily WHERE store_id = 1 AND item_id = 'scope-product'")
+    conn.execute(
+        """
+        INSERT INTO store_item_daily
+            (store_id, item_id, item_title, data_date, sales, orders, buyers, created_at)
+        VALUES (1, 'scope-product', '页面独立商品', ?, 400, 4, 4, '2026-08-23T00:00:00')
+        """,
+        (yesterday,),
+    )
+    conn.execute(
+        """
+        INSERT INTO promo_item_stats
+            (store_id, item_id, item_title, mode, spend, sales, roi, updated_at)
+        VALUES (1, 'scope-product', '页面独立商品', 'yesterday', 100, 200, 2, '2026-08-23T00:00:00')
         """
     )
     conn.execute("DELETE FROM promo_plan_stats WHERE campaign_id = 'scope-plan'")
@@ -207,7 +249,14 @@ def test_product_and_promotion_rules_use_their_own_data(client):
             {"field": "add_cart", "operator": "cycle_up_pct", "threshold": 50, "enabled": True},
             {"field": "promo_roi", "operator": "lt", "threshold": 1, "enabled": True},
             {"field": "real_roi", "operator": "lt", "threshold": 2, "enabled": True},
+            {"field": "real_roi", "operator": "cycle_drop_pct", "threshold": 30, "enabled": True},
         ],
+    )
+    conn.execute("DELETE FROM product_aliases WHERE store_id = 1 AND item_id = 'scope-product'")
+    conn.commit()
+    product_messages_without_alias = _check_product_rules(
+        conn,
+        [{"field": "visitors", "operator": "cycle_drop_pct", "threshold": 30, "enabled": True}],
     )
     promotion_messages = _check_promotion_rules(
         conn,
@@ -220,10 +269,14 @@ def test_product_and_promotion_rules_use_their_own_data(client):
     )
     conn.close()
 
-    assert any("页面独立商品" in message for message in product_messages)
+    assert any("主推牙刷" in message for message in product_messages)
+    assert all("页面独立商品" not in message for message in product_messages)
+    assert any("scope-product" in message for message in product_messages_without_alias)
+    assert all("页面独立商品" not in message for message in product_messages_without_alias)
     assert any("加购数上涨" in message for message in product_messages)
     assert any("推广ROI" in message for message in product_messages)
     assert any("真实ROI" in message for message in product_messages)
+    assert any("真实ROI下降 68.8%" in message for message in product_messages)
     assert any("页面独立计划" in message for message in promotion_messages)
     assert any("预算消耗率" in message for message in promotion_messages)
     assert any("点击率" in message for message in promotion_messages)

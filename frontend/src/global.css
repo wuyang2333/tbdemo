@@ -308,6 +308,7 @@ h4,
   display: flex;
   align-items: flex-end;
   gap: 10px;
+  min-width: 0;
   margin-bottom: 22px;
   padding: 8px 0 18px;
   border-bottom: 1px solid var(--ops-border);
@@ -319,6 +320,12 @@ h4,
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ops-page-actions > .ant-space {
+  max-width: 100%;
 }
 
 .ops-page-head--stacked {
@@ -857,6 +864,37 @@ h4,
   background: var(--ops-panel);
 }
 
+/* 礼品单的筛选项较多：让换行发生在筛选栏内部，不把页面横向撑破。 */
+.gifts-filter-bar {
+  align-items: flex-start;
+}
+
+.gifts-filter-bar > .ant-input,
+.gifts-filter-bar > .ant-input-group-wrapper,
+.gifts-filter-bar > .ant-select,
+.gifts-filter-bar > .ant-picker,
+.gifts-filter-bar > .ant-btn,
+.gifts-filter-bar > .ant-divider {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.gifts-table-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.gifts-table-card .ant-card-body {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.gifts-table-card .ant-table-wrapper {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .ops-filter-bar__meta {
   margin-left: auto;
   color: var(--ops-text-3);
@@ -1183,6 +1221,77 @@ h4,
   line-height: 36px;
   width: calc(100% - 20px) !important;
   transition: background 0.2s ease, color 0.2s ease;
+}
+
+/* 数据口径：这是阅读型资料表，允许长文本换行，避免 URL、口径说明互相挤压。 */
+.glossary-table-shell {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ops-border);
+  border-radius: var(--ops-radius);
+  background: var(--ops-panel);
+}
+
+.glossary-table .ant-table {
+  background: transparent;
+}
+
+.glossary-table .ant-table-container {
+  overflow-x: auto;
+}
+
+.glossary-table .ant-table-thead > tr > th {
+  padding: 13px 14px;
+  color: var(--ops-text-2);
+  font-size: 12px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.glossary-table .ant-table-tbody > tr > td {
+  padding: 14px;
+  color: var(--ops-text-2);
+  font-size: 12px;
+  line-height: 1.55;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.glossary-table .ant-table-tbody > tr:hover > td {
+  background: var(--ops-card-bg-2) !important;
+}
+
+.glossary-metric {
+  display: block;
+  color: var(--ops-text);
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.glossary-wrap {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.glossary-code {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.glossary-tag {
+  max-width: 100%;
+  height: auto;
+  margin-inline-end: 0;
+  padding-block: 3px;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
 }
 
 .ops-sider-menu .ant-menu-item-selected {

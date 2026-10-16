@@ -83,10 +83,15 @@ def sync_promo_daily_all(db, days: int = 7) -> dict:
         try:
             items = fetch_scene_daily(store, start.isoformat(), end.isoformat())
             count = _store_daily_rows(db, store["id"], items, _now())
+            db.commit()
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
         except Exception as exc:  # noqa: BLE001 - 后台同步按店铺隔离
+            try:
+                db.rollback()
+            except Exception:
+                pass
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": f"同步异常：{str(exc) or exc.__class__.__name__}"})
     result = {"results": results, "total": len(results), "ok": sum(1 for r in results if r["ok"])}
     from .health import record_sync_result
@@ -172,8 +177,11 @@ def _last_sync(db) -> str | None:
     row = db.execute("SELECT value FROM meta WHERE key = 'promo_last_sync'").fetchone()
     return row["value"] if row else None
 
-def sync_promo_realtime_all(db) -> dict:
-    """同步万相台今日实时分时数据到 promo_realtime（后台定时与接口共用）。"""
+def sync_promo_realtime_all(db, target_date: str | None = None) -> dict:
+    """同步万相台指定日期实时分时数据到 promo_realtime。
+
+    默认同步今天；手动补历史时可传昨天，保留昨日实时小时用于环比展示。
+    """
     from backend.app.core.alimama import AlimamaError, fetch_realtime
 
     now = _now()
@@ -183,8 +191,8 @@ def sync_promo_realtime_all(db) -> dict:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": PROFILE_MISSING_MSG})
             continue
         try:
-            items = fetch_realtime(store)
-            count = _store_realtime_rows(db, store["id"], items, now)
+            items = fetch_realtime(store, target_date=target_date)
+            count = _store_realtime_rows(db, store["id"], items, now, data_date=target_date)
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": True, "rows": count})
         except AlimamaError as exc:
             results.append({"store_id": store["id"], "store_name": store["name"], "ok": False, "error": str(exc)})
@@ -387,7 +395,7 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None, 
     if plan_id is not None:
         plan_scope += (" AND" if plan_scope else " WHERE") + f" p.id = {int(plan_id)}"
     plans = db.execute(
-        "SELECT p.id, p.store_id, p.scene, p.scene_name, p.campaign_id, p.plan_name, p.status, p.day_budget, p.bid_value, "
+        "SELECT p.id, p.store_id, p.scene, p.scene_name, p.campaign_id, p.plan_name, p.status, p.platform_presence, p.day_budget, p.bid_value, "
         "COALESCE(s.spend,0) AS spend, COALESCE(s.sales,0) AS sales, COALESCE(s.roi,0) AS roi, COALESCE(s.clicks,0) AS clicks, "
         "COALESCE(s.prev_spend,0) AS prev_spend, COALESCE(s.prev_sales,0) AS prev_sales, COALESCE(s.prev_roi,0) AS prev_roi, "
         "COALESCE(s.prev_clicks,0) AS prev_clicks, COALESCE(s.prev_scope,'unknown') AS prev_scope, COALESCE(s.updated_at,'') AS stats_updated_at "
@@ -408,6 +416,7 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None, 
                 "scene_name": r["scene_name"] or r["scene"] or "?",
                 "plan_name": r["plan_name"] or "?",
                 "status": r["status"],
+                "platform_presence": r["platform_presence"] or "active",
                 "day_budget": round(r["day_budget"] or 0, 2),
                 "bid_value": round(r["bid_value"] or 0, 2),
                 "spend": spend,
@@ -437,7 +446,7 @@ def _promo_insight_data(mode: str, db, user: dict, store_id: int | None = None, 
         )
     total_spend = sum(p["spend"] for p in plan_list)
     total_sales = sum(p["sales"] for p in plan_list)
-    active = [p for p in plan_list if p["status"] == "在投"]
+    active = [p for p in plan_list if p["status"] == "在投" and p.get("platform_presence") != "missing"]
     low = [p for p in active if p["spend"] > 0 and p["roi"] < 1]
     mid = [p for p in active if p["spend"] > 0 and 1 <= p["roi"] < 2]
     high = [p for p in active if p["spend"] > 0 and p["roi"] >= 2]

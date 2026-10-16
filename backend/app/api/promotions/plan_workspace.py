@@ -179,7 +179,18 @@ def promotion_plan_workspace(
     observing = [item for item in actions if (item.get("status") or "") in {"planned", "observing"}]
     latest_decision = next((item for item in decisions if item.get("feedback_status") != "rejected"), decisions[0] if decisions else None)
     latest_action = actions[0] if actions else None
-    if data_status != "fresh":
+    platform_missing = plan.get("platform_presence") == "missing" or plan.get("status") == "平台已失效"
+    if platform_missing:
+        decision_summary = {
+            "title": "平台已无此计划",
+            "reason": "最近一次完整同步中，万相台当前计划列表已不再返回该计划。",
+            "recommended_action": "仅查看历史数据与操作记录；如需继续投放，请在万相台确认是否已删除或重建。",
+            "avoid_action": "不要再对这条历史计划生成决策或执行预算、出价和启停操作。",
+            "review_at": "无需继续观察",
+            "rollback_condition": "该计划当前不可执行",
+            "source": "平台计划对账",
+        }
+    elif data_status != "fresh":
         decision_summary = {
             "title": "先补数据，暂不调整",
             "reason": "计划业务数据已经过期或缺少可靠更新时间，继续执行会放大误判风险。",

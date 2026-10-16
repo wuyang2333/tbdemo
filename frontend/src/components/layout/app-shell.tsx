@@ -133,12 +133,10 @@ const CONTENT_CHILDREN = [
 ];
 
 const MONITORING_CHILDREN = [
-  { key: "/monitoring/overview", label: "竞品监控总览" },
-  { key: "/monitoring/shops", label: "竞品店铺库" },
-  { key: "/monitoring/products", label: "竞品商品追踪" },
-  { key: "/monitoring/pricing", label: "价格与活动追踪" },
-  { key: "/monitoring/radar", label: "竞品动作雷达" },
-  { key: "/monitoring/reports", label: "竞品分析报告" },
+  { key: "/monitoring/overview", label: "竞品总览" },
+  { key: "/monitoring/shops", label: "竞店管理" },
+  { key: "/monitoring/products", label: "竞品管理" },
+  { key: "/monitoring/reports", label: "竞品报告" },
 ];
 
 const MARKET_CHILDREN = [
@@ -162,6 +160,12 @@ const OPS_KNOWLEDGE_CHILDREN = [
   { key: "/ops-knowledge/automation", label: "运营自动化中心" },
 ];
 
+const CUSTOMERS_CHILDREN = [
+  { key: "/customers/quality", label: "商品质量" },
+  { key: "/customers/reviews", label: "评论处理" },
+  { key: "/customers/tools", label: "评价工具" },
+];
+
 const SUBMENU_ITEMS: Record<string, { key: string; label: string; group?: string }[]> = {
   analytics: ANALYTICS_CHILDREN,
   promotions: PROMOTIONS_CHILDREN,
@@ -170,6 +174,7 @@ const SUBMENU_ITEMS: Record<string, { key: string; label: string; group?: string
   market: MARKET_CHILDREN,
   "growth-lab": GROWTH_LAB_CHILDREN,
   "ops-knowledge": OPS_KNOWLEDGE_CHILDREN,
+  customers: CUSTOMERS_CHILDREN,
 };
 
 const MAIN_GROUPS = [
@@ -328,7 +333,8 @@ export function AppShell() {
   const current = getModule(location.pathname.split("/")[1] || "");
   const currentChild = Object.values(SUBMENU_ITEMS)
     .flat()
-    .find((c) => c.key === location.pathname);
+    .filter((c) => location.pathname === c.key || location.pathname.startsWith(`${c.key}/`))
+    .sort((left, right) => right.key.length - left.key.length)[0];
   const rootPath = `/${location.pathname.split("/")[1] || "dashboard"}`;
   const selectedKeys = [location.pathname, rootPath];
   useEffect(() => {
@@ -390,6 +396,9 @@ export function AppShell() {
   const systemMenuActive = systemModules.some((module) => selectedKeys.includes(`/${module.id}`));
   const profileMenuActive = selectedKeys.includes("/profile");
   const contextTabs = current ? SUBMENU_ITEMS[current.id] : undefined;
+  const contextActiveKey = current?.id === "customers" && location.pathname.startsWith("/customers/tools")
+    ? "/customers/tools"
+    : currentChild?.key || location.pathname;
   const surfaceKind = ["dashboard", "ai"].includes(current?.id ?? "")
     ? "cockpit"
     : ["analytics", "content", "monitoring", "market", "growth-lab", "ops-knowledge"].includes(current?.id ?? "")
@@ -907,7 +916,7 @@ export function AppShell() {
                 </nav>
               ) : (
                 <Tabs
-                  activeKey={location.pathname}
+                  activeKey={contextActiveKey}
                   items={contextTabs.map((item) => ({ key: item.key, label: item.label }))}
                   onChange={navigate}
                   size="small"

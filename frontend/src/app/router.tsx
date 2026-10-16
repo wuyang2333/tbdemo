@@ -20,13 +20,16 @@ const AnalyticsReportPage = lazy(() => import("../pages/analytics-report-page").
 const AnalyticsGlossaryPage = lazy(() => import("../pages/analytics-glossary-page").then((m) => ({ default: m.AnalyticsGlossaryPage })));
 const BoardPage = lazy(() => import("../pages/board-page").then((m) => ({ default: m.BoardPage })));
 const ContentPage = lazy(() => import("../pages/content-page").then((m) => ({ default: m.ContentPage })));
-const CustomersPage = lazy(() => import("../pages/customers-page").then((m) => ({ default: m.CustomersPage })));
+const loadCustomersPage = () => import("../pages/customers-page");
+const CustomersPage = lazy(() => loadCustomersPage().then((m) => ({ default: m.CustomersPage })));
 const DashboardPage = lazy(() => import("../pages/dashboard-page").then((m) => ({ default: m.DashboardPage })));
 const GiftsPage = lazy(() => import("../pages/gifts-page").then((m) => ({ default: m.GiftsPage })));
 const LoginPage = lazy(() => import("../pages/login-page").then((m) => ({ default: m.LoginPage })));
 const LogsPage = lazy(() => import("../pages/logs-page").then((m) => ({ default: m.LogsPage })));
 const ModelConfigsPage = lazy(() => import("../pages/model-configs-page").then((m) => ({ default: m.ModelConfigsPage })));
-const MonitoringPage = lazy(() => import("../pages/monitoring-page").then((m) => ({ default: m.MonitoringPage })));
+const MonitoringWorkspacePage = lazy(() => import("../pages/monitoring-workspace-page").then((m) => ({ default: m.MonitoringWorkspacePage })));
+const MonitoringShopDetailPage = lazy(() => import("../pages/monitoring-shop-detail-page").then((m) => ({ default: m.MonitoringShopDetailPage })));
+const MonitoringProductDetailPage = lazy(() => import("../pages/monitoring-product-detail-page").then((m) => ({ default: m.MonitoringProductDetailPage })));
 const ProductsPage = lazy(() => import("../pages/products-page").then((m) => ({ default: m.ProductsPage })));
 const ProfilePage = lazy(() => import("../pages/profile-page").then((m) => ({ default: m.ProfilePage })));
 const PromotionsPlansPage = lazy(() => import("../pages/promotions-plans-page").then((m) => ({ default: m.PromotionsPlansPage })));
@@ -48,7 +51,7 @@ function PageFallback() {
   const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setTimedOut(true), 15000);
+    const timer = window.setTimeout(() => setTimedOut(true), 30000);
     return () => window.clearTimeout(timer);
   }, []);
 
@@ -101,6 +104,13 @@ function RequireModule({ id, children }: { id: string; children: ReactNode }) {
 }
 
 export function AppRouter() {
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadCustomersPage();
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   return (
     <Suspense fallback={<PageFallback />}>
       <Routes>
@@ -167,11 +177,13 @@ export function AppRouter() {
           <Route
             path="/customers"
             element={
-              <RequireModule id="customers">
-                <CustomersPage />
-              </RequireModule>
+              <Navigate to="/customers/quality" replace />
             }
           />
+          <Route path="/customers/quality" element={<RequireModule id="customers"><CustomersPage /></RequireModule>} />
+          <Route path="/customers/reviews" element={<RequireModule id="customers"><CustomersPage /></RequireModule>} />
+          <Route path="/customers/tools" element={<RequireModule id="customers"><CustomersPage /></RequireModule>} />
+          <Route path="/customers/tools/:tool" element={<RequireModule id="customers"><CustomersPage /></RequireModule>} />
           <Route path="/analytics" element={<Navigate to="/analytics/overview" replace />} />
           <Route path="/analytics/overview" element={<RequireModule id="analytics"><AnalyticsOverviewPage /></RequireModule>} />
           <Route path="/analytics/report" element={<RequireModule id="analytics"><AnalyticsReportPage /></RequireModule>} />
@@ -204,12 +216,14 @@ export function AppRouter() {
           <Route path="/content/studio" element={<RequireModule id="content"><ContentPage sectionId="content-studio" /></RequireModule>} />
           <Route path="/content/performance" element={<RequireModule id="content"><ContentPage sectionId="content-performance" /></RequireModule>} />
           <Route path="/monitoring" element={<Navigate to="/monitoring/overview" replace />} />
-          <Route path="/monitoring/overview" element={<RequireModule id="monitoring"><MonitoringPage sectionId="monitoring-overview" /></RequireModule>} />
-          <Route path="/monitoring/shops" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-shops" /></RequireModule>} />
-          <Route path="/monitoring/products" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-products" /></RequireModule>} />
-          <Route path="/monitoring/pricing" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-pricing" /></RequireModule>} />
-          <Route path="/monitoring/radar" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-radar" /></RequireModule>} />
-          <Route path="/monitoring/reports" element={<RequireModule id="monitoring"><MonitoringPage sectionId="competitor-reports" /></RequireModule>} />
+          <Route path="/monitoring/overview" element={<RequireModule id="monitoring"><MonitoringWorkspacePage sectionId="monitoring-overview" /></RequireModule>} />
+          <Route path="/monitoring/shops" element={<RequireModule id="monitoring"><MonitoringWorkspacePage sectionId="competitor-shops" /></RequireModule>} />
+          <Route path="/monitoring/shops/:shopId" element={<RequireModule id="monitoring"><MonitoringShopDetailPage /></RequireModule>} />
+          <Route path="/monitoring/products" element={<RequireModule id="monitoring"><MonitoringWorkspacePage sectionId="competitor-products" /></RequireModule>} />
+          <Route path="/monitoring/products/:productId" element={<RequireModule id="monitoring"><MonitoringProductDetailPage /></RequireModule>} />
+          <Route path="/monitoring/pricing" element={<Navigate to="/monitoring/products" replace />} />
+          <Route path="/monitoring/radar" element={<Navigate to="/monitoring/overview" replace />} />
+          <Route path="/monitoring/reports" element={<RequireModule id="monitoring"><MonitoringWorkspacePage sectionId="competitor-reports" /></RequireModule>} />
           <Route path="/market" element={<Navigate to="/market/opportunities" replace />} />
           <Route path="/market/opportunities" element={<RequireModule id="market"><StrategyWorkspacePage sectionId="opportunities" /></RequireModule>} />
           <Route path="/market/keywords" element={<RequireModule id="market"><StrategyWorkspacePage sectionId="keywords" /></RequireModule>} />

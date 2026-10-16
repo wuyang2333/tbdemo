@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('start', 'stop')]
     [string]$Action,
@@ -12,6 +12,7 @@ $FrontendRoot = Join-Path $ProjectRoot 'frontend'
 $LogRoot = Join-Path $ProjectRoot 'logs'
 $BackendUrl = 'http://127.0.0.1:8008/api/health'
 $FrontendUrl = 'http://127.0.0.1:5178'
+$FrontendWarmupUrl = 'http://127.0.0.1:5178/src/pages/customers-page.tsx'
 
 Set-Location $ProjectRoot
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
@@ -168,6 +169,14 @@ function Start-Services {
 
             $python = Find-Python
             Write-Host '[1/3] Starting backend on 0.0.0.0:8008...'
+            # 轮转旧日志：保留崩溃现场，避免每次重启覆盖
+            foreach ($logName in @('backend.log', 'backend.err.log')) {
+                $logFile = Join-Path $LogRoot $logName
+                if (Test-Path $logFile -PathType Leaf) {
+                    $stamp = (Get-Item $logFile).LastWriteTime.ToString('yyyyMMdd_HHmmss')
+                    Move-Item -LiteralPath $logFile -Destination (Join-Path $LogRoot "$logName.$stamp") -Force
+                }
+            }
             $backendProcess = Start-Process -FilePath $python -ArgumentList @('-m', 'uvicorn', 'backend.app.main:app', '--host', '0.0.0.0', '--port', '8008') -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $LogRoot 'backend.log') -RedirectStandardError (Join-Path $LogRoot 'backend.err.log') -PassThru
             $startedProcesses += $backendProcess
             Save-ProcessId -Name 'backend' -Process $backendProcess
@@ -203,6 +212,11 @@ function Start-Services {
 
         if (-not $backendReady -or -not $frontendReady) {
             throw "Startup timed out. Check logs in $LogRoot"
+        }
+
+        Write-Host '      Warming up the review workspace...'
+        if (-not (Test-HttpOk $FrontendWarmupUrl)) {
+            throw "Review workspace warmup failed. Check logs in $LogRoot"
         }
 
         $lanAddress = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |

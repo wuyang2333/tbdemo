@@ -111,7 +111,7 @@ def dashboard_todos(
             "order_not_found": ("warning", "订单未查到", "每 3 分钟自动重试，也可核对订单号或旺旺号"),
             "awaiting_payment": ("warning", "订单待付款", "买家付款后系统会再次检查并插旗备注"),
             "remark_failed": ("critical", "千牛备注失败", "请检查千牛登录状态或前往礼品单重试"),
-            "order_closed": ("critical", "订单已关闭", "已关闭订单不会插旗备注，请人工核对"),
+            "order_closed": ("critical", "订单已关闭", "原订单已关闭，系统会继续按旺旺号查找新订单；请人工核对"),
         }
         for store in stores:
             rows = db.execute(
@@ -167,17 +167,17 @@ def dashboard_todos(
                 (
                     "alert", "critical", "待处理评价预警",
                     "SELECT COUNT(*) AS count, MAX(created_at) AS updated_at FROM review_alerts WHERE store_id = ? AND status = 'open'",
-                    f"/customers?sentiment=negative&process_status=pending&store_id={store['id']}",
+                    f"/customers/reviews?sentiment=negative&process_status=pending&store_id={store['id']}",
                 ),
                 (
                     "draft", "warning", "条评价回复待审核",
                     "SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at FROM product_reviews WHERE store_id = ? AND reply_status = 'draft'",
-                    f"/customers?reply_status=draft&store_id={store['id']}",
+                    f"/customers/reviews?reply_status=draft&store_id={store['id']}",
                 ),
                 (
                     "failed", "critical", "条评价回复发布失败",
                     "SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at FROM product_reviews WHERE store_id = ? AND reply_status = 'failed'",
-                    f"/customers?reply_status=failed&store_id={store['id']}",
+                    f"/customers/reviews?reply_status=failed&store_id={store['id']}",
                 ),
             ]
             for source, severity, label, sql, route in review_sources:

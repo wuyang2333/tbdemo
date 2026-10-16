@@ -16,3 +16,8 @@ backups/
 *.db-shm
 *.db-wal
 .obsidian/
+
+# temp artifacts
+.playwright-cli/
+pytest-tmp*/
+

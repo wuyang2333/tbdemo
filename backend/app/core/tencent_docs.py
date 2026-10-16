@@ -27,9 +27,12 @@ API_ROOT = "https://docs.qq.com"
 DEFAULT_DOCUMENT_URL = "https://docs.qq.com/sheet/DTG1YaFV2eUhMRGdF"
 SYNC_COLUMNS = 13
 POLL_MINUTES = 15
+AUTO_ROW_BUFFER = 50
 SHEET_METADATA_TTL_HOURS = 24
 QUOTA_BACKOFF_HOURS = 4
+MANUAL_TOKEN_VALID_DAYS = 30
 QUOTA_EXHAUSTED_MESSAGE = "腾讯文档官方 API 额度已用尽，请等待额度恢复后再同步"
+AUTH_REQUIRED_MESSAGE = "腾讯文档授权已失效，请重新填写 Access Token，或完成 OAuth 自动授权"
 _SYNC_LOCK = threading.Lock()
 HEADERS = [
     "系统礼品单ID",
@@ -99,6 +102,10 @@ def _load_config(db) -> dict:
         "refresh_token": "",
         "open_id": "",
         "token_expires_at": "",
+        "token_source": "",
+        "auth_required": False,
+        "auth_failure_at": "",
+        "auth_error_detail": "",
         "oauth_state": "",
         "oauth_state_expires_at": "",
         "last_sync_at": "",
@@ -124,8 +131,44 @@ def _is_quota_exhausted(error: BaseException | str) -> bool:
     return "requests use up" in text or "官方 api 额度已用尽" in text
 
 
+def _is_auth_error(error: BaseException | str) -> bool:
+    text = str(error).lower()
+    return any(
+        marker in text
+        for marker in (
+            "authentication internal error",
+            "access token",
+            "access_token",
+            "invalid token",
+            "token invalid",
+            "token expired",
+            "token has expired",
+            "unauthorized",
+            "未授权",
+            "鉴权",
+            "令牌过期",
+            "令牌已失效",
+            "授权已失效",
+        )
+    )
+
+
 def _friendly_error_message(error: BaseException | str) -> str:
-    return QUOTA_EXHAUSTED_MESSAGE if _is_quota_exhausted(error) else str(error)
+    if _is_quota_exhausted(error):
+        return QUOTA_EXHAUSTED_MESSAGE
+    if _is_auth_error(error):
+        return AUTH_REQUIRED_MESSAGE
+    return str(error)
+
+
+def _mark_auth_required(db, config: dict, detail: BaseException | str) -> str:
+    config["auth_required"] = True
+    config["auth_failure_at"] = _now_text()
+    config["auth_error_detail"] = str(detail)[:500]
+    config["last_error"] = AUTH_REQUIRED_MESSAGE
+    _store_config(db, config)
+    db.commit()
+    return AUTH_REQUIRED_MESSAGE
 
 
 def update_config(db, values: dict) -> dict:
@@ -142,6 +185,14 @@ def update_config(db, values: dict) -> dict:
             if key == "browser_fallback_enabled":
                 value = bool(value)
             config[key] = value
+    if str(values.get("access_token") or "").strip():
+        config["refresh_token"] = ""
+        config["token_source"] = "manual"
+        config["token_expires_at"] = (_now() + timedelta(days=MANUAL_TOKEN_VALID_DAYS)).isoformat()
+        config["auth_required"] = False
+        config["auth_failure_at"] = ""
+        config["auth_error_detail"] = ""
+        config["last_error"] = ""
     if "document_url" in values:
         config["file_id"] = parse_file_id(str(config["document_url"]))
     if str(config.get("file_id") or "") != previous_file_id or str(config.get("sheet_id") or "") != previous_sheet_id:
@@ -155,6 +206,10 @@ def update_config(db, values: dict) -> dict:
 
 def public_config(db) -> dict:
     config = _load_config(db)
+    token_source = str(config.get("token_source") or "")
+    if not token_source:
+        token_source = "oauth" if config.get("refresh_token") else "manual" if config.get("access_token") else ""
+    auth_required = bool(config.get("auth_required"))
     return {
         "enabled": bool(config["enabled"]),
         "document_url": config["document_url"],
@@ -165,8 +220,12 @@ def public_config(db) -> dict:
         "client_secret_configured": bool(config["client_secret"]),
         "access_token_configured": bool(config["access_token"]),
         "redirect_uri": config["redirect_uri"],
-        "authorized": bool(config["access_token"] and config["open_id"]),
+        "authorized": bool(config["access_token"] and config["open_id"] and not auth_required),
         "token_expires_at": config["token_expires_at"],
+        "token_source": token_source,
+        "auto_refresh_enabled": bool(config["client_secret"] and config["refresh_token"]),
+        "auth_required": auth_required,
+        "auth_failure_at": config.get("auth_failure_at", ""),
         "last_sync_at": config["last_sync_at"],
         "last_error": config["last_error"],
         "last_result": config["last_result"],
@@ -245,12 +304,29 @@ def _save_token_payload(config: dict, payload: dict) -> None:
         config["refresh_token"] = str(payload["refresh_token"])
     expires_in = max(int(payload.get("expires_in") or 259200), 300)
     config["token_expires_at"] = (_now() + timedelta(seconds=expires_in)).isoformat()
+    config["token_source"] = "oauth"
+    config["auth_required"] = False
+    config["auth_failure_at"] = ""
+    config["auth_error_detail"] = ""
+    config["last_error"] = ""
 
 
 def clear_authorization(db) -> None:
     config = _load_config(db)
-    for key in ("access_token", "refresh_token", "open_id", "token_expires_at", "oauth_state", "oauth_state_expires_at"):
+    for key in (
+        "access_token",
+        "refresh_token",
+        "open_id",
+        "token_expires_at",
+        "token_source",
+        "auth_failure_at",
+        "auth_error_detail",
+        "oauth_state",
+        "oauth_state_expires_at",
+    ):
         config[key] = ""
+    config["auth_required"] = False
+    config["last_error"] = ""
     config["enabled"] = False
     _store_config(db, config)
 
@@ -262,6 +338,8 @@ class TencentDocsClient:
         self._ensure_token()
 
     def _ensure_token(self) -> None:
+        if self.config.get("auth_required"):
+            raise TencentDocsError(AUTH_REQUIRED_MESSAGE)
         expires_at = None
         try:
             expires_at = datetime.fromisoformat(str(self.config.get("token_expires_at") or ""))
@@ -271,10 +349,12 @@ class TencentDocsClient:
             if expires_at is None or expires_at > _now() + timedelta(minutes=5):
                 return
         if not self.config.get("refresh_token"):
-            raise TencentDocsError("腾讯文档 Access Token 已过期，请重新生成后保存")
+            message = _mark_auth_required(self.db, self.config, "Access Token 已到期且没有 Refresh Token")
+            raise TencentDocsError(message)
         self._refresh_token()
 
     def _refresh_token(self) -> None:
+        response = None
         try:
             response = httpx.get(
                 OAUTH_TOKEN_URL,
@@ -289,8 +369,23 @@ class TencentDocsClient:
             response.raise_for_status()
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise TencentDocsError(f"腾讯文档令牌刷新失败：{exc}") from exc
-        _save_token_payload(self.config, payload)
+            message = str(exc)
+            if response is not None:
+                try:
+                    error_payload = response.json()
+                    message = str(error_payload.get("message") or error_payload.get("msg") or error_payload.get("error_description") or message)
+                except ValueError:
+                    pass
+            status_code = getattr(response, "status_code", 0) if response is not None else 0
+            if status_code in {400, 401, 403} or _is_auth_error(message):
+                friendly = _mark_auth_required(self.db, self.config, message)
+                raise TencentDocsError(friendly) from exc
+            raise TencentDocsError(f"腾讯文档令牌暂时无法刷新，请稍后自动重试：{message}") from exc
+        try:
+            _save_token_payload(self.config, payload)
+        except (TencentDocsError, TypeError, ValueError) as exc:
+            friendly = _mark_auth_required(self.db, self.config, exc)
+            raise TencentDocsError(friendly) from exc
         _store_config(self.db, self.config)
         self.db.commit()
 
@@ -303,6 +398,24 @@ class TencentDocsClient:
         }
 
     def _request(self, method: str, path: str, **kwargs) -> dict:
+        try:
+            return self._request_once(method, path, **kwargs)
+        except TencentDocsError as exc:
+            if not _is_auth_error(exc):
+                raise
+            if self.config.get("refresh_token") and self.config.get("client_secret"):
+                self._refresh_token()
+                try:
+                    return self._request_once(method, path, **kwargs)
+                except TencentDocsError as retry_error:
+                    if _is_auth_error(retry_error):
+                        message = _mark_auth_required(self.db, self.config, retry_error)
+                        raise TencentDocsError(message) from retry_error
+                    raise
+            message = _mark_auth_required(self.db, self.config, exc)
+            raise TencentDocsError(message) from exc
+
+    def _request_once(self, method: str, path: str, **kwargs) -> dict:
         response = None
         try:
             response = httpx.request(method, API_ROOT + path, headers=self._headers(), timeout=30.0, **kwargs)
@@ -318,7 +431,7 @@ class TencentDocsClient:
                     pass
             if _is_quota_exhausted(message):
                 raise TencentDocsError(QUOTA_EXHAUSTED_MESSAGE) from exc
-            raise TencentDocsError(f"腾讯文档接口调用失败：{exc}") from exc
+            raise TencentDocsError(f"腾讯文档接口调用失败：{message}") from exc
         code = payload.get("code", payload.get("ret", 0))
         if code not in (0, None):
             message = str(payload.get("message") or payload.get("msg") or f"腾讯文档返回错误 {code}")
@@ -344,6 +457,26 @@ class TencentDocsClient:
                 f"/openapi/spreadsheet/v3/files/{quote(self.config['file_id'], safe='')}/batchUpdate",
                 json={"requests": requests[index:index + 5]},
             )
+
+    def ensure_row_capacity(self, sheet_id: str, current_total: int, required_total: int) -> int:
+        """Add rows through the official spreadsheet batch-update API."""
+        current_total = max(int(current_total or 0), 0)
+        required_total = max(int(required_total or 0), current_total)
+        if required_total <= current_total:
+            return current_total
+        self.batch_update(
+            [{
+                "insertDimensionRequest": {
+                    "range": {
+                        "sheetId": str(sheet_id),
+                        "dimension": "ROWS",
+                        "startIndex": current_total,
+                        "endIndex": required_total,
+                    },
+                }
+            }]
+        )
+        return required_total
 
     def convert_file_id(self) -> str:
         data = self._request(
@@ -611,6 +744,9 @@ class TencentDocsBrowserClient:
             }})()"""
         )
 
+    def ensure_row_capacity(self, sheet_id: str, current_total: int, required_total: int) -> int:
+        raise TencentDocsError("腾讯文档浏览器备用通道暂不支持自动新增行，请先手动新增后重试")
+
     def convert_file_id(self) -> str:
         raise TencentDocsError("浏览器备用通道暂不支持图片上传，请先用官方 API 完成图片同步")
 
@@ -820,18 +956,49 @@ def _values_differ(cloud_values: list[str], start: int, desired_values: list[str
     return cloud_values[start:start + len(desired_values)] != desired_values
 
 
+def _cloud_rows_by_id(table_rows: dict[int, list[str]]) -> dict[int, tuple[int, list[str]]]:
+    """Build the cloud gift index from the rows we actually read."""
+    cloud_by_id: dict[int, tuple[int, list[str]]] = {}
+    for row_number, values in table_rows.items():
+        try:
+            gift_id = int(str(values[0] or "").strip())
+        except (TypeError, ValueError, IndexError):
+            continue
+        if gift_id > 0:
+            cloud_by_id[gift_id] = (row_number, values)
+    return cloud_by_id
+
+
 def _layout_assignments(gifts: list[dict]) -> list[tuple[int, dict]]:
     assignments = []
     row_number = 2
     previous_date = None
-    ordered = sorted(gifts, key=lambda gift: (_gift_date(gift) == "", _gift_date(gift), int(gift["id"])))
+    previous_owner = None
+    # 腾讯文档先按日期分组，再按负责人分组，负责人组内按时间和 ID 排列。
+    # 未填写负责人的礼品单放在当天最后。
+    ordered = sorted(
+        gifts,
+        key=lambda gift: (
+            _gift_date(gift) == "",
+            _gift_date(gift),
+            not str(gift.get("owner_nickname") or "").strip(),
+            str(gift.get("owner_nickname") or "").strip().casefold(),
+            not str(gift.get("order_time") or gift.get("created_at") or "").strip(),
+            str(gift.get("order_time") or gift.get("created_at") or ""),
+            int(gift["id"]),
+        ),
+    )
     for gift in ordered:
+        owner_name = str(gift.get("owner_nickname") or "").strip()
         gift_date = _gift_date(gift)
         if previous_date is not None and gift_date != previous_date:
             row_number += 3
+        elif previous_owner is not None and owner_name != previous_owner:
+            row_number += 1
         assignments.append((row_number, gift))
         row_number += 1
         previous_date = gift_date
+        previous_owner = owner_name
     return assignments
 
 
@@ -882,6 +1049,16 @@ def sync_gifts(db, client: TencentDocsClient | None = None, *, force: bool = Fal
     with _SYNC_LOCK:
         config = _load_config(db)
         if not force:
+            if config.get("auth_required") and not config.get("browser_fallback_enabled"):
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "requires_authorization": True,
+                    "reason": AUTH_REQUIRED_MESSAGE,
+                    "pushed": 0,
+                    "pulled": 0,
+                    "errors": [],
+                }
             backoff_result = _quota_backoff_result(config)
             if backoff_result is not None:
                 return backoff_result
@@ -948,17 +1125,7 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
     for gift in local_rows:
         gift["store_name"] = (gift.get("linked_store_name") if gift["store_id"] else gift.get("store_name")) or "未关联店铺"
     table_rows, row_total = _read_table(client, sheet, len(local_rows))
-    cloud_by_id: dict[int, tuple[int, list[str]]] = {}
-    occupied = set()
-    for row_number, values in table_rows.items():
-        if any(value.strip() for value in values):
-            occupied.add(row_number)
-        try:
-            gift_id = int(values[0].strip())
-        except (TypeError, ValueError):
-            continue
-        if gift_id > 0:
-            cloud_by_id[gift_id] = (row_number, values)
+    cloud_by_id = _cloud_rows_by_id(table_rows)
 
     errors = []
     pulled = 0
@@ -985,7 +1152,65 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
 
     assignments = _layout_assignments(local_rows)
     if assignments and assignments[-1][0] > row_total:
-        raise TencentDocsError("腾讯在线表格没有足够的空白行")
+        # rowTotal is cached for up to 24 hours. The operator can add rows in
+        # Tencent Docs during that window, so refresh metadata before failing.
+        get_sheets = getattr(client, "get_sheets", None)
+        sheets = get_sheets() if callable(get_sheets) else []
+        refreshed_sheet = next(
+            (item for item in sheets if str(item.get("sheetId")) == sheet_id),
+            None,
+        )
+        refreshed_total = int((refreshed_sheet or {}).get("rowTotal") or 0)
+        if refreshed_total > row_total:
+            sheet = refreshed_sheet or sheet
+            row_total = max(refreshed_total, 2)
+            table_rows, row_total = _read_table(client, sheet, len(local_rows))
+            cloud_by_id = _cloud_rows_by_id(table_rows)
+
+            config = _load_config(db)
+            config.update(
+                {
+                    "sheet_id": sheet_id,
+                    "sheet_title": str(sheet.get("title") or ""),
+                    "sheet_row_count": int(sheet.get("rowCount") or 0),
+                    "sheet_row_total": row_total,
+                    "sheet_metadata_refreshed_at": _now_text(),
+                }
+            )
+            _store_config(db, config)
+            db.commit()
+
+        if assignments and assignments[-1][0] > row_total:
+            required_total = assignments[-1][0] + AUTO_ROW_BUFFER
+            ensure_capacity = getattr(client, "ensure_row_capacity", None)
+            if not callable(ensure_capacity):
+                raise TencentDocsError(
+                    f"腾讯在线表格可用行数不足：需要第 {assignments[-1][0]} 行，"
+                    f"当前只有 {row_total} 行；请在文档中新增行后重试"
+                )
+            try:
+                row_total = int(ensure_capacity(sheet_id, row_total, required_total) or required_total)
+            except TencentDocsError:
+                raise
+            sheet = dict(sheet)
+            sheet["rowTotal"] = row_total
+            table_rows, row_total = _read_table(client, sheet, len(local_rows))
+            cloud_by_id = _cloud_rows_by_id(table_rows)
+            config = _load_config(db)
+            config.update(
+                {
+                    "sheet_row_total": row_total,
+                    "sheet_metadata_refreshed_at": _now_text(),
+                }
+            )
+            _store_config(db, config)
+            db.commit()
+
+        if assignments and assignments[-1][0] > row_total:
+            raise TencentDocsError(
+                f"腾讯在线表格可用行数不足：需要第 {assignments[-1][0]} 行，"
+                f"当前只有 {row_total} 行；请在文档中新增行后重试"
+            )
     existing = [(row_number, gift) for row_number, gift in assignments if int(gift["id"]) in cloud_by_id]
     new = [(row_number, gift) for row_number, gift in assignments if int(gift["id"]) not in cloud_by_id]
     existing_same = [
@@ -1119,14 +1344,29 @@ def _sync_gifts_locked(db, client: TencentDocsClient | None = None) -> dict:
         )
     legacy_file_id = ""
     stale_image_cells: dict[int, list[int]] = {4: [], 5: []}
+    missing_moved_images = []
     for row_number, gift in assignments:
         previous_marker = str(gift.get("tencent_image_synced") or "")
         current_image = str(gift.get("image") or "")
         current_marker = _image_marker(current_image, row_number) if current_image else ""
         old_match = cloud_by_id.get(int(gift["id"]))
+        if (
+            current_image
+            and old_match
+            and old_match[0] != row_number
+            and _local_image_path(current_image) is None
+        ):
+            missing_moved_images.append(int(gift["id"]))
         if previous_marker and previous_marker != current_marker:
             stale_row, stale_column = _marker_cell(previous_marker, old_match[0] if old_match else row_number)
             stale_image_cells[stale_column].append(stale_row)
+    if missing_moved_images:
+        gift_ids = "、".join(str(gift_id) for gift_id in missing_moved_images[:10])
+        suffix = "等" if len(missing_moved_images) > 10 else ""
+        raise TencentDocsError(
+            f"礼品单 {gift_ids}{suffix} 的本地图片缺失；为避免清除腾讯文档中的原图片，"
+            "本次重新排版已停止。请重新上传图片后再同步"
+        )
     if any(stale_image_cells.values()):
         legacy_file_id = client.convert_file_id()
         for column, row_numbers in stale_image_cells.items():
